@@ -158,9 +158,9 @@ fn compute_pair_distance(
 /// * `time_dist` - Time distance matrix
 /// * `control_obs` - List of control observations for LOOCV
 /// * `grid` - Grid of values to search
-/// * `fixed_time` - Fixed lambda_time (inf for disabled)
-/// * `fixed_unit` - Fixed lambda_unit (inf for disabled)
-/// * `fixed_nn` - Fixed lambda_nn (inf for disabled)
+/// * `fixed_time` - Fixed lambda_time (0.0 for uniform weights)
+/// * `fixed_unit` - Fixed lambda_unit (0.0 for uniform weights)
+/// * `fixed_nn` - Fixed lambda_nn (inf to disable factor model)
 /// * `param_type` - Which parameter to search: 0=time, 1=unit, 2=nn
 /// * `max_iter` - Maximum iterations
 /// * `tol` - Convergence tolerance
@@ -338,6 +338,23 @@ pub fn loocv_grid_search<'py>(
     let lambda_time_vec: Vec<f64> = lambda_time_grid.as_array().to_vec();
     let lambda_unit_vec: Vec<f64> = lambda_unit_grid.as_array().to_vec();
     let lambda_nn_vec: Vec<f64> = lambda_nn_grid.as_array().to_vec();
+
+    // Validate: lambda_time_grid and lambda_unit_grid must not contain inf.
+    // Per Athey et al. (2025) Eq. 3: use 0.0 for uniform weights, not inf.
+    for &v in &lambda_time_vec {
+        if v.is_infinite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "lambda_time_grid must not contain inf. Use 0.0 for uniform weights (disabled) per Athey et al. (2025) Eq. 3."
+            ));
+        }
+    }
+    for &v in &lambda_unit_vec {
+        if v.is_infinite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "lambda_unit_grid must not contain inf. Use 0.0 for uniform weights (disabled) per Athey et al. (2025) Eq. 3."
+            ));
+        }
+    }
 
     // Get control observations for LOOCV
     let control_obs = get_control_observations(
@@ -1476,6 +1493,23 @@ pub fn loocv_grid_search_joint<'py>(
     let lambda_time_vec: Vec<f64> = lambda_time_grid.as_array().to_vec();
     let lambda_unit_vec: Vec<f64> = lambda_unit_grid.as_array().to_vec();
     let lambda_nn_vec: Vec<f64> = lambda_nn_grid.as_array().to_vec();
+
+    // Validate: lambda_time_grid and lambda_unit_grid must not contain inf.
+    // Per Athey et al. (2025) Eq. 3: use 0.0 for uniform weights, not inf.
+    for &v in &lambda_time_vec {
+        if v.is_infinite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "lambda_time_grid must not contain inf. Use 0.0 for uniform weights (disabled) per Athey et al. (2025) Eq. 3."
+            ));
+        }
+    }
+    for &v in &lambda_unit_vec {
+        if v.is_infinite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "lambda_unit_grid must not contain inf. Use 0.0 for uniform weights (disabled) per Athey et al. (2025) Eq. 3."
+            ));
+        }
+    }
 
     let n_periods = y_arr.nrows();
     let n_units = y_arr.ncols();

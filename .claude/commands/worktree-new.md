@@ -101,16 +101,19 @@ python3 -m venv "$WORKTREE_PATH/.venv"
 
 Do NOT use `-q` — let pip output stream so the user sees progress.
 
-### 6. Build Rust Backend (best-effort)
+### 6. Verify Rust Backend Rebuild Capability (best-effort)
 
-Use `--manifest-path` to avoid changing directories:
+Step 5 already compiled the Rust extension via maturin (the build backend).
+This step verifies that maturin is available in the venv for **future rebuilds**
+after Rust code changes. Use `--manifest-path` to avoid changing directories:
 
 ```bash
-"$WORKTREE_PATH/.venv/bin/maturin" develop --manifest-path "$WORKTREE_PATH/Cargo.toml"
+"$WORKTREE_PATH/.venv/bin/maturin" develop --manifest-path "$WORKTREE_PATH/rust/Cargo.toml"
 ```
 
-If maturin is not installed in the venv or the build fails, note that pure-Python
-mode will be used and continue. This is not an error.
+If this step fails, the Rust extension was likely still built successfully by pip
+in step 5. Note that maturin rebuilds are available for future Rust code changes
+and continue. This is not an error.
 
 ### 7. Report
 

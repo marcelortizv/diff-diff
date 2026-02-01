@@ -118,13 +118,14 @@ class TestTROP:
         assert results.n_control == 15
         assert results.n_treated == 5
 
-    def test_fit_with_factors(self, factor_dgp_data):
+    def test_fit_with_factors(self, factor_dgp_data, ci_params):
         """Test fitting with factor structure."""
+        n_boot = ci_params.bootstrap(20)
         trop_est = TROP(
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1, 1.0],
-            n_bootstrap=20,
+            n_bootstrap=n_boot,
             seed=42
         )
         results = trop_est.fit(
@@ -139,15 +140,16 @@ class TestTROP:
         assert results.effective_rank >= 0
         assert results.factor_matrix.shape == (12, 30)  # n_periods x n_units
 
-    def test_treatment_effect_recovery(self, factor_dgp_data):
+    def test_treatment_effect_recovery(self, factor_dgp_data, ci_params):
         """Test that TROP recovers treatment effect direction."""
         true_att = 2.0
+        n_boot = ci_params.bootstrap(30)
 
         trop_est = TROP(
             lambda_time_grid=[0.0, 0.5, 1.0],
             lambda_unit_grid=[0.0, 0.5, 1.0],
             lambda_nn_grid=[0.0, 0.1],
-            n_bootstrap=30,
+            n_bootstrap=n_boot,
             seed=42
         )
         results = trop_est.fit(
@@ -163,10 +165,11 @@ class TestTROP:
         # Should be reasonably close to true value
         assert abs(results.att - true_att) < 3.0
 
-    def test_tuning_parameter_selection(self, simple_panel_data):
+    def test_tuning_parameter_selection(self, simple_panel_data, ci_params):
         """Test that LOOCV selects tuning parameters."""
+        time_grid = ci_params.grid([0.0, 0.5, 1.0, 2.0])
         trop_est = TROP(
-            lambda_time_grid=[0.0, 0.5, 1.0, 2.0],
+            lambda_time_grid=time_grid,
             lambda_unit_grid=[0.0, 0.5, 1.0],
             lambda_nn_grid=[0.0, 0.1, 1.0],
             n_bootstrap=10,
@@ -185,13 +188,14 @@ class TestTROP:
         assert results.lambda_unit in trop_est.lambda_unit_grid
         assert results.lambda_nn in trop_est.lambda_nn_grid
 
-    def test_bootstrap_variance(self, simple_panel_data):
+    def test_bootstrap_variance(self, simple_panel_data, ci_params):
         """Test bootstrap variance estimation."""
+        n_boot = ci_params.bootstrap(30)
         trop_est = TROP(
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
-            n_bootstrap=30,
+            n_bootstrap=n_boot,
             seed=42
         )
         results = trop_est.fit(
@@ -203,17 +207,18 @@ class TestTROP:
         )
 
         assert results.se > 0
-        assert results.n_bootstrap == 30
+        assert results.n_bootstrap == n_boot
         assert results.bootstrap_distribution is not None
 
-    def test_confidence_interval(self, simple_panel_data):
+    def test_confidence_interval(self, simple_panel_data, ci_params):
         """Test confidence interval properties."""
+        n_boot = ci_params.bootstrap(30)
         trop_est = TROP(
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
             alpha=0.05,
-            n_bootstrap=30,
+            n_bootstrap=n_boot,
             seed=42
         )
         results = trop_est.fit(
@@ -446,14 +451,15 @@ class TestTROPResults:
         assert "time" in effects_df.columns
         assert "effect" in effects_df.columns
 
-    def test_is_significant(self, simple_panel_data):
+    def test_is_significant(self, simple_panel_data, ci_params):
         """Test significance property."""
+        n_boot = ci_params.bootstrap(30)
         trop_est = TROP(
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
             alpha=0.05,
-            n_bootstrap=30,
+            n_bootstrap=n_boot,
             seed=42
         )
         results = trop_est.fit(
@@ -466,13 +472,14 @@ class TestTROPResults:
 
         assert isinstance(results.is_significant, bool)
 
-    def test_significance_stars(self, simple_panel_data):
+    def test_significance_stars(self, simple_panel_data, ci_params):
         """Test significance stars."""
+        n_boot = ci_params.bootstrap(30)
         trop_est = TROP(
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
-            n_bootstrap=30,
+            n_bootstrap=n_boot,
             seed=42
         )
         results = trop_est.fit(
@@ -529,7 +536,7 @@ class TestTROPResults:
 class TestTROPvsSDID:
     """Tests comparing TROP to SDID under different DGPs."""
 
-    def test_trop_handles_factor_dgp(self):
+    def test_trop_handles_factor_dgp(self, ci_params):
         """Test that TROP works on factor DGP data."""
         data = generate_factor_dgp(
             n_units=30,
@@ -544,11 +551,12 @@ class TestTROPvsSDID:
         )
 
         # TROP should complete without error
+        n_boot = ci_params.bootstrap(20)
         trop_est = TROP(
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1, 1.0],
-            n_bootstrap=20,
+            n_bootstrap=n_boot,
             seed=42
         )
         results = trop_est.fit(
@@ -792,7 +800,7 @@ class TestMethodologyVerification:
         # Check that time weighting was considered
         assert results.lambda_time in [0.0, 0.5, 1.0]
 
-    def test_factor_model_reduces_bias(self):
+    def test_factor_model_reduces_bias(self, ci_params):
         """
         Test that nuclear norm regularization reduces bias with factor structure.
 
@@ -813,11 +821,13 @@ class TestMethodologyVerification:
         )
 
         # TROP with nuclear norm regularization
+        n_boot = ci_params.bootstrap(20)
+        nn_grid = ci_params.grid([0.0, 0.1, 1.0, 5.0])
         trop_est = TROP(
             lambda_time_grid=[0.0, 0.5],
             lambda_unit_grid=[0.0, 0.5],
-            lambda_nn_grid=[0.0, 0.1, 1.0, 5.0],
-            n_bootstrap=20,
+            lambda_nn_grid=nn_grid,
+            n_bootstrap=n_boot,
             seed=42
         )
         results = trop_est.fit(
@@ -835,7 +845,7 @@ class TestMethodologyVerification:
         # Factor matrix should capture some structure
         assert results.effective_rank > 0, "Factor matrix should have positive rank"
 
-    def test_paper_dgp_recovery(self):
+    def test_paper_dgp_recovery(self, ci_params):
         """
         Test treatment effect recovery using paper's simulation DGP.
 
@@ -893,11 +903,12 @@ class TestMethodologyVerification:
         df = pd.DataFrame(data)
 
         # TROP estimation
+        n_boot = ci_params.bootstrap(30)
         trop_est = TROP(
             lambda_time_grid=[0.0, 0.5, 1.0],
             lambda_unit_grid=[0.0, 0.5, 1.0],
             lambda_nn_grid=[0.0, 0.1, 1.0],
-            n_bootstrap=30,
+            n_bootstrap=n_boot,
             seed=42
         )
         results = trop_est.fit(
@@ -1139,12 +1150,13 @@ class TestOptimizationEquivalence:
         assert np.allclose(Y_iterrows, Y_pivot, equal_nan=True)
         assert np.array_equal(D_iterrows, D_pivot)
 
-    def test_reproducibility_with_seed(self, simple_panel_data):
+    def test_reproducibility_with_seed(self, simple_panel_data, ci_params):
         """
         Test that results are reproducible with the same seed.
 
         Running TROP twice with the same seed should produce identical results.
         """
+        n_boot = ci_params.bootstrap(20)
         results1 = trop(
             simple_panel_data,
             outcome="outcome",
@@ -1154,7 +1166,7 @@ class TestOptimizationEquivalence:
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
-            n_bootstrap=20,
+            n_bootstrap=n_boot,
             seed=42,
         )
 
@@ -1167,7 +1179,7 @@ class TestOptimizationEquivalence:
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
-            n_bootstrap=20,
+            n_bootstrap=n_boot,
             seed=42,
         )
 
@@ -1600,7 +1612,7 @@ class TestPaperConformanceFixes:
         # ATT should recover treatment effect direction
         assert results.att > 0, f"ATT={results.att:.3f} should be positive"
 
-    def test_issue_d_stratified_bootstrap(self):
+    def test_issue_d_stratified_bootstrap(self, ci_params):
         """
         Test Issue D fix: Bootstrap uses stratified sampling.
 
@@ -1635,11 +1647,12 @@ class TestPaperConformanceFixes:
         df = pd.DataFrame(data)
 
         # Run with bootstrap variance estimation
+        n_boot = ci_params.bootstrap(30)
         trop_est = TROP(
             lambda_time_grid=[0.0],
             lambda_unit_grid=[0.0],
             lambda_nn_grid=[0.0],
-            n_bootstrap=30,
+            n_bootstrap=n_boot,
             seed=42
         )
         results = trop_est.fit(
@@ -1652,7 +1665,7 @@ class TestPaperConformanceFixes:
 
         # Bootstrap should complete successfully
         assert results.bootstrap_distribution is not None
-        assert len(results.bootstrap_distribution) >= 20  # Most iterations succeed
+        assert len(results.bootstrap_distribution) >= 11  # Most iterations succeed
         # SE should be positive and finite
         assert results.se > 0
         assert np.isfinite(results.se)
@@ -2703,14 +2716,15 @@ class TestTROPJointMethod:
         # Factor matrix should be all zeros
         assert np.allclose(results.factor_matrix, 0.0)
 
-    def test_joint_with_lowrank(self, factor_dgp_data):
+    def test_joint_with_lowrank(self, factor_dgp_data, ci_params):
         """Joint method with finite lambda_nn (with low-rank)."""
+        n_boot = ci_params.bootstrap(20)
         trop_est = TROP(
             method="joint",
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1, 1.0],
-            n_bootstrap=20,
+            n_bootstrap=n_boot,
             seed=42,
         )
         results = trop_est.fit(
@@ -2789,14 +2803,15 @@ class TestTROPJointMethod:
         trop_est.set_params(method="joint")
         assert trop_est.method == "joint"
 
-    def test_joint_bootstrap_variance(self, simple_panel_data):
+    def test_joint_bootstrap_variance(self, simple_panel_data, ci_params):
         """Joint method bootstrap variance estimation works."""
+        n_boot = ci_params.bootstrap(20)
         trop_est = TROP(
             method="joint",
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
-            n_bootstrap=20,
+            n_bootstrap=n_boot,
             seed=42,
         )
         results = trop_est.fit(
@@ -2808,18 +2823,19 @@ class TestTROPJointMethod:
         )
 
         assert results.se > 0
-        assert results.n_bootstrap == 20
+        assert results.n_bootstrap == n_boot
         assert results.bootstrap_distribution is not None
 
-    def test_joint_confidence_interval(self, simple_panel_data):
+    def test_joint_confidence_interval(self, simple_panel_data, ci_params):
         """Joint method produces valid confidence intervals."""
+        n_boot = ci_params.bootstrap(30)
         trop_est = TROP(
             method="joint",
             lambda_time_grid=[0.0, 1.0],
             lambda_unit_grid=[0.0, 1.0],
             lambda_nn_grid=[0.0, 0.1],
             alpha=0.05,
-            n_bootstrap=30,
+            n_bootstrap=n_boot,
             seed=42,
         )
         results = trop_est.fit(

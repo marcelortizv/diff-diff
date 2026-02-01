@@ -194,73 +194,78 @@ class TestWeightGeneration:
 class TestWildBootstrapSE:
     """Tests for wild_bootstrap_se function."""
 
-    def test_returns_wild_bootstrap_results(self, ols_components):
+    def test_returns_wild_bootstrap_results(self, ols_components, ci_params):
         """Test that function returns WildBootstrapResults."""
         X, y, residuals, cluster_ids = ols_components
+        n_boot = ci_params.bootstrap(99)
 
         results = wild_bootstrap_se(
             X, y, residuals, cluster_ids,
             coefficient_index=3,
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             seed=42
         )
 
         assert isinstance(results, WildBootstrapResults)
 
-    def test_se_is_positive(self, ols_components):
+    def test_se_is_positive(self, ols_components, ci_params):
         """Test bootstrap SE is positive."""
         X, y, residuals, cluster_ids = ols_components
+        n_boot = ci_params.bootstrap(99)
 
         results = wild_bootstrap_se(
             X, y, residuals, cluster_ids,
             coefficient_index=3,
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             seed=42
         )
 
         assert results.se > 0
 
-    def test_p_value_in_valid_range(self, ols_components):
+    def test_p_value_in_valid_range(self, ols_components, ci_params):
         """Test p-value is in [0, 1]."""
         X, y, residuals, cluster_ids = ols_components
+        n_boot = ci_params.bootstrap(99)
 
         results = wild_bootstrap_se(
             X, y, residuals, cluster_ids,
             coefficient_index=3,
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             seed=42
         )
 
         assert 0 <= results.p_value <= 1
 
-    def test_ci_contains_reasonable_values(self, ols_components):
+    def test_ci_contains_reasonable_values(self, ols_components, ci_params):
         """Test CI bounds are ordered correctly."""
         X, y, residuals, cluster_ids = ols_components
+        n_boot = ci_params.bootstrap(199)
 
         results = wild_bootstrap_se(
             X, y, residuals, cluster_ids,
             coefficient_index=3,
-            n_bootstrap=199,
+            n_bootstrap=n_boot,
             seed=42
         )
 
         assert results.ci_lower < results.ci_upper
 
-    def test_reproducibility_with_seed(self, ols_components):
+    def test_reproducibility_with_seed(self, ols_components, ci_params):
         """Test same seed gives same results."""
         X, y, residuals, cluster_ids = ols_components
+        n_boot = ci_params.bootstrap(99)
 
         results1 = wild_bootstrap_se(
             X, y, residuals, cluster_ids,
             coefficient_index=3,
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             seed=42
         )
 
         results2 = wild_bootstrap_se(
             X, y, residuals, cluster_ids,
             coefficient_index=3,
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             seed=42
         )
 
@@ -268,36 +273,38 @@ class TestWildBootstrapSE:
         assert results1.p_value == results2.p_value
         assert results1.ci_lower == results2.ci_lower
 
-    def test_different_seeds_different_results(self, ols_components):
+    def test_different_seeds_different_results(self, ols_components, ci_params):
         """Test different seeds give different results."""
         X, y, residuals, cluster_ids = ols_components
+        n_boot = ci_params.bootstrap(99)
 
         results1 = wild_bootstrap_se(
             X, y, residuals, cluster_ids,
             coefficient_index=3,
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             seed=42
         )
 
         results2 = wild_bootstrap_se(
             X, y, residuals, cluster_ids,
             coefficient_index=3,
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             seed=123
         )
 
         # Should be different (not exactly equal)
         assert results1.se != results2.se
 
-    def test_different_weight_types(self, ols_components):
+    def test_different_weight_types(self, ols_components, ci_params):
         """Test all weight types produce valid results."""
         X, y, residuals, cluster_ids = ols_components
+        n_boot = ci_params.bootstrap(99)
 
         for weight_type in ["rademacher", "webb", "mammen"]:
             results = wild_bootstrap_se(
                 X, y, residuals, cluster_ids,
                 coefficient_index=3,
-                n_bootstrap=99,
+                n_bootstrap=n_boot,
                 weight_type=weight_type,
                 seed=42
             )
@@ -317,9 +324,10 @@ class TestWildBootstrapSE:
                 weight_type="invalid"
             )
 
-    def test_few_clusters_warning(self, few_cluster_data):
+    def test_few_clusters_warning(self, few_cluster_data, ci_params):
         """Test warning when clusters < 5."""
         data = few_cluster_data
+        n_boot = ci_params.bootstrap(99)
 
         y = data["outcome"].values.astype(float)
         d = data["treated"].values.astype(float)
@@ -335,7 +343,7 @@ class TestWildBootstrapSE:
             wild_bootstrap_se(
                 X, y, residuals, cluster_ids,
                 coefficient_index=3,
-                n_bootstrap=99,
+                n_bootstrap=n_boot,
                 seed=42
             )
 
@@ -352,31 +360,33 @@ class TestWildBootstrapSE:
                 coefficient_index=3
             )
 
-    def test_n_clusters_reported_correctly(self, ols_components):
+    def test_n_clusters_reported_correctly(self, ols_components, ci_params):
         """Test n_clusters is reported correctly."""
         X, y, residuals, cluster_ids = ols_components
+        n_boot = ci_params.bootstrap(99)
 
         results = wild_bootstrap_se(
             X, y, residuals, cluster_ids,
             coefficient_index=3,
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             seed=42
         )
 
         assert results.n_clusters == 10
 
-    def test_n_bootstrap_reported_correctly(self, ols_components):
+    def test_n_bootstrap_reported_correctly(self, ols_components, ci_params):
         """Test n_bootstrap is reported correctly."""
         X, y, residuals, cluster_ids = ols_components
+        n_boot = ci_params.bootstrap(199)
 
         results = wild_bootstrap_se(
             X, y, residuals, cluster_ids,
             coefficient_index=3,
-            n_bootstrap=199,
+            n_bootstrap=n_boot,
             seed=42
         )
 
-        assert results.n_bootstrap == 199
+        assert results.n_bootstrap == n_boot
 
 
 # =============================================================================
@@ -387,12 +397,13 @@ class TestWildBootstrapSE:
 class TestEstimatorIntegration:
     """Tests for wild bootstrap integration with DiD estimators."""
 
-    def test_did_with_wild_bootstrap(self, clustered_did_data):
+    def test_did_with_wild_bootstrap(self, clustered_did_data, ci_params):
         """Test DifferenceInDifferences with wild bootstrap."""
+        n_boot = ci_params.bootstrap(99)
         did = DifferenceInDifferences(
             cluster="cluster",
             inference="wild_bootstrap",
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             seed=42
         )
 
@@ -404,23 +415,24 @@ class TestEstimatorIntegration:
         )
 
         assert results.inference_method == "wild_bootstrap"
-        assert results.n_bootstrap == 99
+        assert results.n_bootstrap == n_boot
         assert results.n_clusters == 10
         assert results.se > 0
 
-    def test_did_wild_bootstrap_reproducibility(self, clustered_did_data):
+    def test_did_wild_bootstrap_reproducibility(self, clustered_did_data, ci_params):
         """Test wild bootstrap results are reproducible with seed."""
+        n_boot = ci_params.bootstrap(99)
         did1 = DifferenceInDifferences(
             cluster="cluster",
             inference="wild_bootstrap",
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             seed=42
         )
 
         did2 = DifferenceInDifferences(
             cluster="cluster",
             inference="wild_bootstrap",
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             seed=42
         )
 
@@ -441,13 +453,14 @@ class TestEstimatorIntegration:
         assert results1.se == results2.se
         assert results1.p_value == results2.p_value
 
-    def test_did_analytical_vs_bootstrap_att_same(self, clustered_did_data):
+    def test_did_analytical_vs_bootstrap_att_same(self, clustered_did_data, ci_params):
         """Test that ATT is the same regardless of inference method."""
+        n_boot = ci_params.bootstrap(99)
         did_analytical = DifferenceInDifferences(cluster="cluster")
         did_bootstrap = DifferenceInDifferences(
             cluster="cluster",
             inference="wild_bootstrap",
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             seed=42
         )
 
@@ -468,12 +481,13 @@ class TestEstimatorIntegration:
         # ATT should be identical
         assert results_analytical.att == results_bootstrap.att
 
-    def test_did_wild_bootstrap_with_webb_weights(self, clustered_did_data):
+    def test_did_wild_bootstrap_with_webb_weights(self, clustered_did_data, ci_params):
         """Test wild bootstrap with Webb weights."""
+        n_boot = ci_params.bootstrap(99)
         did = DifferenceInDifferences(
             cluster="cluster",
             inference="wild_bootstrap",
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             bootstrap_weights="webb",
             seed=42
         )
@@ -488,11 +502,12 @@ class TestEstimatorIntegration:
         assert results.inference_method == "wild_bootstrap"
         assert results.se > 0
 
-    def test_did_wild_bootstrap_requires_cluster(self, clustered_did_data):
+    def test_did_wild_bootstrap_requires_cluster(self, clustered_did_data, ci_params):
         """Test that wild bootstrap is only used when cluster is specified."""
+        n_boot = ci_params.bootstrap(99)
         did = DifferenceInDifferences(
             inference="wild_bootstrap",  # No cluster specified
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             seed=42
         )
 
@@ -506,12 +521,13 @@ class TestEstimatorIntegration:
         # Should fall back to analytical since no cluster specified
         assert results.inference_method == "analytical"
 
-    def test_twfe_with_wild_bootstrap(self, clustered_did_data):
+    def test_twfe_with_wild_bootstrap(self, clustered_did_data, ci_params):
         """Test TwoWayFixedEffects with wild bootstrap."""
+        n_boot = ci_params.bootstrap(99)
         twfe = TwoWayFixedEffects(
             cluster="cluster",
             inference="wild_bootstrap",
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             seed=42
         )
 
@@ -524,15 +540,16 @@ class TestEstimatorIntegration:
         )
 
         assert results.inference_method == "wild_bootstrap"
-        assert results.n_bootstrap == 99
+        assert results.n_bootstrap == n_boot
         assert results.se > 0
 
-    def test_summary_shows_bootstrap_info(self, clustered_did_data):
+    def test_summary_shows_bootstrap_info(self, clustered_did_data, ci_params):
         """Test that summary shows bootstrap info."""
+        n_boot = ci_params.bootstrap(99)
         did = DifferenceInDifferences(
             cluster="cluster",
             inference="wild_bootstrap",
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             seed=42
         )
 
@@ -546,7 +563,7 @@ class TestEstimatorIntegration:
         summary = results.summary()
 
         assert "wild_bootstrap" in summary
-        assert "99" in summary  # n_bootstrap
+        assert str(n_boot) in summary  # n_bootstrap
         assert "10" in summary  # n_clusters
 
     def test_get_params_includes_bootstrap_params(self):
@@ -588,14 +605,15 @@ class TestEstimatorIntegration:
 class TestWildBootstrapResults:
     """Tests for WildBootstrapResults dataclass."""
 
-    def test_summary_format(self, ols_components):
+    def test_summary_format(self, ols_components, ci_params):
         """Test summary method produces readable output."""
         X, y, residuals, cluster_ids = ols_components
+        n_boot = ci_params.bootstrap(99)
 
         results = wild_bootstrap_se(
             X, y, residuals, cluster_ids,
             coefficient_index=3,
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             seed=42
         )
 
@@ -606,14 +624,15 @@ class TestWildBootstrapResults:
         assert "Bootstrap p-value:" in summary
         assert "Number of clusters:" in summary
 
-    def test_print_summary(self, ols_components, capsys):
+    def test_print_summary(self, ols_components, capsys, ci_params):
         """Test print_summary outputs to stdout."""
         X, y, residuals, cluster_ids = ols_components
+        n_boot = ci_params.bootstrap(99)
 
         results = wild_bootstrap_se(
             X, y, residuals, cluster_ids,
             coefficient_index=3,
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             seed=42
         )
 
@@ -631,9 +650,10 @@ class TestWildBootstrapResults:
 class TestFewClustersEdgeCases:
     """Tests for wild bootstrap behavior with very few clusters."""
 
-    def test_three_clusters_still_works(self):
+    def test_three_clusters_still_works(self, ci_params):
         """Test wild bootstrap works with 3 clusters (minimum viable)."""
         np.random.seed(42)
+        n_boot = ci_params.bootstrap(99)
 
         n_clusters = 3
         obs_per_cluster = 40
@@ -666,7 +686,7 @@ class TestFewClustersEdgeCases:
         did = DifferenceInDifferences(
             cluster="cluster",
             inference="wild_bootstrap",
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             bootstrap_weights="webb",  # Webb recommended for few clusters
             seed=42
         )
@@ -684,9 +704,10 @@ class TestFewClustersEdgeCases:
         assert results.inference_method == "wild_bootstrap"
         assert results.n_clusters == 3
 
-    def test_two_clusters_minimum(self):
+    def test_two_clusters_minimum(self, ci_params):
         """Test wild bootstrap works with exactly 2 clusters (absolute minimum)."""
         np.random.seed(42)
+        n_boot = ci_params.bootstrap(99)
 
         n_clusters = 2
         obs_per_cluster = 50
@@ -719,7 +740,7 @@ class TestFewClustersEdgeCases:
         did = DifferenceInDifferences(
             cluster="cluster",
             inference="wild_bootstrap",
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             bootstrap_weights="webb",
             seed=42
         )
@@ -738,12 +759,13 @@ class TestFewClustersEdgeCases:
         assert np.isfinite(results.att)
         assert results.n_clusters == 2
 
-    def test_few_clusters_webb_vs_rademacher(self, few_cluster_data):
+    def test_few_clusters_webb_vs_rademacher(self, few_cluster_data, ci_params):
         """Test that Webb weights produce different (often more conservative) SEs than Rademacher with few clusters."""
+        n_boot = ci_params.bootstrap(199)
         did_webb = DifferenceInDifferences(
             cluster="cluster",
             inference="wild_bootstrap",
-            n_bootstrap=199,
+            n_bootstrap=n_boot,
             bootstrap_weights="webb",
             seed=42
         )
@@ -751,7 +773,7 @@ class TestFewClustersEdgeCases:
         did_rademacher = DifferenceInDifferences(
             cluster="cluster",
             inference="wild_bootstrap",
-            n_bootstrap=199,
+            n_bootstrap=n_boot,
             bootstrap_weights="rademacher",
             seed=42
         )
@@ -780,12 +802,13 @@ class TestFewClustersEdgeCases:
         # SEs will differ due to different weight distributions
         # (This is expected, not necessarily one > other)
 
-    def test_few_clusters_confidence_intervals_valid(self, few_cluster_data):
+    def test_few_clusters_confidence_intervals_valid(self, few_cluster_data, ci_params):
         """Test that CIs are valid even with few clusters."""
+        n_boot = ci_params.bootstrap(199)
         did = DifferenceInDifferences(
             cluster="cluster",
             inference="wild_bootstrap",
-            n_bootstrap=199,
+            n_bootstrap=n_boot,
             bootstrap_weights="webb",
             seed=42
         )

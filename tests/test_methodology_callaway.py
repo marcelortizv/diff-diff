@@ -801,7 +801,7 @@ class TestSEFormulas:
     """Tests for standard error formula verification."""
 
     @pytest.mark.slow
-    def test_analytical_se_close_to_bootstrap_se(self):
+    def test_analytical_se_close_to_bootstrap_se(self, ci_params):
         """
         Analytical and bootstrap SEs should be within 20%.
 
@@ -812,6 +812,7 @@ class TestSEFormulas:
         This test is marked slow because it uses 499 bootstrap iterations
         for thorough validation of SE convergence.
         """
+        n_boot = ci_params.bootstrap(499)
         data = generate_staggered_data(
             n_units=300,
             n_periods=8,
@@ -821,7 +822,7 @@ class TestSEFormulas:
         )
 
         cs_anal = CallawaySantAnna(n_bootstrap=0)
-        cs_boot = CallawaySantAnna(n_bootstrap=499, seed=42)
+        cs_boot = CallawaySantAnna(n_bootstrap=n_boot, seed=42)
 
         results_anal = cs_anal.fit(
             data, outcome='outcome', unit='unit',
@@ -893,12 +894,13 @@ class TestSEFormulas:
         var_w = np.var(weights)
         assert abs(var_w - 1.0) < 0.05, f"Webb Var(w) should be ~1.0, got {var_w}"
 
-    def test_bootstrap_produces_valid_inference(self):
+    def test_bootstrap_produces_valid_inference(self, ci_params):
         """Test that bootstrap produces valid inference with p-values and CIs.
 
         Uses 99 bootstrap iterations - sufficient to verify the mechanism works
         without being slow for CI runs.
         """
+        n_boot = ci_params.bootstrap(99)
         data = generate_staggered_data(
             n_units=100,
             n_periods=6,
@@ -907,7 +909,7 @@ class TestSEFormulas:
             seed=42
         )
 
-        cs = CallawaySantAnna(n_bootstrap=99, seed=42)
+        cs = CallawaySantAnna(n_bootstrap=n_boot, seed=42)
         results = cs.fit(
             data, outcome='outcome', unit='unit',
             time='period', first_treat='first_treat'

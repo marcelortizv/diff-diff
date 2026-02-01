@@ -341,11 +341,12 @@ class TestSunAbrahamResults:
 class TestSunAbrahamBootstrap:
     """Tests for Sun-Abraham bootstrap inference."""
 
-    def test_bootstrap_basic(self):
+    def test_bootstrap_basic(self, ci_params):
         """Test basic bootstrap functionality."""
         data = generate_staggered_data(n_units=50, seed=42)
 
-        sa = SunAbraham(n_bootstrap=99, seed=42)
+        n_boot = ci_params.bootstrap(99)
+        sa = SunAbraham(n_bootstrap=n_boot, seed=42)
         results = sa.fit(
             data,
             outcome="outcome",
@@ -355,7 +356,7 @@ class TestSunAbrahamBootstrap:
         )
 
         assert results.bootstrap_results is not None
-        assert results.bootstrap_results.n_bootstrap == 99
+        assert results.bootstrap_results.n_bootstrap == n_boot
         assert results.bootstrap_results.weight_type == "pairs"
         assert results.overall_se > 0
         assert (
@@ -364,11 +365,12 @@ class TestSunAbrahamBootstrap:
             < results.overall_conf_int[1]
         )
 
-    def test_bootstrap_reproducibility(self):
+    def test_bootstrap_reproducibility(self, ci_params):
         """Test that bootstrap is reproducible with same seed."""
         data = generate_staggered_data(n_units=50, seed=42)
 
-        sa1 = SunAbraham(n_bootstrap=99, seed=123)
+        n_boot = ci_params.bootstrap(99)
+        sa1 = SunAbraham(n_bootstrap=n_boot, seed=123)
         results1 = sa1.fit(
             data,
             outcome="outcome",
@@ -377,7 +379,7 @@ class TestSunAbrahamBootstrap:
             first_treat="first_treat",
         )
 
-        sa2 = SunAbraham(n_bootstrap=99, seed=123)
+        sa2 = SunAbraham(n_bootstrap=n_boot, seed=123)
         results2 = sa2.fit(
             data,
             outcome="outcome",
@@ -390,11 +392,12 @@ class TestSunAbrahamBootstrap:
         assert results1.overall_se == results2.overall_se
         assert results1.overall_conf_int == results2.overall_conf_int
 
-    def test_bootstrap_different_seeds(self):
+    def test_bootstrap_different_seeds(self, ci_params):
         """Test that different seeds give different results."""
         data = generate_staggered_data(n_units=50, seed=42)
 
-        sa1 = SunAbraham(n_bootstrap=99, seed=123)
+        n_boot = ci_params.bootstrap(99)
+        sa1 = SunAbraham(n_bootstrap=n_boot, seed=123)
         results1 = sa1.fit(
             data,
             outcome="outcome",
@@ -403,7 +406,7 @@ class TestSunAbrahamBootstrap:
             first_treat="first_treat",
         )
 
-        sa2 = SunAbraham(n_bootstrap=99, seed=456)
+        sa2 = SunAbraham(n_bootstrap=n_boot, seed=456)
         results2 = sa2.fit(
             data,
             outcome="outcome",
@@ -415,11 +418,12 @@ class TestSunAbrahamBootstrap:
         # Results should differ with different seeds
         assert results1.overall_se != results2.overall_se
 
-    def test_bootstrap_p_value_significance(self):
+    def test_bootstrap_p_value_significance(self, ci_params):
         """Test that strong effect has significant p-value with bootstrap."""
         data = generate_staggered_data(n_units=100, treatment_effect=5.0, seed=42)
 
-        sa = SunAbraham(n_bootstrap=199, seed=42)
+        n_boot = ci_params.bootstrap(199)
+        sa = SunAbraham(n_bootstrap=n_boot, seed=42)
         results = sa.fit(
             data,
             outcome="outcome",
@@ -432,11 +436,12 @@ class TestSunAbrahamBootstrap:
         assert results.overall_p_value < 0.05
         assert results.is_significant
 
-    def test_bootstrap_distribution_stored(self):
+    def test_bootstrap_distribution_stored(self, ci_params):
         """Test that bootstrap distribution is stored in results."""
         data = generate_staggered_data(n_units=50, seed=42)
 
-        sa = SunAbraham(n_bootstrap=99, seed=42)
+        n_boot = ci_params.bootstrap(99)
+        sa = SunAbraham(n_bootstrap=n_boot, seed=42)
         results = sa.fit(
             data,
             outcome="outcome",
@@ -446,13 +451,14 @@ class TestSunAbrahamBootstrap:
         )
 
         assert results.bootstrap_results.bootstrap_distribution is not None
-        assert len(results.bootstrap_results.bootstrap_distribution) == 99
+        assert len(results.bootstrap_results.bootstrap_distribution) == n_boot
 
-    def test_bootstrap_event_study_effects(self):
+    def test_bootstrap_event_study_effects(self, ci_params):
         """Test that bootstrap updates event study effect SEs."""
         data = generate_staggered_data(n_units=50, seed=42)
 
-        sa = SunAbraham(n_bootstrap=99, seed=42)
+        n_boot = ci_params.bootstrap(99)
+        sa = SunAbraham(n_bootstrap=n_boot, seed=42)
         results = sa.fit(
             data,
             outcome="outcome",
@@ -964,7 +970,7 @@ class TestSunAbrahamTStatNaN:
                 f"overall_t_stat should be ATT/SE, expected {expected}, got {t_stat}"
             )
 
-    def test_bootstrap_tstat_nan_when_se_invalid(self):
+    def test_bootstrap_tstat_nan_when_se_invalid(self, ci_params):
         """Bootstrap t_stat uses NaN (not 0.0) when SE is non-finite or zero."""
         data = generate_staggered_data(
             n_units=60,
@@ -974,7 +980,8 @@ class TestSunAbrahamTStatNaN:
             seed=456,
         )
 
-        sa = SunAbraham(n_bootstrap=50, seed=42)
+        n_boot = ci_params.bootstrap(50)
+        sa = SunAbraham(n_bootstrap=n_boot, seed=42)
         results = sa.fit(
             data,
             outcome="outcome",

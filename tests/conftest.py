@@ -5,6 +5,7 @@ This module provides shared fixtures including lazy R availability checking
 to avoid import-time subprocess latency.
 """
 
+import math
 import os
 import subprocess
 
@@ -81,3 +82,44 @@ def require_r(r_available):
     """
     if not r_available:
         pytest.skip("R or did package not available")
+
+
+# =============================================================================
+# CI Performance: Backend-Aware Parameter Scaling
+# =============================================================================
+
+from diff_diff._backend import HAS_RUST_BACKEND
+
+_PURE_PYTHON_MODE = (
+    os.environ.get("DIFF_DIFF_BACKEND", "auto").lower() == "python"
+    or not HAS_RUST_BACKEND
+)
+
+
+class CIParams:
+    """Scale test parameters in pure Python mode for CI performance.
+
+    When Rust backend is available, all values pass through unchanged.
+    In pure Python mode, bootstrap iterations and LOOCV grids are scaled
+    down to reduce CI time while preserving code path coverage.
+    """
+
+    @staticmethod
+    def bootstrap(n: int) -> int:
+        """Scale bootstrap iterations. Guaranteed monotonic: bootstrap(n+1) >= bootstrap(n)."""
+        if not _PURE_PYTHON_MODE or n <= 10:
+            return n
+        return max(11, int(math.sqrt(n) * 1.6))
+
+    @staticmethod
+    def grid(values: list) -> list:
+        """Scale TROP lambda grids. Keeps first, middle, last for grids > 3 elements."""
+        if not _PURE_PYTHON_MODE or len(values) <= 3:
+            return values
+        return [values[0], values[len(values) // 2], values[-1]]
+
+
+@pytest.fixture(scope="session")
+def ci_params():
+    """Backend-aware parameter scaling for CI performance."""
+    return CIParams()

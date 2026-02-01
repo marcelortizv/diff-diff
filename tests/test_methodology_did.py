@@ -787,8 +787,9 @@ class TestSEVerification:
 class TestWildBootstrapInference:
     """Tests for wild cluster bootstrap inference."""
 
-    def test_wild_bootstrap_produces_valid_se(self):
+    def test_wild_bootstrap_produces_valid_se(self, ci_params):
         """Test wild bootstrap produces finite, positive SE."""
+        n_boot = ci_params.bootstrap(199)
         data = generate_clustered_did_data(
             n_clusters=15,
             cluster_size=10,
@@ -799,7 +800,7 @@ class TestWildBootstrapInference:
         did = DifferenceInDifferences(
             inference='wild_bootstrap',
             cluster='cluster_id',
-            n_bootstrap=199,
+            n_bootstrap=n_boot,
             bootstrap_weights='rademacher',
             seed=42
         )
@@ -811,8 +812,9 @@ class TestWildBootstrapInference:
         assert results.se > 0, "Bootstrap SE should be positive"
         assert results.inference_method == 'wild_bootstrap'
 
-    def test_wild_bootstrap_pvalue_in_valid_range(self):
+    def test_wild_bootstrap_pvalue_in_valid_range(self, ci_params):
         """Test wild bootstrap p-value is in [0, 1]."""
+        n_boot = ci_params.bootstrap(199)
         data = generate_clustered_did_data(
             n_clusters=15,
             cluster_size=10,
@@ -823,7 +825,7 @@ class TestWildBootstrapInference:
         did = DifferenceInDifferences(
             inference='wild_bootstrap',
             cluster='cluster_id',
-            n_bootstrap=199,
+            n_bootstrap=n_boot,
             seed=42
         )
         results = did.fit(
@@ -833,8 +835,9 @@ class TestWildBootstrapInference:
         assert 0 <= results.p_value <= 1, \
             f"P-value {results.p_value} not in [0, 1]"
 
-    def test_wild_bootstrap_ci_contains_point_estimate(self):
+    def test_wild_bootstrap_ci_contains_point_estimate(self, ci_params):
         """Test wild bootstrap CI contains point estimate."""
+        n_boot = ci_params.bootstrap(199)
         data = generate_clustered_did_data(
             n_clusters=15,
             cluster_size=10,
@@ -845,7 +848,7 @@ class TestWildBootstrapInference:
         did = DifferenceInDifferences(
             inference='wild_bootstrap',
             cluster='cluster_id',
-            n_bootstrap=199,
+            n_bootstrap=n_boot,
             seed=42
         )
         results = did.fit(
@@ -859,8 +862,9 @@ class TestWildBootstrapInference:
             f"CI [{lower}, {upper}] should approximately contain ATT {results.att}"
 
     @pytest.mark.parametrize("weight_type", ["rademacher", "mammen", "webb"])
-    def test_wild_bootstrap_weight_types(self, weight_type):
+    def test_wild_bootstrap_weight_types(self, weight_type, ci_params):
         """Test all wild bootstrap weight types work."""
+        n_boot = ci_params.bootstrap(99)
         data = generate_clustered_did_data(
             n_clusters=15,
             cluster_size=10,
@@ -871,7 +875,7 @@ class TestWildBootstrapInference:
         did = DifferenceInDifferences(
             inference='wild_bootstrap',
             cluster='cluster_id',
-            n_bootstrap=99,
+            n_bootstrap=n_boot,
             bootstrap_weights=weight_type,
             seed=42
         )

@@ -13,8 +13,8 @@ Create an isolated worktree for parallel development. Arguments: $ARGUMENTS
 
 Parse `$ARGUMENTS` to extract:
 - **name** (required): First argument — used as both directory suffix and branch name
-- **base-ref** (optional): Second argument — existing branch or ref to check out
-  instead of creating a new branch
+- **base-ref** (optional): Second argument — existing branch, tag, or ref to branch
+  from (creates branch `<name>` starting at that ref)
 
 If no name is provided, abort with:
 ```
@@ -64,19 +64,26 @@ git worktree list
 ```
 
 - If a worktree already exists at `$WORKTREE_PATH`, abort with an error.
-- If a branch named `<name>` already exists and no base-ref was given, ask the user
-  whether to check out that existing branch or pick a different name.
-  If the user chooses to use the existing branch:
-  ```bash
-  git worktree add -- "$WORKTREE_PATH" "<name>"
-  ```
-  Then skip step 4 and continue to step 5.
+- If a branch named `<name>` already exists and no base-ref was given:
+  - First check if the branch is already checked out in a worktree
+    (parse `git worktree list --porcelain` for a `branch refs/heads/<name>` line).
+  - If checked out elsewhere, abort:
+    ```
+    Error: Branch '<name>' is already checked out in worktree at <path>.
+    Use a different name or remove that worktree first.
+    ```
+  - Otherwise, ask the user whether to check out that existing branch
+    or pick a different name. If the user chooses to use it:
+    ```bash
+    git worktree add -- "$WORKTREE_PATH" "<name>"
+    ```
+    Then skip step 4 and continue to step 5.
 
 ### 4. Create the Worktree
 
 ```bash
-# If base-ref provided:
-git worktree add -- "$WORKTREE_PATH" "$BASE_REF"
+# If base-ref provided (create new branch <name> starting at base-ref):
+git worktree add -b "<name>" -- "$WORKTREE_PATH" "$BASE_REF"
 
 # If no base-ref (create new branch from current HEAD):
 git worktree add -b "<name>" -- "$WORKTREE_PATH"

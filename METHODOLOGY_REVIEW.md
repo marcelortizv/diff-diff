@@ -21,7 +21,7 @@ Each estimator in diff-diff should be periodically reviewed to ensure:
 | Estimator | Module | R Reference | Status | Last Review |
 |-----------|--------|-------------|--------|-------------|
 | DifferenceInDifferences | `estimators.py` | `fixest::feols()` | **Complete** | 2026-01-24 |
-| MultiPeriodDiD | `estimators.py` | `fixest::feols()` | Not Started | - |
+| MultiPeriodDiD | `estimators.py` | `fixest::feols()` | **Complete** | 2026-02-02 |
 | TwoWayFixedEffects | `twfe.py` | `fixest::feols()` | Not Started | - |
 | CallawaySantAnna | `staggered.py` | `did::att_gt()` | **Complete** | 2026-01-24 |
 | SunAbraham | `sun_abraham.py` | `fixest::sunab()` | Not Started | - |
@@ -99,16 +99,48 @@ Each estimator in diff-diff should be periodically reviewed to ensure:
 | Field | Value |
 |-------|-------|
 | Module | `estimators.py` |
-| Primary Reference | Freyaldenhoven et al. (2021) |
+| Primary Reference | Freyaldenhoven et al. (2021), Wooldridge (2010), Angrist & Pischke (2009) |
 | R Reference | `fixest::feols()` |
-| Status | Not Started |
-| Last Review | - |
+| Status | **Complete** |
+| Last Review | 2026-02-02 |
+
+**Verified Components:**
+- [x] Full event-study specification: treatment × period interactions for ALL non-reference periods (pre and post)
+- [x] Reference period coefficient is zero (normalized by omission from design matrix)
+- [x] Default reference period is last pre-period (e=-1 convention, matches fixest/did)
+- [x] Pre-period coefficients available for parallel trends assessment
+- [x] Average ATT computed from post-treatment effects only, with covariance-aware SE
+- [x] Returns PeriodEffect objects with confidence intervals for all periods
+- [x] Supports balanced and unbalanced panels
+- [x] NaN inference: t_stat/p_value/CI use NaN when SE is non-finite or zero
+- [x] R-style NA propagation: avg_att is NaN if any post-period effect is unidentified
+- [x] Rank-deficient design matrix: warns and sets NaN for dropped coefficients (R-style)
+- [x] Staggered adoption detection warning (via `unit` parameter)
+- [x] Treatment reversal detection warning
+- [x] Time-varying D_it detection warning (advises creating ever-treated indicator)
+- [x] Single pre-period warning (ATT valid but pre-trends assessment unavailable)
+- [x] Post-period reference_period raises ValueError (would bias avg_att)
+- [x] HonestDiD/PreTrendsPower integration uses interaction sub-VCV (not full regression VCV)
+- [x] All REGISTRY.md edge cases tested
+
+**Test Coverage:**
+- 50 tests across `TestMultiPeriodDiD` and `TestMultiPeriodDiDEventStudy` in `tests/test_estimators.py`
+- 18 new event-study specification tests added in PR #125
 
 **Corrections Made:**
-- (None yet)
+- **PR #125 (2026-02-02)**: Transformed from post-period-only estimator into full event-study
+  specification with pre-period coefficients. Reference period default changed from first
+  pre-period to last pre-period (e=-1 convention). HonestDiD/PreTrendsPower VCV extraction
+  fixed to use interaction sub-VCV instead of full regression VCV.
 
 **Outstanding Concerns:**
-- (None yet)
+- No R comparison benchmarks yet (unlike DifferenceInDifferences and CallawaySantAnna which
+  have formal R benchmark tests). Consider adding `benchmarks/R/multiperiod_benchmark.R`.
+- Default SE is HC1 (not cluster-robust at unit level as fixest uses). Cluster-robust
+  available via `cluster` parameter but not the default.
+- Endpoint binning for distant event times not yet implemented.
+- FutureWarning for reference_period default change should eventually be removed once
+  the transition is complete.
 
 ---
 

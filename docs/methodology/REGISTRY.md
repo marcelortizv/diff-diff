@@ -160,6 +160,11 @@ where V is the VCV sub-matrix for post-treatment δ_e coefficients.
 *Edge cases:*
 - Reference period: omitted from design matrix; coefficient is zero by construction.
   Default is last pre-treatment period (e=-1). User can override via `reference_period`.
+- Post-period reference: raises ValueError. Post-period references would exclude a
+  post-treatment period from estimation, biasing avg_att and breaking downstream inference.
+- Reference period default change: FutureWarning emitted when `reference_period` is not
+  explicitly specified and ≥2 pre-periods exist, noting the default changed from first
+  to last pre-period (e=-1 convention, matching fixest/did).
 - Never-treated units: all event-time indicators are zero; they identify the time
   fixed effects and serve as comparison group.
 - Endpoint binning: distant event times (e.g., e < -K or e > K) should be binned
@@ -171,6 +176,17 @@ where V is the VCV sub-matrix for post-treatment δ_e coefficients.
   coefficients (R-style, matches `lm()`)
 - Average ATT (`avg_att`) is NA if any post-period effect is unidentified
   (R-style NA propagation)
+- NaN inference for undefined statistics:
+  - t_stat: Uses NaN (not 0.0) when SE is non-finite or zero
+  - p_value and CI: Also NaN when t_stat is NaN
+  - avg_se: Checked for finiteness before computing avg_t_stat
+  - **Note**: Defensive enhancement matching CallawaySantAnna NaN convention
+- Treatment reversal: warns if any unit transitions from treated to untreated
+  (non-absorbing treatment violates the simultaneous adoption assumption)
+- Time-varying treatment (D_it): warns when `unit` parameter is provided and
+  within-unit treatment variation is detected. Advises creating an ever-treated
+  indicator. Without ever-treated D_i, pre-period interaction coefficients are
+  unidentified.
 - Pre-test of parallel trends: joint F-test on pre-treatment δ_e coefficients.
   Low power in pre-test does not validate parallel trends (Roth 2022).
 

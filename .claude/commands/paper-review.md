@@ -40,19 +40,19 @@ This template is used by both the short-paper fast path and the Phase 3 synthesi
 
 ## Methodology Registry Entry
 
-*Formatted for direct inclusion in docs/methodology/REGISTRY.md.*
+*Formatted to match docs/methodology/REGISTRY.md structure. Heading levels and labels align with existing entries — copy the `## {EstimatorName}` section into the appropriate category in the registry.*
 
-### {EstimatorName}
+## {EstimatorName}
 
 **Primary source:** {citation with DOI/URL if available}
 
 **Key implementation requirements:**
 
-*Assumptions / warnings:*
+*Assumption checks / warnings:*
 - {assumption 1}
 - {assumption 2}
 
-*Estimator equation (Equation {N} in paper):*
+*Estimator equation (Equation {N} in paper, as implemented):*
 
     {main equation with clear notation}
 
@@ -180,21 +180,32 @@ Scout agent prompt — include the PDF path and these instructions:
 >
 > Pseudocode:
 >
->     low = 1, high = 120
->     # Phase 1: Find upper bound
->     Try page 60. If exists, low=60, try page 90. Else high=60, try page 30.
->     Continue halving: mid = (low + high) / 2, try page mid.
->       If exists: low = mid. Else: high = mid.
->     Repeat until high - low <= 3.
->     # Phase 2: Linear scan for exact last page
+>     # Phase 1: Exponential probe to find upper bound
+>     low = 1, probe = 64
+>     if Read(page 1) fails: total_pages = 0, stop.
+>     if Read(page probe) fails:
+>         high = probe  # paper is shorter than probe
+>     else:
+>         while Read(page probe) succeeds:
+>             low = probe
+>             probe = probe * 2
+>             if probe > 2000: break  # safety cap
+>         high = probe
+>     # Phase 2: Binary search within [low, high]
+>     while high - low > 3:
+>         mid = (low + high) // 2
+>         if Read(page mid) succeeds: low = mid
+>         else: high = mid
+>     # Phase 3: Linear scan for exact last page
 >     For N from low to high:
 >       Try page N. If fails: last_page = N - 1. Break.
 >     If all succeed: last_page = high.
 >
-> Example for a 12-page paper: 60(fail)->30(fail)->15(fail)->7(success)->11(success)->13(fail)->linear scan 11,12,13: 12(success), 13(fail)->total_pages=12.
+> Example for a 12-page paper: page 64(fail)->low=1,high=64. Binary: 32(fail)->16(fail)->8(success)->12(success)->14(fail)->linear scan 12,13,14: 13(fail)->total_pages=12.
+> Example for a 150-page paper: page 64(success)->128(success)->256(fail)->low=128,high=256. Binary: 192(fail)->160(fail)->144(success)->152(fail)->148(success)->linear scan 148,149,150,151: 151(fail)->total_pages=150.
 >
 > **Step 2: Find references section.**
-> Read the last 8 pages of the paper (in one Read call if <=20 pages, or two calls). Scan backwards from the end looking for a heading line containing "References", "Bibliography", or "Works Cited" (case-insensitive — also match "REFERENCES", "references", etc.). Report the page number where that heading appears. If not found after scanning the last 8 pages, set references_start_page = total_pages + 1.
+> Read the last 15 pages of the paper (in one Read call if <=20 pages, or two calls). Scan backwards from the end looking for a heading line containing "References", "Bibliography", or "Works Cited" (case-insensitive — also match "REFERENCES", "references", etc.). Report the page number where that heading appears. If not found after scanning the last 15 pages, set references_start_page = total_pages + 1. (15 pages covers virtually all reference sections. If a paper has >15 pages of references, the user can correct via `--confirm`.)
 >
 > **Step 3: Report results.**
 > End your response with exactly these three lines (the main context will parse them):

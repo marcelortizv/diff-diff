@@ -12,7 +12,7 @@ without overwhelming the context window.
 ## Arguments
 
 Parse `$ARGUMENTS` to extract:
-- **PDF path** (required): First positional argument. Must be a path ending in `.pdf`.
+- **PDF path** (required): First positional argument. Must be a path ending in `.pdf` (case-insensitive).
 - `--name <name>` (optional): Estimator/method name for the output file slug.
   The name is sanitized to `[a-z0-9-]` (path separators and special characters are stripped).
   If omitted, derive from the paper's common citation form: first author's last name,
@@ -22,7 +22,7 @@ Parse `$ARGUMENTS` to extract:
 - `--confirm` (optional flag): Pause after reconnaissance to let user adjust
   page ranges. Also pause after extraction to let user review before synthesis.
 
-If no PDF path is provided or it doesn't end in `.pdf`, use AskUserQuestion to request it.
+If no PDF path is provided or it doesn't end in `.pdf` (case-insensitive), use AskUserQuestion to request it.
 
 ---
 
@@ -227,6 +227,8 @@ Scout agent prompt — include the PDF path and these instructions:
 
 After the scout completes, parse the three `SCOUT_` values from the agent's response text.
 
+**Guard: zero content pages.** If `content_pages < 1` (e.g., `references_start_page` is 1), the references section likely starts on the first page or was misdetected. Warn the user: "References appear to start on page 1 — treating the entire paper (1-{total_pages}) as content." Set `content_pages = total_pages` and `references_start_page = total_pages + 1`, then continue with the execution path logic below.
+
 **Determine execution path:**
 - content_pages <= 20: short-paper fast path (skip to next section)
 - content_pages 21-35: 2 extraction agents
@@ -258,9 +260,10 @@ If content_pages <= 20:
 1. Read the entire paper in the main context using Read tool (pages: "1-{content_pages}")
 2. Extract ALL information from all three extraction templates (Core Methodology + Estimation & Inference + Edge Cases) in a single pass
 3. Write the output directly to `docs/methodology/papers/{paper-name}-review.md` using the Synthesis Output Template defined above
-4. Skip Phases 2-4 entirely
-5. Clean up: `rm -rf .claude/paper-review`
-6. Report output path to user
+4. Verify the output file exists by reading it. If it doesn't exist or is empty, report failure and preserve `.claude/paper-review/` for debugging. Stop here.
+5. Skip Phases 2-4 entirely
+6. Clean up: `rm -rf .claude/paper-review`
+7. Report output path to user
 
 ---
 

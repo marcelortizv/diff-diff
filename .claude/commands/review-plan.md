@@ -14,9 +14,15 @@ Review a Claude Code plan file from a staff engineer perspective and provide str
 - `--updated` (optional): Signal that the plan has been revised since a prior review. Forces a fresh full review and includes a delta assessment of what changed.
 
 Parse `$ARGUMENTS` to extract:
-- **--updated**: Check if the literal string `--updated` appears anywhere in `$ARGUMENTS`. Remove it to get the remaining text.
-- **Plan file path**: The remaining non-flag text after stripping `--updated`. The flag may appear before or after the path.
-- If no path remains after stripping the flag, use AskUserQuestion to request it (same fallback as today).
+- **--updated**: Split `$ARGUMENTS` on whitespace and check if any token is exactly `--updated`. Remove that token to get the remaining text.
+- **Plan file path**: The remaining non-flag tokens after removing `--updated`, joined back together. The flag may appear before or after the path.
+- If no path remains after stripping the flag, use AskUserQuestion to request it:
+```
+Which plan file would you like me to review?
+
+Options:
+1. Enter the path (e.g., ~/.claude/plans/plan-name.md)
+```
 
 ## Constraints
 
@@ -47,7 +53,7 @@ After completing the standard 8-dimension review in Step 4, add a **Delta Assess
 - Which previously-raised issues remain unresolved?
 - Are there any new issues introduced by the revisions?
 
-If no prior review is available in conversation context (e.g., the user passed `--updated` on the first invocation, or the context was compressed), skip the Delta Assessment section and add a note: "Delta assessment unavailable — no prior review found in conversation context. Full fresh review performed."
+If no prior review is available in conversation context (e.g., the user passed `--updated` on the first invocation, or the context was compressed), still include the Delta Assessment section but fill each subsection with: "Delta assessment unavailable — no prior review found in conversation context. Full fresh review performed."
 
 ### Step 2: Read CLAUDE.md for Project Context
 
@@ -167,7 +173,7 @@ Plan-specific failure modes that wouldn't show up in a code review:
 
 ### Step 5: Present Structured Feedback
 
-Present the review in the following format. Do NOT skip any section — if a section has no findings, write "None." for that section.
+Present the review in the following format. Do NOT skip any section — if a section has no findings, write "None." for that section. The Delta Assessment section is only included when the `--updated` flag was provided (see Step 1b).
 
 ```
 ## Overall Assessment

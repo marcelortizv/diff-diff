@@ -102,11 +102,10 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         data = data.copy()
         data["_treatment_post"] = data[treatment] * data[time]
 
-        # Demean outcome, covariates, AND interaction (within transformation for FE)
-        data_demeaned = self._within_transform(data, outcome, unit, time, covariates)
-        # Also demean the interaction term
+        # Demean outcome, covariates, AND interaction in a single pass
+        all_vars = [outcome] + (covariates or []) + ["_treatment_post"]
         data_demeaned = _within_transform_util(
-            data_demeaned, ["_treatment_post"], unit, time, suffix="_demeaned"
+            data, all_vars, unit, time, suffix="_demeaned"
         )
 
         # Extract variables for regression

@@ -334,19 +334,21 @@ class TestRBenchmarkTWFE:
 
         result <- feols({formula}, data = data, cluster = ~unit)
 
-        coef_names <- names(coef(result))
-        att_idx <- which(coef_names == "treated:post")
-        if (length(att_idx) == 0) {{
-            att_idx <- which(grepl("treated.*post", coef_names))
+        # Use coeftable() to get fixest's own inference (SE, t-stat, p-value)
+        # This ensures we use fixest's df adjustment, not a manual pt() call
+        ct <- coeftable(result)
+        att_row <- which(rownames(ct) == "treated:post")
+        if (length(att_row) == 0) {{
+            att_row <- which(grepl("treated.*post", rownames(ct)))
         }}
 
-        att <- coef(result)[att_idx]
-        se_val <- sqrt(vcov(result)[att_idx, att_idx])
-        tstat <- att / se_val
-        pval <- 2 * pt(abs(tstat), df = result$nobs - length(coef(result)), lower.tail = FALSE)
+        att <- ct[att_row, "Estimate"]
+        se_val <- ct[att_row, "Std. Error"]
+        tstat <- ct[att_row, "t value"]
+        pval <- ct[att_row, "Pr(>|t|)"]
         ci <- confint(result)
-        ci_lower <- ci[att_idx, 1]
-        ci_upper <- ci[att_idx, 2]
+        ci_lower <- ci[att_row, 1]
+        ci_upper <- ci[att_row, 2]
 
         output <- list(
             att = unbox(att),
@@ -749,13 +751,13 @@ class TestTWFEEdgeCases:
 class TestTWFESEVerification:
     """Verify standard error properties."""
 
-    def test_cluster_se_larger_than_hc1_se(self):
+    def test_cluster_se_differs_from_hc1_se(self):
         """
-        Cluster-robust SE >= HC1 SE on the same demeaned regression.
+        Cluster-robust SE differs from HC1 SE, verifying auto-clustering is active.
 
         TWFE auto-clusters at unit level. We manually compute HC1 SE on the
-        same demeaned data and verify cluster SE >= HC1 SE (clustering
-        typically inflates SE due to within-unit correlation).
+        same demeaned data (demeaned by unit + post, matching TWFE) and verify
+        the SEs are different, proving clustering changes inference.
         """
         data = generate_twfe_panel(n_units=20, n_periods=4, seed=42)
 
@@ -766,14 +768,15 @@ class TestTWFESEVerification:
         )
 
         # Manual HC1 SE on same demeaned regression (no clustering)
+        # Demean by unit + post to match TWFE's within-transform
         data_with_tp = data.copy()
         data_with_tp["tp"] = data["treated"] * data["post"]
-        demeaned = within_transform(data_with_tp, ["outcome", "tp"], "unit", "period")
+        demeaned = within_transform(data_with_tp, ["outcome", "tp"], "unit", "post")
         y = demeaned["outcome_demeaned"].values
         tp = demeaned["tp_demeaned"].values
         X = np.column_stack([np.ones(len(y)), tp])
         n_units = data["unit"].nunique()
-        n_times = data["period"].nunique()
+        n_times = data["post"].nunique()
         df_adjustment = n_units + n_times - 2
 
         hc1_reg = LinearRegression(
@@ -784,8 +787,24 @@ class TestTWFESEVerification:
         ).fit(X, y, df_adjustment=df_adjustment)
         hc1_se = hc1_reg.get_inference(1).se
 
-        assert twfe_results.se >= hc1_se * 0.99, (
-            f"Cluster SE ({twfe_results.se:.6f}) should be >= HC1 SE ({hc1_se:.6f})"
+        # Verify SEs are different (auto-clustering is active)
+        assert twfe_results.se != hc1_se, (
+            f"Cluster SE ({twfe_results.se:.6f}) should differ from "
+            f"HC1 SE ({hc1_se:.6f}) — auto-clustering must be active"
+        )
+
+        # Also verify TWFE SE matches a manually computed cluster SE
+        cluster_reg = LinearRegression(
+            include_intercept=False,
+            robust=True,
+            cluster_ids=data["unit"].values,
+            rank_deficient_action="silent",
+        ).fit(X, y, df_adjustment=df_adjustment)
+        manual_cluster_se = cluster_reg.get_inference(1).se
+
+        np.testing.assert_allclose(
+            twfe_results.se, manual_cluster_se, rtol=1e-10,
+            err_msg="TWFE SE should match manually computed cluster SE"
         )
 
     def test_vcov_positive_semidefinite(self):

@@ -70,6 +70,7 @@ target/
 # Claude Code - local settings and generated files
 .claude/settings.local.json
 .claude/reviews/
+.claude/paper-review/
 
 # MCP configuration (may contain tokens)
 .mcp.json

@@ -319,6 +319,8 @@ See `docs/performance-plan.md` for full optimization details and `docs/benchmark
   - **Must be consulted before implementing methodology-related changes**
   - **Must be updated when deviating from reference implementations**
 
+- **`docs/methodology/papers/`** - Paper review output files produced by `/paper-review` skill, formatted as Methodology Registry entries for implementation reference
+
 - **`docs/tutorials/`** - Jupyter notebook tutorials:
   - `01_basic_did.ipynb` - Basic 2x2 DiD, covariates, fixed effects, wild bootstrap
   - `02_staggered_did.ipynb` - Staggered adoption with Callaway-Sant'Anna, bootstrap inference

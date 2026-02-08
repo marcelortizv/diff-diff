@@ -1,6 +1,6 @@
 ---
 description: Review a Claude Code plan file from a staff engineer perspective
-argument-hint: "<path-to-plan-file>"
+argument-hint: "[--updated] <path-to-plan-file>"
 ---
 
 # Review Plan
@@ -9,10 +9,14 @@ Review a Claude Code plan file from a staff engineer perspective and provide str
 
 ## Arguments
 
-`$ARGUMENTS` should contain:
+`$ARGUMENTS` may contain:
 - **Plan file path** (required): Path to the plan file, e.g., `~/.claude/plans/dreamy-coalescing-brook.md`
+- `--updated` (optional): Signal that the plan has been revised since a prior review. Forces a fresh full review and includes a delta assessment of what changed.
 
-If no path is provided, use AskUserQuestion to request it:
+Parse `$ARGUMENTS` to extract:
+- **--updated**: Split `$ARGUMENTS` on whitespace and check if any token is exactly `--updated`. Remove that token to get the remaining text.
+- **Plan file path**: The remaining non-flag tokens after removing `--updated`, joined back together. The flag may appear before or after the path.
+- If no path remains after stripping the flag, use AskUserQuestion to request it:
 ```
 Which plan file would you like me to review?
 
@@ -37,6 +41,19 @@ If the file does not exist, report the error and stop:
 ```
 Error: Plan file not found at <path>
 ```
+
+### Step 1b: Handle Re-Review (if `--updated`)
+
+If the `--updated` flag is present, this is a re-review of a revised plan.
+
+**You MUST perform a complete fresh review** — do not skip or abbreviate any steps. Treat the plan file contents as the authoritative source, not your memory of a prior version.
+
+After completing the standard 8-dimension review in Step 4, add a **Delta Assessment** section to the output (see Step 5 template for format). This section compares the revised plan against the prior review's feedback:
+- Which previously-raised issues have been addressed?
+- Which previously-raised issues remain unresolved?
+- Are there any new issues introduced by the revisions?
+
+If no prior review is available in conversation context (e.g., the user passed `--updated` on the first invocation, or the context was compressed), still include the Delta Assessment section but fill each subsection with: "Delta assessment unavailable — no prior review found in conversation context. Full fresh review performed."
 
 ### Step 2: Read CLAUDE.md for Project Context
 
@@ -156,7 +173,7 @@ Plan-specific failure modes that wouldn't show up in a code review:
 
 ### Step 5: Present Structured Feedback
 
-Present the review in the following format. Do NOT skip any section — if a section has no findings, write "None." for that section.
+Present the review in the following format. Do NOT skip any section — if a section has no findings, write "None." for that section. The Delta Assessment section is only included when the `--updated` flag was provided (see Step 1b).
 
 ```
 ## Overall Assessment
@@ -192,6 +209,19 @@ Cross-reference against the relevant CLAUDE.md checklists. List which checklist 
 
 ---
 
+## Delta Assessment (only include if `--updated` flag was provided)
+
+### Addressed
+[List prior issues that have been resolved in the revised plan]
+
+### Unresolved
+[List prior issues that remain. Include the original issue text for reference.]
+
+### New Issues
+[List any new issues introduced by the revisions, or "None."]
+
+---
+
 ## Summary
 
 | Category | Issues |
@@ -216,3 +246,4 @@ Cross-reference against the relevant CLAUDE.md checklists. List which checklist 
 - The review is displayed directly in the conversation, not saved to a file
 - For best results, run this before implementing a plan to catch issues early
 - The 8 dimensions are tuned for plan-specific failure modes, not generic code review
+- Use `--updated` when re-reviewing a revised plan to get a delta assessment of what changed since the prior review

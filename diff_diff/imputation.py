@@ -629,6 +629,23 @@ class ImputationDiD:
         df[time] = pd.to_numeric(df[time])
         df[first_treat] = pd.to_numeric(df[first_treat])
 
+        # Validate absorbing treatment: first_treat must be constant within each unit
+        ft_nunique = df.groupby(unit)[first_treat].nunique()
+        non_constant = ft_nunique[ft_nunique > 1]
+        if len(non_constant) > 0:
+            example_unit = non_constant.index[0]
+            example_vals = sorted(df.loc[df[unit] == example_unit, first_treat].unique())
+            warnings.warn(
+                f"{len(non_constant)} unit(s) have non-constant '{first_treat}' "
+                f"values (e.g., unit '{example_unit}' has values {example_vals}). "
+                f"ImputationDiD assumes treatment is an absorbing state "
+                f"(once treated, always treated) with a single treatment onset "
+                f"time per unit. Non-constant first_treat violates this assumption "
+                f"and may produce unreliable estimates.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         # Identify treatment status
         df["_never_treated"] = (df[first_treat] == 0) | (df[first_treat] == np.inf)
 

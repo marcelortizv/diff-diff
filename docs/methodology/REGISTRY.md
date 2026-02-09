@@ -528,6 +528,7 @@ Y_it = alpha_i + beta_t [+ X'_it * delta] + W'_it * gamma + epsilon_it
 - **Overall ATT variance:** Weights zero out non-finite tau_hat and renormalize, matching the ATT estimand (which averages only finite tau_hat). `_compute_conservative_variance` returns 0.0 for all-zeros weights, so the n_valid==0 guard is necessary to return NaN SE.
 - **Bootstrap balance_e:** When balance_e is set, bootstrap event-study inference restricts to balanced cohorts via `_compute_balanced_cohort_mask`, consistent with the analytical aggregation.
 - **Bootstrap clustering:** Multiplier bootstrap generates weights at `cluster_var` granularity (defaults to `unit` if `cluster` not specified). Invalid cluster column raises ValueError.
+- **Non-constant `first_treat` within a unit:** Emits `UserWarning` identifying the count and example unit. The estimator proceeds using the first observed value per unit (via `.first()` aggregation), but results may be unreliable.
 - **Bootstrap inference:** **Note**: Bootstrap is not proposed in Borusyak et al. (2024). The library provides optional multiplier bootstrap for consistency with other staggered estimators (CallawaySantAnna, SunAbraham). This is a library extension beyond the paper.
 - **Auxiliary residuals (Equation 8):** Uses v_it-weighted tau_tilde_g formula: `tau_tilde_g = sum(v_it * tau_hat_it) / sum(v_it)` within each partition group. Zero-weight groups (common in event-study SE computation) fall back to unweighted mean.
 

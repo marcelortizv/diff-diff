@@ -1579,3 +1579,32 @@ class TestImputationEdgeCases:
                 f"Fitted values differ at unit={u}, time={t}: "
                 f"iterative={y_hat_iter:.8f} vs OLS={y_hat_ols:.8f}"
             )
+
+    def test_non_constant_first_treat_warning(self):
+        """Warn when first_treat varies within a unit (violates absorbing treatment)."""
+        data = generate_test_data(dynamic_effects=False, seed=42)
+        # Corrupt first_treat for unit 0: make it vary across rows
+        bad_unit = data["unit"].unique()[0]
+        mask = data["unit"] == bad_unit
+        data.loc[mask & (data["time"] >= 5), "first_treat"] = 99
+
+        est = ImputationDiD()
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = est.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+            absorbing_warnings = [x for x in w if "non-constant" in str(x.message)]
+            assert len(absorbing_warnings) >= 1, "Expected warning about non-constant first_treat"
+            # Verify warning mentions the unit count and example
+            msg = str(absorbing_warnings[0].message)
+            assert "1 unit(s)" in msg
+            assert str(bad_unit) in msg
+
+        # Behavioral assertion: estimator still produces results (warns, doesn't crash)
+        assert isinstance(results, ImputationDiDResults)
+        assert np.isfinite(results.overall_att)

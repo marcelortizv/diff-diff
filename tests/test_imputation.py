@@ -15,7 +15,6 @@ from diff_diff.imputation import (
     imputation_did,
 )
 
-
 # =============================================================================
 # Shared test data generation
 # =============================================================================
@@ -738,6 +737,51 @@ class TestImputationVariance:
         with pytest.raises(ValueError, match="aux_partition"):
             ImputationDiD(aux_partition="invalid")
 
+    def test_sparse_solver_matches_dense(self):
+        """Test that sparse solver produces finite SEs with covariates."""
+        data = generate_test_data(n_units=100, n_periods=10, seed=42)
+        rng = np.random.default_rng(42)
+        data["x1"] = rng.standard_normal(len(data))
+
+        est = ImputationDiD()
+        results = est.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            covariates=["x1"],
+        )
+
+        assert np.isfinite(results.overall_se)
+        assert results.overall_se > 0
+
+    def test_sparse_solver_dense_fallback(self):
+        """Test that dense fallback produces finite SE when spsolve fails."""
+        import unittest.mock
+
+        data = generate_test_data(n_units=80, n_periods=8, seed=42)
+        rng = np.random.default_rng(42)
+        data["x1"] = rng.standard_normal(len(data))
+
+        est = ImputationDiD()
+
+        # Monkey-patch spsolve to force fallback to dense lstsq
+        with unittest.mock.patch(
+            "diff_diff.imputation.spsolve", side_effect=RuntimeError("test failure")
+        ):
+            results = est.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1"],
+            )
+
+        assert np.isfinite(results.overall_se)
+        assert results.overall_se > 0
+
 
 # =============================================================================
 # TestImputationBootstrap
@@ -893,6 +937,32 @@ class TestImputationBootstrap:
 
         # Strong effect should be significant
         assert results.overall_p_value < 0.05
+
+    def test_bootstrap_zero_noise_near_zero_se(self, ci_params):
+        """Bootstrap SE ~ 0 when influence function is zero (constant effect, no noise)."""
+        n_units, n_periods = 40, 8
+        true_effect = 3.0
+        rows = []
+        for i in range(n_units):
+            ft = 4 if i < 20 else 0
+            unit_fe = i * 0.5
+            for t in range(n_periods):
+                y = unit_fe + t * 0.1  # exact FE, no noise
+                if ft > 0 and t >= ft:
+                    y += true_effect
+                rows.append({"unit": i, "time": t, "outcome": y, "first_treat": ft})
+        data = pd.DataFrame(rows)
+
+        n_boot = ci_params.bootstrap(99)
+        est = ImputationDiD(n_bootstrap=n_boot, seed=42)
+        results = est.fit(
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+        )
+
+        assert abs(results.overall_att - true_effect) < 1e-8
+        assert results.bootstrap_results is not None
+        # With zero noise, influence function sums are ~0, so SE should be ~0
+        assert results.bootstrap_results.overall_att_se < 0.01
 
 
 # =============================================================================
@@ -1608,3 +1678,105 @@ class TestImputationEdgeCases:
         # Behavioral assertion: estimator still produces results (warns, doesn't crash)
         assert isinstance(results, ImputationDiDResults)
         assert np.isfinite(results.overall_att)
+
+    def test_treatment_effects_weight_nan_consistency(self):
+        """Test that treatment_effects weights are 0 for NaN tau_hat and 1/n_valid for finite."""
+        # Reuse the partial-NaN scenario from test_overall_se_with_partial_nan_tau_hat
+        rng = np.random.default_rng(42)
+        n_units, n_periods = 40, 6
+        rows = []
+        for i in range(n_units):
+            if i < 20:
+                ft = 2  # early-treated
+            else:
+                ft = 99  # never-treated
+            for t in range(n_periods):
+                # Drop never-treated at t=5 to create unidentified time FE
+                if ft == 99 and t == 5:
+                    continue
+                y = rng.standard_normal() + i * 0.1 + t * 0.05
+                if t >= ft:
+                    y += 1.0
+                rows.append({"unit": i, "time": t, "outcome": y, "first_treat": ft})
+        data = pd.DataFrame(rows)
+
+        est = ImputationDiD(rank_deficient_action="silent")
+        results = est.fit(
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+        )
+
+        te = results.treatment_effects
+        nan_rows = te[te["tau_hat"].isna()]
+        finite_rows = te[te["tau_hat"].notna()]
+
+        # Verify scenario produces partial NaN
+        assert len(nan_rows) > 0
+        assert len(finite_rows) > 0
+
+        # NaN tau_hat rows have weight 0
+        assert (nan_rows["weight"] == 0.0).all(), "NaN tau_hat rows should have weight 0"
+
+        # Finite weights sum to ~1.0
+        assert abs(finite_rows["weight"].sum() - 1.0) < 1e-10, "Finite weights should sum to 1"
+
+        # Each finite weight equals 1/n_finite
+        n_finite = len(finite_rows)
+        expected_weight = 1.0 / n_finite
+        np.testing.assert_allclose(finite_rows["weight"].values, expected_weight, rtol=1e-10)
+
+    def test_rank_deficient_covariates_excluded_from_variance(self):
+        """Rank-deficient covariates are excluded from variance design matrices."""
+        data = generate_test_data(n_units=80, n_periods=8, seed=42)
+        rng = np.random.default_rng(42)
+        data["x1"] = rng.standard_normal(len(data))
+        data["x2"] = 2.0 * data["x1"]  # perfectly collinear
+
+        est = ImputationDiD(rank_deficient_action="silent")
+        results = est.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            covariates=["x1", "x2"],
+        )
+
+        # SE should be finite (not blown up by singular design matrix)
+        assert np.isfinite(results.overall_se), "SE should be finite with rank-deficient covariates"
+        assert results.overall_se > 0
+
+        # Verify kept_cov_mask is stored and has one True + one False
+        mask = est._fit_data["kept_cov_mask"]
+        assert mask is not None
+        assert mask.sum() == 1, f"Expected 1 kept covariate, got {mask.sum()}"
+        assert len(mask) == 2
+        assert (~mask).sum() == 1, "Expected 1 dropped covariate"
+
+    def test_bootstrap_psi_precomputation_failure_warning(self, ci_params):
+        """Warning emitted and bootstrap skipped when psi precomputation fails."""
+        data = generate_test_data(dynamic_effects=False, seed=42)
+        n_boot = ci_params.bootstrap(99)
+        est = ImputationDiD(n_bootstrap=n_boot, seed=42)
+
+        # Monkey-patch to force failure
+        def failing_precompute(*args, **kwargs):
+            raise RuntimeError("test failure")
+
+        est._precompute_bootstrap_psi = failing_precompute
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = est.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+            psi_warnings = [x for x in w if "Bootstrap pre-computation failed" in str(x.message)]
+            assert len(psi_warnings) >= 1
+
+        # Behavioral assertion: bootstrap_results is None
+        assert results.bootstrap_results is None
+        # Analytical SE still present
+        assert results.overall_se > 0

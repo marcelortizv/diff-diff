@@ -21,11 +21,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from scipy import sparse, stats
+from scipy.sparse.linalg import spsolve
 
 from diff_diff.linalg import solve_ols
 from diff_diff.results import _get_significance_stars
 from diff_diff.utils import compute_confidence_interval, compute_p_value
-
 
 # =============================================================================
 # Results Dataclasses
@@ -715,7 +715,7 @@ class ImputationDiD:
         )
 
         # ---- Step 1: OLS on untreated observations ----
-        unit_fe, time_fe, grand_mean, delta_hat = self._fit_untreated_model(
+        unit_fe, time_fe, grand_mean, delta_hat, kept_cov_mask = self._fit_untreated_model(
             df, outcome, unit, time, covariates, omega_0_mask
         )
 
@@ -777,7 +777,6 @@ class ImputationDiD:
 
         # ---- Step 3: Aggregate ----
         # Always compute overall ATT (simple aggregation)
-        n_treated = int(omega_1_mask.sum())
         valid_tau = tau_hat[np.isfinite(tau_hat)]
 
         if len(valid_tau) == 0:
@@ -811,6 +810,7 @@ class ImputationDiD:
                 delta_hat=delta_hat,
                 weights=overall_weights,
                 cluster_var=cluster_var,
+                kept_cov_mask=kept_cov_mask,
             )
 
         overall_t = (
@@ -844,6 +844,7 @@ class ImputationDiD:
                 cluster_var=cluster_var,
                 treatment_groups=treatment_groups,
                 balance_e=balance_e,
+                kept_cov_mask=kept_cov_mask,
             )
 
         if aggregate in ("group", "all"):
@@ -862,12 +863,19 @@ class ImputationDiD:
                 delta_hat=delta_hat,
                 cluster_var=cluster_var,
                 treatment_groups=treatment_groups,
+                kept_cov_mask=kept_cov_mask,
             )
 
         # Build treatment effects dataframe
         treated_df = df.loc[omega_1_mask, [unit, time, "_tau_hat", "_rel_time"]].copy()
         treated_df = treated_df.rename(columns={"_tau_hat": "tau_hat", "_rel_time": "rel_time"})
-        treated_df["weight"] = 1.0 / n_treated
+        # Weights consistent with actual ATT: zero for NaN tau_hat, 1/n_valid for finite
+        tau_finite = treated_df["tau_hat"].notna()
+        n_valid_te = int(tau_finite.sum())
+        if n_valid_te > 0:
+            treated_df["weight"] = np.where(tau_finite, 1.0 / n_valid_te, 0.0)
+        else:
+            treated_df["weight"] = 0.0
 
         # Store fit data for pretrend_test
         self._fit_data = {
@@ -884,23 +892,51 @@ class ImputationDiD:
             "time_fe": time_fe,
             "grand_mean": grand_mean,
             "delta_hat": delta_hat,
+            "kept_cov_mask": kept_cov_mask,
         }
+
+        # Pre-compute cluster psi sums for bootstrap
+        psi_data = None
+        if self.n_bootstrap > 0 and n_valid > 0:
+            try:
+                psi_data = self._precompute_bootstrap_psi(
+                    df=df,
+                    outcome=outcome,
+                    unit=unit,
+                    time=time,
+                    first_treat=first_treat,
+                    covariates=covariates,
+                    omega_0_mask=omega_0_mask,
+                    omega_1_mask=omega_1_mask,
+                    unit_fe=unit_fe,
+                    time_fe=time_fe,
+                    grand_mean=grand_mean,
+                    delta_hat=delta_hat,
+                    cluster_var=cluster_var,
+                    kept_cov_mask=kept_cov_mask,
+                    overall_weights=overall_weights,
+                    event_study_effects=event_study_effects,
+                    group_effects=group_effects,
+                    treatment_groups=treatment_groups,
+                    tau_hat=tau_hat,
+                    balance_e=balance_e,
+                )
+            except Exception as e:
+                warnings.warn(
+                    f"Bootstrap pre-computation failed: {e}. " "Skipping bootstrap inference.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                psi_data = None
 
         # Bootstrap
         bootstrap_results = None
-        if self.n_bootstrap > 0:
+        if self.n_bootstrap > 0 and psi_data is not None:
             bootstrap_results = self._run_bootstrap(
-                df=df,
-                outcome=outcome,
-                unit=unit,
-                time=time,
-                first_treat=first_treat,
-                covariates=covariates,
-                aggregate=aggregate,
-                balance_e=balance_e,
                 original_att=overall_att,
                 original_event_study=event_study_effects,
                 original_group=group_effects,
+                psi_data=psi_data,
             )
 
             # Update inference with bootstrap results
@@ -1111,7 +1147,9 @@ class ImputationDiD:
         time: str,
         covariates: Optional[List[str]],
         omega_0_mask: pd.Series,
-    ) -> Tuple[Dict[Any, float], Dict[Any, float], float, Optional[np.ndarray]]:
+    ) -> Tuple[
+        Dict[Any, float], Dict[Any, float], float, Optional[np.ndarray], Optional[np.ndarray]
+    ]:
         """
         Step 1: Estimate unit + time FE on untreated observations.
 
@@ -1129,6 +1167,9 @@ class ImputationDiD:
             Grand mean (0.0 — absorbed into iterative FE).
         delta_hat : np.ndarray or None
             Covariate coefficients (if covariates provided).
+        kept_cov_mask : np.ndarray or None
+            Boolean mask of shape (n_covariates,) indicating which covariates
+            have finite coefficients. None if no covariates.
         """
         df_0 = df.loc[omega_0_mask]
 
@@ -1140,7 +1181,7 @@ class ImputationDiD:
                 y, df_0[unit].values, df_0[time].values, df_0.index
             )
             # grand_mean = 0: iterative FE absorb the intercept
-            return unit_fe, time_fe, 0.0, None
+            return unit_fe, time_fe, 0.0, None, None
 
         else:
             # With covariates: iteratively demean Y and X, OLS for delta,
@@ -1170,6 +1211,10 @@ class ImputationDiD:
             )
             delta_hat = result[0]
 
+            # Mask of covariates with finite coefficients (before cleaning)
+            # Used to exclude rank-deficient covariates from variance design matrices
+            kept_cov_mask = np.isfinite(delta_hat)
+
             # Replace NaN coefficients with 0 for adjustment
             # (rank-deficient covariates are dropped)
             delta_hat_clean = np.where(np.isfinite(delta_hat), delta_hat, 0.0)
@@ -1179,7 +1224,7 @@ class ImputationDiD:
             unit_fe, time_fe = self._iterative_fe(y_adj, units, times, df_0.index)
 
             # grand_mean = 0: iterative FE absorb the intercept
-            return unit_fe, time_fe, 0.0, delta_hat_clean
+            return unit_fe, time_fe, 0.0, delta_hat_clean, kept_cov_mask
 
     # =========================================================================
     # Step 2: Impute counterfactuals
@@ -1233,7 +1278,7 @@ class ImputationDiD:
     # Conservative Variance (Theorem 3)
     # =========================================================================
 
-    def _compute_conservative_variance(
+    def _compute_cluster_psi_sums(
         self,
         df: pd.DataFrame,
         outcome: str,
@@ -1249,20 +1294,19 @@ class ImputationDiD:
         delta_hat: Optional[np.ndarray],
         weights: np.ndarray,
         cluster_var: str,
-    ) -> float:
+        kept_cov_mask: Optional[np.ndarray] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Compute conservative clustered variance (Theorem 3, Equation 7).
+        Compute cluster-level influence function sums (Theorem 3).
 
-        Parameters
-        ----------
-        weights : np.ndarray
-            Aggregation weights w_it for treated observations.
-            Shape: (n_treated,), must sum to 1.
+        psi_i = sum_t v_it * epsilon_tilde_it, summed within each cluster.
 
         Returns
         -------
-        float
-            Standard error.
+        cluster_psi_sums : np.ndarray
+            Array of cluster-level psi sums.
+        cluster_ids_unique : np.ndarray
+            Unique cluster identifiers (matching order of psi sums).
         """
         df_0 = df.loc[omega_0_mask]
         df_1 = df.loc[omega_1_mask]
@@ -1270,18 +1314,11 @@ class ImputationDiD:
         n_1 = len(df_1)
 
         # ---- Compute v_it for treated observations ----
-        # v_it = w_it for treated obs
         v_treated = weights.copy()
 
         # ---- Compute v_it for untreated observations ----
         if covariates is None or len(covariates) == 0:
             # FE-only case: closed-form
-            # v_it^0 = -(w_i. / n_{0,i} + w_.t / n_{0,t} - w.. / N_0)
-            # where w_i. = sum of w over treated obs of unit i
-            #       w_.t = sum of w over treated obs at time t
-            #       w.. = sum of all w = 1
-
-            # Compute w_i. and w_.t from treated observations
             treated_units = df_1[unit].values
             treated_times = df_1[time].values
 
@@ -1295,13 +1332,11 @@ class ImputationDiD:
                 t = treated_times[i_idx]
                 w_by_time[t] = w_by_time.get(t, 0.0) + weights[i_idx]
 
-            w_total = float(np.sum(weights))  # Should be ~1
+            w_total = float(np.sum(weights))
 
-            # Count untreated obs per unit and per time
             n0_by_unit = df_0.groupby(unit).size().to_dict()
             n0_by_time = df_0.groupby(time).size().to_dict()
 
-            # Compute v for each untreated observation
             untreated_units = df_0[unit].values
             untreated_times = df_0[time].values
             v_untreated = np.zeros(n_0)
@@ -1315,9 +1350,15 @@ class ImputationDiD:
                 n0_t = n0_by_time.get(t, 1)
                 v_untreated[j] = -(w_i / n0_i + w_t / n0_t - w_total / n_0)
         else:
-            # With covariates: use projection matrix approach
             v_untreated = self._compute_v_untreated_with_covariates(
-                df_0, df_1, unit, time, covariates, weights, delta_hat
+                df_0,
+                df_1,
+                unit,
+                time,
+                covariates,
+                weights,
+                delta_hat,
+                kept_cov_mask=kept_cov_mask,
             )
 
         # ---- Compute auxiliary model residuals (Equation 8) ----
@@ -1338,8 +1379,7 @@ class ImputationDiD:
             df_0, outcome, unit, time, covariates, unit_fe, time_fe, grand_mean, delta_hat
         )
 
-        # ---- Clustered variance: sigma^2 = sum_i (sum_t v_it * eps_it)^2 ----
-        # Combine v and epsilon for all observations
+        # ---- psi_it = v_it * epsilon_tilde_it ----
         v_all = np.empty(len(df))
         v_all[omega_1_mask.values] = v_treated
         v_all[omega_0_mask.values] = v_untreated
@@ -1358,10 +1398,59 @@ class ImputationDiD:
         ve_series = pd.Series(ve_product, index=df.index)
         cluster_sums = ve_series.groupby(cluster_ids).sum()
 
-        sigma_sq = float((cluster_sums**2).sum())
-        se = np.sqrt(max(sigma_sq, 0.0))
+        return cluster_sums.values, cluster_sums.index.values
 
-        return se
+    def _compute_conservative_variance(
+        self,
+        df: pd.DataFrame,
+        outcome: str,
+        unit: str,
+        time: str,
+        first_treat: str,
+        covariates: Optional[List[str]],
+        omega_0_mask: pd.Series,
+        omega_1_mask: pd.Series,
+        unit_fe: Dict[Any, float],
+        time_fe: Dict[Any, float],
+        grand_mean: float,
+        delta_hat: Optional[np.ndarray],
+        weights: np.ndarray,
+        cluster_var: str,
+        kept_cov_mask: Optional[np.ndarray] = None,
+    ) -> float:
+        """
+        Compute conservative clustered variance (Theorem 3, Equation 7).
+
+        Parameters
+        ----------
+        weights : np.ndarray
+            Aggregation weights w_it for treated observations.
+            Shape: (n_treated,), must sum to 1.
+
+        Returns
+        -------
+        float
+            Standard error.
+        """
+        cluster_psi_sums, _ = self._compute_cluster_psi_sums(
+            df=df,
+            outcome=outcome,
+            unit=unit,
+            time=time,
+            first_treat=first_treat,
+            covariates=covariates,
+            omega_0_mask=omega_0_mask,
+            omega_1_mask=omega_1_mask,
+            unit_fe=unit_fe,
+            time_fe=time_fe,
+            grand_mean=grand_mean,
+            delta_hat=delta_hat,
+            weights=weights,
+            cluster_var=cluster_var,
+            kept_cov_mask=kept_cov_mask,
+        )
+        sigma_sq = float((cluster_psi_sums**2).sum())
+        return np.sqrt(max(sigma_sq, 0.0))
 
     def _compute_v_untreated_with_covariates(
         self,
@@ -1372,6 +1461,7 @@ class ImputationDiD:
         covariates: List[str],
         weights: np.ndarray,
         delta_hat: Optional[np.ndarray],
+        kept_cov_mask: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
         Compute v_it for untreated observations with covariates.
@@ -1381,6 +1471,10 @@ class ImputationDiD:
         Uses scipy.sparse for FE dummy columns to reduce memory from O(N*(U+T))
         to O(N) for the FE portion.
         """
+        # Exclude rank-deficient covariates from design matrices
+        if kept_cov_mask is not None and not np.all(kept_cov_mask):
+            covariates = [c for c, k in zip(covariates, kept_cov_mask) if k]
+
         units_0 = df_0[unit].values
         times_0 = df_0[time].values
         units_1 = df_1[unit].values
@@ -1431,14 +1525,14 @@ class ImputationDiD:
         # Compute A_1' w (sparse.T @ dense -> dense)
         A1_w = A_1.T @ weights  # shape (p,)
 
-        # Solve (A_0'A_0) z = A_1' w
-        # A_0'A_0 is (p x p) where p = n_fe_cols + n_cov — small enough to be dense
-        A0tA0 = (A_0.T @ A_0).toarray()
+        # Solve (A_0'A_0) z = A_1' w using sparse direct solver
+        A0tA0_sparse = A_0.T @ A_0  # stays sparse
         try:
-            z = np.linalg.solve(A0tA0, A1_w)
-        except np.linalg.LinAlgError:
-            # Fallback to lstsq
-            z, _, _, _ = np.linalg.lstsq(A0tA0, A1_w, rcond=None)
+            z = spsolve(A0tA0_sparse.tocsc(), A1_w)
+        except Exception:
+            # Fallback to dense lstsq if sparse solver fails (e.g., singular matrix)
+            A0tA0_dense = A0tA0_sparse.toarray()
+            z, _, _, _ = np.linalg.lstsq(A0tA0_dense, A1_w, rcond=None)
 
         # v_untreated = -A_0 z (sparse @ dense -> dense)
         v_untreated = -(A_0 @ z)
@@ -1560,6 +1654,7 @@ class ImputationDiD:
         cluster_var: str,
         treatment_groups: List[Any],
         balance_e: Optional[int] = None,
+        kept_cov_mask: Optional[np.ndarray] = None,
     ) -> Dict[int, Dict[str, Any]]:
         """Aggregate treatment effects by event-study horizon."""
         df_1 = df.loc[omega_1_mask]
@@ -1675,6 +1770,7 @@ class ImputationDiD:
                 delta_hat=delta_hat,
                 weights=weights_h,
                 cluster_var=cluster_var,
+                kept_cov_mask=kept_cov_mask,
             )
 
             t_stat = effect / se if np.isfinite(se) and se > 0 else np.nan
@@ -1721,6 +1817,7 @@ class ImputationDiD:
         delta_hat: Optional[np.ndarray],
         cluster_var: str,
         treatment_groups: List[Any],
+        kept_cov_mask: Optional[np.ndarray] = None,
     ) -> Dict[Any, Dict[str, Any]]:
         """Aggregate treatment effects by cohort."""
         df_1 = df.loc[omega_1_mask]
@@ -1775,6 +1872,7 @@ class ImputationDiD:
                 delta_hat=delta_hat,
                 weights=weights_g,
                 cluster_var=cluster_var,
+                kept_cov_mask=kept_cov_mask,
             )
 
             t_stat = effect / se if np.isfinite(se) and se > 0 else np.nan
@@ -1938,7 +2036,7 @@ class ImputationDiD:
     # Bootstrap
     # =========================================================================
 
-    def _run_bootstrap(
+    def _precompute_bootstrap_psi(
         self,
         df: pd.DataFrame,
         outcome: str,
@@ -1946,17 +2044,134 @@ class ImputationDiD:
         time: str,
         first_treat: str,
         covariates: Optional[List[str]],
-        aggregate: Optional[str],
+        omega_0_mask: pd.Series,
+        omega_1_mask: pd.Series,
+        unit_fe: Dict[Any, float],
+        time_fe: Dict[Any, float],
+        grand_mean: float,
+        delta_hat: Optional[np.ndarray],
+        cluster_var: str,
+        kept_cov_mask: Optional[np.ndarray],
+        overall_weights: np.ndarray,
+        event_study_effects: Optional[Dict[int, Dict[str, Any]]],
+        group_effects: Optional[Dict[Any, Dict[str, Any]]],
+        treatment_groups: List[Any],
+        tau_hat: np.ndarray,
         balance_e: Optional[int],
+    ) -> Dict[str, Any]:
+        """
+        Pre-compute cluster-level influence function sums for each bootstrap target.
+
+        For each aggregation target (overall, per-horizon, per-group), computes
+        psi_i = sum_t v_it * epsilon_tilde_it for each cluster. The multiplier
+        bootstrap then perturbs these psi sums with Rademacher weights.
+
+        Computational cost scales with the number of aggregation targets, since
+        each target requires its own v_untreated computation (weight-dependent).
+        """
+        result: Dict[str, Any] = {}
+
+        common = dict(
+            df=df,
+            outcome=outcome,
+            unit=unit,
+            time=time,
+            first_treat=first_treat,
+            covariates=covariates,
+            omega_0_mask=omega_0_mask,
+            omega_1_mask=omega_1_mask,
+            unit_fe=unit_fe,
+            time_fe=time_fe,
+            grand_mean=grand_mean,
+            delta_hat=delta_hat,
+            cluster_var=cluster_var,
+            kept_cov_mask=kept_cov_mask,
+        )
+
+        # Overall ATT
+        overall_psi, cluster_ids = self._compute_cluster_psi_sums(**common, weights=overall_weights)
+        result["overall"] = (overall_psi, cluster_ids)
+
+        # Event study: per-horizon weights
+        # NOTE: weight logic duplicated from _aggregate_event_study.
+        # If weight scheme changes there, update here too.
+        if event_study_effects:
+            result["event_study"] = {}
+            df_1 = df.loc[omega_1_mask]
+            rel_times = df_1["_rel_time"].values
+            n_omega_1 = int(omega_1_mask.sum())
+
+            # Balanced cohort mask (same logic as _aggregate_event_study)
+            balanced_mask = None
+            if balance_e is not None:
+                all_horizons = sorted(set(int(h) for h in rel_times if np.isfinite(h)))
+                if self.horizon_max is not None:
+                    all_horizons = [h for h in all_horizons if abs(h) <= self.horizon_max]
+                balanced_mask = self._compute_balanced_cohort_mask(
+                    df_1, first_treat, rel_times, all_horizons, balance_e
+                )
+
+            ref_period = -1 - self.anticipation
+            for h in event_study_effects:
+                if event_study_effects[h].get("n_obs", 0) == 0:
+                    continue
+                if h == ref_period:
+                    continue
+                if not np.isfinite(event_study_effects[h].get("effect", np.nan)):
+                    continue
+                h_mask = rel_times == h
+                if balanced_mask is not None:
+                    h_mask = h_mask & balanced_mask
+                weights_h = np.zeros(n_omega_1)
+                finite_h = np.isfinite(tau_hat) & h_mask
+                n_valid_h = int(finite_h.sum())
+                if n_valid_h == 0:
+                    continue
+                weights_h[np.where(finite_h)[0]] = 1.0 / n_valid_h
+
+                psi_h, _ = self._compute_cluster_psi_sums(**common, weights=weights_h)
+                result["event_study"][h] = psi_h
+
+        # Group effects: per-group weights
+        # NOTE: weight logic duplicated from _aggregate_group.
+        # If weight scheme changes there, update here too.
+        if group_effects:
+            result["group"] = {}
+            df_1 = df.loc[omega_1_mask]
+            cohorts = df_1[first_treat].values
+            n_omega_1 = int(omega_1_mask.sum())
+
+            for g in group_effects:
+                if group_effects[g].get("n_obs", 0) == 0:
+                    continue
+                if not np.isfinite(group_effects[g].get("effect", np.nan)):
+                    continue
+                g_mask = cohorts == g
+                weights_g = np.zeros(n_omega_1)
+                finite_g = np.isfinite(tau_hat) & g_mask
+                n_valid_g = int(finite_g.sum())
+                if n_valid_g == 0:
+                    continue
+                weights_g[np.where(finite_g)[0]] = 1.0 / n_valid_g
+
+                psi_g, _ = self._compute_cluster_psi_sums(**common, weights=weights_g)
+                result["group"][g] = psi_g
+
+        return result
+
+    def _run_bootstrap(
+        self,
         original_att: float,
         original_event_study: Optional[Dict[int, Dict[str, Any]]],
         original_group: Optional[Dict[Any, Dict[str, Any]]],
+        psi_data: Dict[str, Any],
     ) -> ImputationBootstrapResults:
         """
-        Run multiplier bootstrap for inference.
+        Run multiplier bootstrap on pre-computed influence function sums.
 
-        Uses a unit-level wild bootstrap: perturbs unit-level scores with
-        Rademacher weights and re-estimates the aggregated effects.
+        Uses T_b = sum_i w_b_i * psi_i where w_b_i are Rademacher weights
+        and psi_i are cluster-level influence function sums from Theorem 3.
+        SE = std(T_b, ddof=1).
         """
         if self.n_bootstrap < 50:
             warnings.warn(
@@ -1968,101 +2183,34 @@ class ImputationDiD:
 
         rng = np.random.default_rng(self.seed)
 
-        # Get unique clusters for multiplier bootstrap
-        # Uses cluster_var (= self.cluster if set, else unit)
-        cluster_var = self.cluster if self.cluster is not None else unit
-        all_clusters = df[cluster_var].unique()
-        n_clusters = len(all_clusters)
+        from diff_diff.staggered_bootstrap import _generate_bootstrap_weights_batch
 
-        # Pre-compute cluster masks for efficiency
-        cluster_indices: Dict[Any, np.ndarray] = {}
-        for c in all_clusters:
-            cluster_indices[c] = np.where(df[cluster_var].values == c)[0]
+        overall_psi, cluster_ids = psi_data["overall"]
+        n_clusters = len(cluster_ids)
 
-        # Pre-compute tau_hat and observation weights for each target
-        omega_1_mask = df["_treated"]
-        omega_0_mask = ~omega_1_mask
-        n_1 = int(omega_1_mask.sum())
+        # Generate ALL weights upfront: shape (n_bootstrap, n_clusters)
+        all_weights = _generate_bootstrap_weights_batch(
+            self.n_bootstrap, n_clusters, "rademacher", rng
+        )
 
-        tau_hat_full = df["_tau_hat"].values  # NaN for untreated
+        # Overall ATT bootstrap draws
+        boot_overall = all_weights @ overall_psi  # (n_bootstrap,)
 
-        # Pre-compute balanced cohort mask for event study (if balance_e is set)
-        es_balanced_mask_treated = None
-        if balance_e is not None and original_event_study:
-            df_1_pre = df.loc[omega_1_mask]
-            rel_times_pre = df_1_pre["_rel_time"].values
-            all_horizons_pre = sorted(set(int(h) for h in rel_times_pre if np.isfinite(h)))
-            if self.horizon_max is not None:
-                all_horizons_pre = [h for h in all_horizons_pre if abs(h) <= self.horizon_max]
-            es_balanced_mask_treated = self._compute_balanced_cohort_mask(
-                df_1_pre, first_treat, rel_times_pre, all_horizons_pre, balance_e
-            )
-
-        # Bootstrap distributions
-        boot_overall = np.zeros(self.n_bootstrap)
+        # Event study: loop over horizons
         boot_event_study: Optional[Dict[int, np.ndarray]] = None
+        if original_event_study and "event_study" in psi_data:
+            boot_event_study = {}
+            for h, psi_h in psi_data["event_study"].items():
+                boot_event_study[h] = all_weights @ psi_h
+
+        # Group effects: loop over groups
         boot_group: Optional[Dict[Any, np.ndarray]] = None
+        if original_group and "group" in psi_data:
+            boot_group = {}
+            for g, psi_g in psi_data["group"].items():
+                boot_group[g] = all_weights @ psi_g
 
-        if original_event_study:
-            horizons = [
-                h for h in original_event_study if original_event_study[h].get("n_obs", 0) > 0
-            ]
-            boot_event_study = {h: np.zeros(self.n_bootstrap) for h in horizons}
-
-        if original_group:
-            boot_group = {g: np.zeros(self.n_bootstrap) for g in original_group}
-
-        for b in range(self.n_bootstrap):
-            # Generate Rademacher weights per cluster
-            weights_b = rng.choice([-1.0, 1.0], size=n_clusters)
-
-            # Map to observation level
-            obs_weights = np.ones(len(df))
-            for i, c in enumerate(all_clusters):
-                obs_weights[cluster_indices[c]] = weights_b[i]
-
-            # Perturbed overall ATT
-            treated_tau = tau_hat_full[omega_1_mask.values]
-            treated_weights = obs_weights[omega_1_mask.values]
-            valid = np.isfinite(treated_tau)
-            if valid.sum() > 0:
-                boot_overall[b] = float(np.mean(treated_tau[valid] * treated_weights[valid]))
-            else:
-                boot_overall[b] = original_att
-
-            # Perturbed event study
-            if boot_event_study is not None and original_event_study:
-                df_1 = df.loc[omega_1_mask]
-                rel_times = df_1["_rel_time"].values
-                for h in boot_event_study:
-                    h_mask = rel_times == h
-                    if es_balanced_mask_treated is not None:
-                        h_mask = h_mask & es_balanced_mask_treated
-                    tau_h = treated_tau[h_mask]
-                    w_h = treated_weights[h_mask]
-                    valid_h = np.isfinite(tau_h)
-                    if valid_h.sum() > 0:
-                        boot_event_study[h][b] = float(np.mean(tau_h[valid_h] * w_h[valid_h]))
-                    else:
-                        boot_event_study[h][b] = original_event_study[h]["effect"]
-
-            # Perturbed group effects
-            if boot_group is not None and original_group:
-                df_1 = df.loc[omega_1_mask]
-                cohorts = df_1[first_treat].values
-                for g in boot_group:
-                    g_mask = cohorts == g
-                    tau_g = treated_tau[g_mask]
-                    w_g = treated_weights[g_mask]
-                    valid_g = np.isfinite(tau_g)
-                    if valid_g.sum() > 0:
-                        boot_group[g][b] = float(np.mean(tau_g[valid_g] * w_g[valid_g]))
-                    else:
-                        boot_group[g][b] = original_group[g]["effect"]
-
-        # Compute bootstrap statistics
-        # For multiplier bootstrap, the distribution is centered around 0
-        # (perturbation distribution). SE is the std, p-value and CI use the SE.
+        # --- Inference ---
         overall_se = float(np.std(boot_overall, ddof=1))
         overall_t = original_att / overall_se if overall_se > 0 else np.nan
         overall_p = float(2 * stats.norm.sf(abs(overall_t))) if np.isfinite(overall_t) else np.nan

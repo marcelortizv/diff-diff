@@ -247,7 +247,8 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
 - Rank-deficient design matrix: warns and sets NA for dropped coefficients (R-style, matches `lm()`)
 - Unbalanced panels handled via proper demeaning
 - Multi-period `time` parameter: only binary (0/1) post indicator is supported; multi-period values
-  produce `treated × period_number` rather than `treated × post_indicator`
+  produce `treated × period_number` rather than `treated × post_indicator`. A `UserWarning` is
+  emitted when `time` has >2 unique values, advising users to create a binary post column.
 - Staggered warning limitation: requires `time` to have actual period values (not binary 0/1)
   so that different cohort first-treatment times can be distinguished. With binary `time="post"`,
   all treated units appear to start at `time=1`, making staggering undetectable. Users with
@@ -258,7 +259,8 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
 - Stata: `reghdfe y treat, absorb(unit time) cluster(unit)`
 
 **Requirements checklist:**
-- [ ] Staggered treatment warning (only fires when `time` has >2 unique values; with binary `time`, staggering is undetectable)
+- [ ] Staggered adoption detection warning (only fires when `time` has >2 unique values; with binary `time`, staggering is undetectable)
+- [x] Multi-period time warning (fires when `time` has >2 unique values)
 - [x] Auto-clusters standard errors at unit level
 - [x] `decompose()` method returns BaconDecompositionResults
 - [x] Within-transformation correctly handles unbalanced panels

@@ -93,6 +93,20 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # Check for staggered treatment timing and warn if detected
         self._check_staggered_treatment(data, treatment, time, unit)
 
+        # Warn if time has more than 2 unique values (not a binary post indicator)
+        n_unique_time = data[time].nunique()
+        if n_unique_time > 2:
+            warnings.warn(
+                f"The '{time}' column has {n_unique_time} unique values. "
+                f"TwoWayFixedEffects expects a binary (0/1) post indicator. "
+                f"Multi-period time values produce 'treated * period_number' instead of "
+                f"'treated * post_indicator', which may not estimate the standard DiD ATT. "
+                f"Consider creating a binary post column: "
+                f"df['post'] = (df['{time}'] >= cutoff).astype(int)",
+                UserWarning,
+                stacklevel=2,
+            )
+
         # Use unit-level clustering if not specified (use local variable to avoid mutation)
         cluster_var = self.cluster if self.cluster is not None else unit
 

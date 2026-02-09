@@ -169,7 +169,7 @@ Each estimator in diff-diff should be periodically reviewed to ensure:
 - [x] Edge case: Staggered treatment triggers `UserWarning`
 - [x] Edge case: Auto-clusters at unit level (SE matches explicit `cluster="unit"`)
 - [x] Edge case: DF adjustment for absorbed FE matches manual `solve_ols()` with `df_adjustment`
-- [x] Edge case: Treatment collinear with FE raises `ValueError` ("cannot be identified")
+- [x] Edge case: Covariate collinear with interaction raises `ValueError` ("cannot be identified")
 - [x] Edge case: Covariate collinearity warns but ATT remains finite
 - [x] Edge case: `rank_deficient_action="error"` raises `ValueError`
 - [x] Edge case: `rank_deficient_action="silent"` emits no warnings
@@ -186,6 +186,7 @@ Each estimator in diff-diff should be periodically reviewed to ensure:
 - [x] Results: `summary()` contains "ATT"
 - [x] Results: `to_dict()` contains att, se, t_stat, p_value, n_obs
 - [x] Results: residuals + fitted = demeaned outcome (not raw)
+- [x] Edge case: Multi-period time emits UserWarning advising binary post indicator
 
 **Key Implementation Detail:**
 The interaction term `D_i × Post_t` must be within-transformed (demeaned) alongside the outcome,
@@ -207,7 +208,7 @@ variables appear to the left of the `|` separator.
   is a binary (0/1) post indicator. Multi-period time values (e.g., 1,2,3,4) produce
   `treated × period_number` instead of `treated × post_indicator`, which is not the standard
   D_it treatment indicator. Users must create a binary `post` column and pass it as `time`.
-  This is a known limitation and does not affect correctness when used as intended.
+  A `UserWarning` is now emitted when `time` has >2 unique values, advising users to create a binary post column.
 - **Staggered treatment warning**: The warning only fires when `time` has >2 unique values
   (i.e., actual period numbers). With binary `time="post"`, all treated units appear to start
   treatment at `time=1`, making staggering undetectable. Users with staggered designs should

@@ -522,6 +522,12 @@ class TestTWFEEdgeCases:
         staggered_warnings = [x for x in w if "Staggered treatment" in str(x.message)]
         assert len(staggered_warnings) > 0, "Expected staggered treatment warning"
 
+        # Multi-period time warning also fires (time="period" has 5 unique values)
+        multiperiod_warnings = [x for x in w if "unique values" in str(x.message)]
+        assert len(multiperiod_warnings) > 0, (
+            "Expected multi-period time warning when time='period' with 5 values"
+        )
+
     def test_staggered_warning_not_fired_with_binary_time(self):
         """Staggered warning does NOT fire with binary time (known limitation).
 
@@ -561,6 +567,37 @@ class TestTWFEEdgeCases:
         staggered_warnings = [x for x in w if "Staggered treatment" in str(x.message)]
         assert len(staggered_warnings) == 0, (
             "Staggered warning should NOT fire with binary time (known limitation)"
+        )
+
+    def test_multiperiod_time_warning(self):
+        """Multi-period time column triggers UserWarning advising binary post indicator."""
+        data = generate_twfe_panel(n_units=20, n_periods=4, seed=42)
+
+        twfe = TwoWayFixedEffects(robust=True)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            twfe.fit(data, outcome="outcome", treatment="treated", time="period", unit="unit")
+
+        multiperiod_warnings = [x for x in w if "unique values" in str(x.message)]
+        assert len(multiperiod_warnings) > 0, (
+            "Expected multi-period time warning when time has >2 unique values"
+        )
+        msg = str(multiperiod_warnings[0].message)
+        assert "binary" in msg, "Warning should mention binary post indicator"
+        assert "post" in msg, "Warning should mention post indicator"
+
+    def test_binary_time_no_multiperiod_warning(self):
+        """Binary time column does NOT trigger multi-period time warning."""
+        data = generate_hand_calculable_panel()
+
+        twfe = TwoWayFixedEffects(robust=True)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            twfe.fit(data, outcome="outcome", treatment="treated", time="post", unit="unit")
+
+        multiperiod_warnings = [x for x in w if "unique values" in str(x.message)]
+        assert len(multiperiod_warnings) == 0, (
+            "Multi-period time warning should NOT fire with binary time"
         )
 
     def test_auto_clusters_at_unit_level(self):
@@ -627,16 +664,12 @@ class TestTWFEEdgeCases:
             err_msg=f"SE df-adjustment mismatch: TWFE={results.se:.8f}, manual={manual_se:.8f}",
         )
 
-    def test_treatment_collinear_with_fe_raises_error(self):
-        """Treatment perfectly collinear with FE raises ValueError.
+    def test_covariate_collinear_with_interaction_raises_error(self):
+        """Covariate identical to treatment*post interaction causes rank deficiency.
 
-        When all units of one group are treated in ALL periods (no variation
-        within the treatment indicator after demeaning), the demeaned
-        interaction becomes zero and collinear with the intercept.
+        Adding bad_cov = treated * post duplicates the internal _treatment_post
+        variable, making the demeaned design matrix rank-deficient.
         """
-        # All treated units are treated in ALL periods -> D_it = D_i for all t
-        # After demeaning by unit+time, D_i*Post_t becomes constant within unit
-        # (because D_i is absorbed), making it perfectly collinear.
         data = pd.DataFrame({
             "unit": [0, 0, 1, 1, 2, 2, 3, 3],
             "period": [0, 1, 0, 1, 0, 1, 0, 1],
@@ -645,15 +678,7 @@ class TestTWFEEdgeCases:
             "outcome": [10.0, 11.0, 12.0, 13.0, 8.0, 9.0, 6.0, 7.0],
         })
 
-        # Construct data where treatment effect cannot be identified:
-        # Make treatment*post a linear combination of unit and post dummies
-        # by having treated = 1 for all periods for some units.
-        # When treated is constant within unit, treated*post = treated × post,
-        # and after demeaning: demeaned(treated*post) is perfectly
-        # correlated with demeaned(post) (which is absorbed).
-        # Actually for rank deficiency: add a covariate that together with
-        # the treatment interaction makes the design matrix rank-deficient.
-        # Simpler: use rank_deficient_action="error" with a collinear covariate
+        # bad_cov = treated * post duplicates the internal _treatment_post column
         data["bad_cov"] = data["treated"] * data["post"]
 
         twfe = TwoWayFixedEffects(robust=True, rank_deficient_action="error")

@@ -1181,7 +1181,7 @@ should be a deliberate user choice.
 | TwoWayFixedEffects | Cluster at unit | Wild bootstrap |
 | CallawaySantAnna | Analytical (influence fn) | Multiplier bootstrap |
 | SunAbraham | Cluster-robust + delta method | Pairs bootstrap |
-| ImputationDiD | Conservative clustered (Thm 3) | Multiplier bootstrap (library extension) |
+| ImputationDiD | Conservative clustered (Thm 3) | Multiplier bootstrap (library extension; percentile CIs and empirical p-values, consistent with CS/SA) |
 | SyntheticDiD | Placebo variance (Alg 4) | Block bootstrap |
 | TripleDifference | HC1 / cluster-robust | Influence function for IPW/DR |
 | TROP | Block bootstrap | — |

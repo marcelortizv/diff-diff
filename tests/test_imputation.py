@@ -1054,6 +1054,28 @@ class TestImputationBootstrap:
         # With zero noise, influence function sums are ~0, so SE should be ~0
         assert results.bootstrap_results.overall_att_se < 0.01
 
+    def test_bootstrap_percentile_ci(self, ci_params):
+        """Test that bootstrap CIs use percentile method, not normal approx."""
+        data = generate_test_data(dynamic_effects=False, seed=42)
+        n_boot = ci_params.bootstrap(50)
+        est = ImputationDiD(n_bootstrap=n_boot, seed=42)
+        results = est.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+        br = results.bootstrap_results
+        assert br is not None
+
+        # Verify CIs match percentile of bootstrap distribution
+        dist = br.bootstrap_distribution
+        expected_lower = float(np.percentile(dist, 2.5))
+        expected_upper = float(np.percentile(dist, 97.5))
+        np.testing.assert_allclose(br.overall_att_ci[0], expected_lower, rtol=1e-10)
+        np.testing.assert_allclose(br.overall_att_ci[1], expected_upper, rtol=1e-10)
+
 
 # =============================================================================
 # TestImputationVsOtherEstimators
@@ -1878,6 +1900,37 @@ class TestImputationEdgeCases:
         assert results.bootstrap_results is None
         # Analytical SE still present
         assert results.overall_se > 0
+
+    def test_event_study_empty_after_filtering(self):
+        """Warn when balance_e/horizon_max filter out all treated horizons."""
+        data = generate_test_data(dynamic_effects=False, seed=42)
+        # balance_e=100 requires cohorts to span [-100, max_h+1], which none do.
+        # All cohorts fail the balanced check, so all horizons have n_h=0.
+        est = ImputationDiD()
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = est.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+                balance_e=100,
+            )
+            empty_warnings = [x for x in w if "no horizons with observations" in str(x.message)]
+            assert len(empty_warnings) >= 1, "Expected warning about empty event study"
+
+        # Only reference period should remain
+        ref_period = -1
+        assert ref_period in results.event_study_effects
+        real_effects = {
+            h: v
+            for h, v in results.event_study_effects.items()
+            if h != ref_period and v.get("n_obs", 0) > 0
+        }
+        assert len(real_effects) == 0
 
     def test_balanced_cohort_mask_requires_negative_horizons(self):
         """_compute_balanced_cohort_mask must check negative relative times."""

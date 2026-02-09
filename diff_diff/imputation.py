@@ -1776,7 +1776,6 @@ class ImputationDiD:
 
             # Compute SE via conservative variance with horizon-specific weights
             weights_h = np.zeros(int(omega_1_mask.sum()))
-            omega_1_indices = np.where(omega_1_mask.values)[0]
             # Map h_mask (relative to df_1) to weights array
             h_indices_in_omega1 = np.where(h_mask)[0]
             n_valid = len(valid_tau)
@@ -1826,6 +1825,25 @@ class ImputationDiD:
             warnings.warn(
                 f"Horizons {prop5_horizons} are not identified without "
                 f"never-treated units (Proposition 5). Set to NaN.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        # Check for empty result set after filtering
+        real_effects = [
+            h for h, v in event_study_effects.items() if h != ref_period and v.get("n_obs", 0) > 0
+        ]
+        if len(real_effects) == 0:
+            filter_info = []
+            if balance_e is not None:
+                filter_info.append(f"balance_e={balance_e}")
+            if self.horizon_max is not None:
+                filter_info.append(f"horizon_max={self.horizon_max}")
+            filter_str = " and ".join(filter_info) if filter_info else "filters"
+            warnings.warn(
+                f"Event study aggregation produced no horizons with observations "
+                f"after applying {filter_str}. The result contains only the "
+                f"reference period marker. Consider relaxing filter parameters.",
                 UserWarning,
                 stacklevel=3,
             )
@@ -2067,6 +2085,47 @@ class ImputationDiD:
     # Bootstrap
     # =========================================================================
 
+    def _compute_percentile_ci(
+        self,
+        boot_dist: np.ndarray,
+        alpha: float,
+    ) -> Tuple[float, float]:
+        """Compute percentile confidence interval from bootstrap distribution."""
+        lower = float(np.percentile(boot_dist, alpha / 2 * 100))
+        upper = float(np.percentile(boot_dist, (1 - alpha / 2) * 100))
+        return (lower, upper)
+
+    def _compute_bootstrap_pvalue(
+        self,
+        original_effect: float,
+        boot_dist: np.ndarray,
+        n_valid: Optional[int] = None,
+    ) -> float:
+        """
+        Compute two-sided bootstrap p-value.
+
+        Uses the percentile method: p-value is the proportion of bootstrap
+        estimates on the opposite side of zero from the original estimate,
+        doubled for two-sided test.
+
+        Parameters
+        ----------
+        original_effect : float
+            Original point estimate.
+        boot_dist : np.ndarray
+            Bootstrap distribution of the effect.
+        n_valid : int, optional
+            Number of valid bootstrap samples. If None, uses self.n_bootstrap.
+        """
+        if original_effect >= 0:
+            p_one_sided = float(np.mean(boot_dist <= 0))
+        else:
+            p_one_sided = float(np.mean(boot_dist >= 0))
+        p_value = min(2 * p_one_sided, 1.0)
+        n_for_floor = n_valid if n_valid is not None else self.n_bootstrap
+        p_value = max(p_value, 1 / (n_for_floor + 1))
+        return p_value
+
     def _precompute_bootstrap_psi(
         self,
         df: pd.DataFrame,
@@ -2242,14 +2301,23 @@ class ImputationDiD:
             for g, psi_g in psi_data["group"].items():
                 boot_group[g] = all_weights @ psi_g
 
-        # --- Inference ---
+        # --- Inference (percentile bootstrap, matching CS/SA convention) ---
+        # Shift perturbation-centered draws to effect-centered draws.
+        # The multiplier bootstrap produces T_b = sum w_b_i * psi_i centered at 0.
+        # CS adds the original effect back (L411 of staggered_bootstrap.py).
+        # We do the same here so percentile CIs and empirical p-values work correctly.
+        boot_overall_shifted = boot_overall + original_att
+
         overall_se = float(np.std(boot_overall, ddof=1))
-        overall_t = original_att / overall_se if overall_se > 0 else np.nan
-        overall_p = float(2 * stats.norm.sf(abs(overall_t))) if np.isfinite(overall_t) else np.nan
         overall_ci = (
-            compute_confidence_interval(original_att, overall_se, self.alpha)
+            self._compute_percentile_ci(boot_overall_shifted, self.alpha)
             if overall_se > 0
             else (np.nan, np.nan)
+        )
+        overall_p = (
+            self._compute_bootstrap_pvalue(original_att, boot_overall_shifted)
+            if overall_se > 0
+            else np.nan
         )
 
         event_study_ses = None
@@ -2264,9 +2332,9 @@ class ImputationDiD:
                 event_study_ses[h] = se_h
                 orig_eff = original_event_study[h]["effect"]
                 if se_h > 0 and np.isfinite(orig_eff):
-                    t_h = orig_eff / se_h
-                    event_study_p_values[h] = float(2 * stats.norm.sf(abs(t_h)))
-                    event_study_cis[h] = compute_confidence_interval(orig_eff, se_h, self.alpha)
+                    shifted_h = boot_event_study[h] + orig_eff
+                    event_study_p_values[h] = self._compute_bootstrap_pvalue(orig_eff, shifted_h)
+                    event_study_cis[h] = self._compute_percentile_ci(shifted_h, self.alpha)
                 else:
                     event_study_p_values[h] = np.nan
                     event_study_cis[h] = (np.nan, np.nan)
@@ -2283,9 +2351,9 @@ class ImputationDiD:
                 group_ses[g] = se_g
                 orig_eff = original_group[g]["effect"]
                 if se_g > 0 and np.isfinite(orig_eff):
-                    t_g = orig_eff / se_g
-                    group_p_values[g] = float(2 * stats.norm.sf(abs(t_g)))
-                    group_cis[g] = compute_confidence_interval(orig_eff, se_g, self.alpha)
+                    shifted_g = boot_group[g] + orig_eff
+                    group_p_values[g] = self._compute_bootstrap_pvalue(orig_eff, shifted_g)
+                    group_cis[g] = self._compute_percentile_ci(shifted_g, self.alpha)
                 else:
                     group_p_values[g] = np.nan
                     group_cis[g] = (np.nan, np.nan)
@@ -2303,7 +2371,7 @@ class ImputationDiD:
             group_ses=group_ses,
             group_cis=group_cis,
             group_p_values=group_p_values,
-            bootstrap_distribution=boot_overall,
+            bootstrap_distribution=boot_overall_shifted,
         )
 
     # =========================================================================

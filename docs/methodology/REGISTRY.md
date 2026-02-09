@@ -231,9 +231,14 @@ Estimated via within-transformation (demeaning):
 ```
 where tildes denote demeaned variables.
 
+**Note:** The interaction term `D_i × Post_t` is within-transformed (demeaned) alongside the
+outcome and covariates before regression. This is required by the Frisch-Waugh-Lovell theorem:
+all regressors must be projected out of the same fixed effects space as the dependent variable.
+This matches the behavior of R's `fixest::feols()` with absorbed FE.
+
 *Standard errors:*
 - Default: Cluster-robust at unit level (accounts for serial correlation)
-- Degrees of freedom adjusted for absorbed fixed effects
+- Degrees of freedom adjusted for absorbed fixed effects: `df_adjustment = n_units + n_times - 2`
 
 *Edge cases:*
 - Singleton units/periods are automatically dropped
@@ -241,16 +246,28 @@ where tildes denote demeaned variables.
 - Covariate collinearity emits warning but estimation continues (ATT still identified)
 - Rank-deficient design matrix: warns and sets NA for dropped coefficients (R-style, matches `lm()`)
 - Unbalanced panels handled via proper demeaning
+- Multi-period `time` parameter: only binary (0/1) post indicator is recommended; multi-period values
+  produce `treated × period_number` rather than `treated × post_indicator`. A `UserWarning` is
+  emitted when `time` has >2 unique values, advising users to create a binary post column.
+  Non-{0,1} binary time (e.g., {2020, 2021}) also emits a warning, though the ATT is mathematically
+  correct — the within-transformation absorbs the scaling.
+- Staggered warning limitation: requires `time` to have actual period values (not binary 0/1)
+  so that different cohort first-treatment times can be distinguished. With binary `time="post"`,
+  all treated units appear to start at `time=1`, making staggering undetectable. Users with
+  staggered designs should use `decompose()` or `CallawaySantAnna` directly.
 
 **Reference implementation(s):**
-- R: `fixest::feols(y ~ treat | unit + time, data)`
+- R: `fixest::feols(y ~ treat:post | unit + post, data, cluster = ~unit)`
 - Stata: `reghdfe y treat, absorb(unit time) cluster(unit)`
 
 **Requirements checklist:**
-- [ ] Staggered treatment automatically triggers warning
-- [ ] Auto-clusters standard errors at unit level
-- [ ] `decompose()` method returns BaconDecompositionResults
-- [ ] Within-transformation correctly handles unbalanced panels
+- [ ] Staggered adoption detection warning (only fires when `time` has >2 unique values; with binary `time`, staggering is undetectable)
+- [x] Multi-period time warning (fires when `time` has >2 unique values)
+- [x] Auto-clusters standard errors at unit level
+- [x] `decompose()` method returns BaconDecompositionResults
+- [x] Within-transformation correctly handles unbalanced panels
+- [x] Non-{0,1} binary time warning (fires when time has 2 unique values not in {0,1})
+- [x] ATT invariance to time encoding (verified by test)
 
 ---
 

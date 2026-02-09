@@ -153,14 +153,69 @@ Each estimator in diff-diff should be periodically reviewed to ensure:
 | Module | `twfe.py` |
 | Primary Reference | Wooldridge (2010), Ch. 10 |
 | R Reference | `fixest::feols()` |
-| Status | Not Started |
-| Last Review | - |
+| Status | **Complete** |
+| Last Review | 2026-02-08 |
+
+**Verified Components:**
+- [x] Within-transformation algebra: `y_it - ȳ_i - ȳ_t + ȳ` matches hand calculation (rtol=1e-12)
+- [x] ATT matches manual demeaned OLS (rtol=1e-10)
+- [x] ATT matches `DifferenceInDifferences` on 2-period data (rtol=1e-10)
+- [x] Covariates are also within-transformed (sum to zero within unit/time groups)
+- [x] R comparison: ATT matches `fixest::feols(y ~ treated:post | unit + post, cluster=~unit)` (rtol<0.1%)
+- [x] R comparison: Cluster-robust SE match (rtol<1%)
+- [x] R comparison: P-value match (atol<0.01)
+- [x] R comparison: CI bounds match (rtol<1%)
+- [x] R comparison: ATT and SE match with covariate (same tolerances)
+- [x] Edge case: Staggered treatment triggers `UserWarning`
+- [x] Edge case: Auto-clusters at unit level (SE matches explicit `cluster="unit"`)
+- [x] Edge case: DF adjustment for absorbed FE matches manual `solve_ols()` with `df_adjustment`
+- [x] Edge case: Covariate collinear with interaction raises `ValueError` ("cannot be identified")
+- [x] Edge case: Covariate collinearity warns but ATT remains finite
+- [x] Edge case: `rank_deficient_action="error"` raises `ValueError`
+- [x] Edge case: `rank_deficient_action="silent"` emits no warnings
+- [x] Edge case: Unbalanced panel produces valid results (finite ATT, positive SE)
+- [x] Edge case: Missing unit column raises `ValueError`
+- [x] Integration: `decompose()` returns `BaconDecompositionResults`
+- [x] SE: Cluster-robust SE >= HC1 SE
+- [x] SE: VCoV positive semi-definite
+- [x] Wild bootstrap: Valid inference (finite SE, p-value in [0,1])
+- [x] Wild bootstrap: All weight types (rademacher, mammen, webb) produce valid inference
+- [x] Wild bootstrap: `inference="wild_bootstrap"` routes correctly
+- [x] Params: `get_params()` returns all inherited parameters
+- [x] Params: `set_params()` modifies attributes
+- [x] Results: `summary()` contains "ATT"
+- [x] Results: `to_dict()` contains att, se, t_stat, p_value, n_obs
+- [x] Results: residuals + fitted = demeaned outcome (not raw)
+- [x] Edge case: Multi-period time emits UserWarning advising binary post indicator
+- [x] Edge case: Non-{0,1} binary time emits UserWarning (ATT still correct)
+- [x] Edge case: ATT invariant to time encoding ({0,1} vs {2020,2021} produces identical results)
+
+**Key Implementation Detail:**
+The interaction term `D_i × Post_t` must be within-transformed (demeaned) alongside the outcome,
+consistent with the Frisch-Waugh-Lovell (FWL) theorem: all regressors and the outcome must be
+projected out of the fixed effects space. R's `fixest::feols()` does this automatically when
+variables appear to the left of the `|` separator.
 
 **Corrections Made:**
-- (None yet)
+- **Bug fix: interaction term must be within-transformed** (found during review). The previous
+  implementation used raw (un-demeaned) `D_i × Post_t` in the demeaned regression. This gave
+  correct results only for 2-period panels where `post == period`. For multi-period panels
+  (e.g., 4 periods with binary `post`), the raw interaction had incorrect correlation with
+  demeaned Y, producing ATT approximately 1/3 of the true value. Fixed by applying the same
+  within-transformation to the interaction term before regression. This matches R's
+  `fixest::feols()` behavior. (`twfe.py` lines 99-113)
 
 **Outstanding Concerns:**
-- (None yet)
+- **Multi-period `time` parameter**: Multi-period time values (e.g., 1,2,3,4) produce
+  `treated × period_number` instead of `treated × post_indicator`, which is not the standard
+  D_it treatment indicator. A `UserWarning` is emitted when `time` has >2 unique values.
+  For binary time with non-{0,1} values (e.g., {2020, 2021}), the ATT is mathematically
+  correct (the within-transformation absorbs the scaling), but a warning recommends 0/1
+  encoding for clarity. Users with multi-period data should create a binary `post` column.
+- **Staggered treatment warning**: The warning only fires when `time` has >2 unique values
+  (i.e., actual period numbers). With binary `time="post"`, all treated units appear to start
+  treatment at `time=1`, making staggering undetectable. Users with staggered designs should
+  use `decompose()` or `CallawaySantAnna` directly for proper diagnostics.
 
 ---
 

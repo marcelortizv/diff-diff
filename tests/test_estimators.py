@@ -3475,7 +3475,12 @@ class TestCollinearityDetection:
         assert np.isfinite(results.att)
 
     def test_twfe_with_absorbed_covariate(self):
-        """Test TWFE handles covariate absorbed by fixed effects."""
+        """Test TWFE handles covariate absorbed by fixed effects.
+
+        A unit-level covariate (constant within unit) becomes zero after
+        within-transformation, causing rank deficiency. TWFE should handle
+        this gracefully (warn but still estimate ATT).
+        """
         from diff_diff import TwoWayFixedEffects
 
         np.random.seed(42)
@@ -3506,9 +3511,14 @@ class TestCollinearityDetection:
 
         df = pd.DataFrame(data)
 
-        twfe = TwoWayFixedEffects()
-        # unit_covariate is absorbed by unit fixed effects
-        results = twfe.fit(df, outcome="outcome", treatment="post", unit="unit", time="period")
+        # Use correct TWFE specification: treatment="treated", time="post"
+        # Include unit_covariate which is constant within unit and will be
+        # absorbed by unit FE (becomes zero after within-transformation)
+        twfe = TwoWayFixedEffects(rank_deficient_action="silent")
+        results = twfe.fit(
+            df, outcome="outcome", treatment="treated", unit="unit",
+            time="post", covariates=["unit_covariate"],
+        )
 
         assert np.isfinite(results.att)
         assert results.se > 0

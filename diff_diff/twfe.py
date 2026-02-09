@@ -93,22 +93,49 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # Check for staggered treatment timing and warn if detected
         self._check_staggered_treatment(data, treatment, time, unit)
 
+        # Warn if time has more than 2 unique values (not a binary post indicator)
+        n_unique_time = data[time].nunique()
+        if n_unique_time > 2:
+            warnings.warn(
+                f"The '{time}' column has {n_unique_time} unique values. "
+                f"TwoWayFixedEffects expects a binary (0/1) post indicator. "
+                f"Multi-period time values produce 'treated * period_number' instead of "
+                f"'treated * post_indicator', which may not estimate the standard DiD ATT. "
+                f"Consider creating a binary post column: "
+                f"df['post'] = (df['{time}'] >= cutoff).astype(int)",
+                UserWarning,
+                stacklevel=2,
+            )
+        elif n_unique_time == 2:
+            unique_vals = set(data[time].unique())
+            if unique_vals != {0, 1} and unique_vals != {False, True}:
+                warnings.warn(
+                    f"The '{time}' column has values {sorted(unique_vals)} instead of {{0, 1}}. "
+                    f"The ATT estimate is mathematically correct (within-transformation "
+                    f"absorbs the scaling), but 0/1 encoding is recommended for clarity. "
+                    f"Consider: df['{time}'] = (df['{time}'] == {max(unique_vals)}).astype(int)",
+                    UserWarning,
+                    stacklevel=2,
+                )
+
         # Use unit-level clustering if not specified (use local variable to avoid mutation)
         cluster_var = self.cluster if self.cluster is not None else unit
 
-        # Demean data (within transformation for fixed effects)
-        data_demeaned = self._within_transform(data, outcome, unit, time, covariates)
+        # Create treatment × post interaction from raw data before demeaning.
+        # This must be within-transformed alongside the outcome and covariates
+        # so that the regression uses demeaned regressors (FWL theorem).
+        data = data.copy()
+        data["_treatment_post"] = data[treatment] * data[time]
 
-        # Create treatment × post interaction
-        # For staggered designs, we'd need to identify treatment timing per unit
-        # For now, assume standard 2-period design
-        data_demeaned["_treatment_post"] = (
-            data_demeaned[treatment] * data_demeaned[time]
+        # Demean outcome, covariates, AND interaction in a single pass
+        all_vars = [outcome] + (covariates or []) + ["_treatment_post"]
+        data_demeaned = _within_transform_util(
+            data, all_vars, unit, time, suffix="_demeaned"
         )
 
         # Extract variables for regression
         y = data_demeaned[f"{outcome}_demeaned"].values
-        X_list = [data_demeaned["_treatment_post"].values]
+        X_list = [data_demeaned["_treatment_post_demeaned"].values]
 
         if covariates:
             for cov in covariates:
@@ -292,6 +319,10 @@ class TwoWayFixedEffects(DifferenceInDifferences):
 
         Identifies if different units start treatment at different times,
         which can bias TWFE estimates when treatment effects are heterogeneous.
+
+        Note: This check requires ``time`` to have actual period values (not
+        binary 0/1). With binary time, all treated units appear to start at
+        time=1, so staggering is undetectable.
         """
         # Find first treatment time for each unit
         treated_obs = data[data[treatment] == 1]

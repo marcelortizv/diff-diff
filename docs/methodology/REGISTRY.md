@@ -246,9 +246,11 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
 - Covariate collinearity emits warning but estimation continues (ATT still identified)
 - Rank-deficient design matrix: warns and sets NA for dropped coefficients (R-style, matches `lm()`)
 - Unbalanced panels handled via proper demeaning
-- Multi-period `time` parameter: only binary (0/1) post indicator is supported; multi-period values
+- Multi-period `time` parameter: only binary (0/1) post indicator is recommended; multi-period values
   produce `treated × period_number` rather than `treated × post_indicator`. A `UserWarning` is
   emitted when `time` has >2 unique values, advising users to create a binary post column.
+  Non-{0,1} binary time (e.g., {2020, 2021}) also emits a warning, though the ATT is mathematically
+  correct — the within-transformation absorbs the scaling.
 - Staggered warning limitation: requires `time` to have actual period values (not binary 0/1)
   so that different cohort first-treatment times can be distinguished. With binary `time="post"`,
   all treated units appear to start at `time=1`, making staggering undetectable. Users with
@@ -264,6 +266,8 @@ This matches the behavior of R's `fixest::feols()` with absorbed FE.
 - [x] Auto-clusters standard errors at unit level
 - [x] `decompose()` method returns BaconDecompositionResults
 - [x] Within-transformation correctly handles unbalanced panels
+- [x] Non-{0,1} binary time warning (fires when time has 2 unique values not in {0,1})
+- [x] ATT invariance to time encoding (verified by test)
 
 ---
 

@@ -187,6 +187,8 @@ Each estimator in diff-diff should be periodically reviewed to ensure:
 - [x] Results: `to_dict()` contains att, se, t_stat, p_value, n_obs
 - [x] Results: residuals + fitted = demeaned outcome (not raw)
 - [x] Edge case: Multi-period time emits UserWarning advising binary post indicator
+- [x] Edge case: Non-{0,1} binary time emits UserWarning (ATT still correct)
+- [x] Edge case: ATT invariant to time encoding ({0,1} vs {2020,2021} produces identical results)
 
 **Key Implementation Detail:**
 The interaction term `D_i × Post_t` must be within-transformed (demeaned) alongside the outcome,
@@ -204,11 +206,12 @@ variables appear to the left of the `|` separator.
   `fixest::feols()` behavior. (`twfe.py` lines 99-113)
 
 **Outstanding Concerns:**
-- **Multi-period `time` parameter**: The current estimator only works correctly when `time`
-  is a binary (0/1) post indicator. Multi-period time values (e.g., 1,2,3,4) produce
+- **Multi-period `time` parameter**: Multi-period time values (e.g., 1,2,3,4) produce
   `treated × period_number` instead of `treated × post_indicator`, which is not the standard
-  D_it treatment indicator. Users must create a binary `post` column and pass it as `time`.
-  A `UserWarning` is now emitted when `time` has >2 unique values, advising users to create a binary post column.
+  D_it treatment indicator. A `UserWarning` is emitted when `time` has >2 unique values.
+  For binary time with non-{0,1} values (e.g., {2020, 2021}), the ATT is mathematically
+  correct (the within-transformation absorbs the scaling), but a warning recommends 0/1
+  encoding for clarity. Users with multi-period data should create a binary `post` column.
 - **Staggered treatment warning**: The warning only fires when `time` has >2 unique values
   (i.e., actual period numbers). With binary `time="post"`, all treated units appear to start
   treatment at `time=1`, making staggering undetectable. Users with staggered designs should

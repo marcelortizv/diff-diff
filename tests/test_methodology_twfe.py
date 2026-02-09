@@ -241,145 +241,168 @@ class TestWithinTransformationAlgebra:
 # =============================================================================
 
 
+def _run_r_feols_twfe(data_path: str, covariates=None) -> Dict[str, Any]:
+    """Run R's fixest::feols() with absorbed unit+post FE, clustered at unit."""
+    escaped_path = data_path.replace("\\", "/")
+
+    if covariates:
+        cov_str = " + ".join(covariates)
+        formula = f"outcome ~ treated:post + {cov_str} | unit + post"
+    else:
+        formula = "outcome ~ treated:post | unit + post"
+
+    r_script = f'''
+    suppressMessages(library(fixest))
+    suppressMessages(library(jsonlite))
+
+    data <- read.csv("{escaped_path}")
+    data$treated <- as.numeric(data$treated)
+    data$post <- as.numeric(data$post)
+
+    result <- feols({formula}, data = data, cluster = ~unit)
+
+    # Use coeftable() to get fixest's own inference (SE, t-stat, p-value)
+    # This ensures we use fixest's df adjustment, not a manual pt() call
+    ct <- coeftable(result)
+    att_row <- which(rownames(ct) == "treated:post")
+    if (length(att_row) == 0) {{
+        att_row <- which(grepl("treated.*post", rownames(ct)))
+    }}
+
+    att <- ct[att_row, "Estimate"]
+    se_val <- ct[att_row, "Std. Error"]
+    tstat <- ct[att_row, "t value"]
+    pval <- ct[att_row, "Pr(>|t|)"]
+    ci <- confint(result)
+    ci_lower <- ci[att_row, 1]
+    ci_upper <- ci[att_row, 2]
+
+    output <- list(
+        att = unbox(att),
+        se = unbox(se_val),
+        t_stat = unbox(tstat),
+        p_value = unbox(pval),
+        ci_lower = unbox(ci_lower),
+        ci_upper = unbox(ci_upper),
+        n_obs = unbox(result$nobs)
+    )
+
+    cat(toJSON(output, pretty = TRUE, digits = 15))
+    '''
+
+    result = subprocess.run(
+        ["Rscript", "-e", r_script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(f"R script failed: {result.stderr}")
+
+    parsed = json.loads(result.stdout)
+    # Unwrap single-element lists from R's JSON encoding
+    for key in parsed:
+        if isinstance(parsed[key], list) and len(parsed[key]) == 1:
+            parsed[key] = parsed[key][0]
+
+    return parsed
+
+
+@pytest.fixture(scope="session")
+def r_benchmark_panel_data(tmp_path_factory):
+    """Session-scoped panel data + CSV for R comparison (no covariate)."""
+    np.random.seed(12345)
+    n_units = 50
+    n_periods = 4
+
+    data = []
+    for unit in range(n_units):
+        is_treated = unit < n_units // 2
+        unit_effect = unit * 0.2
+
+        for period in range(n_periods):
+            post = 1 if period >= 2 else 0
+            period_effect = period * 1.0
+
+            y = 10.0 + unit_effect + period_effect
+            if is_treated and post:
+                y += 3.0
+            y += np.random.normal(0, 0.5)
+
+            data.append({
+                "unit": unit,
+                "period": period,
+                "treated": int(is_treated),
+                "post": post,
+                "outcome": y,
+            })
+
+    df = pd.DataFrame(data)
+    tmp_dir = tmp_path_factory.mktemp("r_benchmark")
+    csv_path = tmp_dir / "panel_data.csv"
+    df.to_csv(csv_path, index=False)
+    return df, str(csv_path)
+
+
+@pytest.fixture(scope="session")
+def r_benchmark_panel_data_with_covariate(tmp_path_factory):
+    """Session-scoped panel data + CSV for R comparison (with covariate)."""
+    np.random.seed(12345)
+    n_units = 50
+    n_periods = 4
+
+    data = []
+    for unit in range(n_units):
+        is_treated = unit < n_units // 2
+        unit_effect = unit * 0.2
+
+        for period in range(n_periods):
+            post = 1 if period >= 2 else 0
+            period_effect = period * 1.0
+            x1 = np.random.normal(0, 1) + period * 0.3
+
+            y = 10.0 + unit_effect + period_effect + 1.5 * x1
+            if is_treated and post:
+                y += 3.0
+            y += np.random.normal(0, 0.5)
+
+            data.append({
+                "unit": unit,
+                "period": period,
+                "treated": int(is_treated),
+                "post": post,
+                "outcome": y,
+                "x1": x1,
+            })
+
+    df = pd.DataFrame(data)
+    tmp_dir = tmp_path_factory.mktemp("r_benchmark_cov")
+    csv_path = tmp_dir / "panel_data_cov.csv"
+    df.to_csv(csv_path, index=False)
+    return df, str(csv_path)
+
+
+@pytest.fixture(scope="session")
+def r_twfe_results(fixest_available, r_benchmark_panel_data):
+    """Cache R fixest results for the base panel (session-scoped)."""
+    if not fixest_available:
+        pytest.skip("R or fixest package not available")
+    _, csv_path = r_benchmark_panel_data
+    return _run_r_feols_twfe(csv_path)
+
+
+@pytest.fixture(scope="session")
+def r_twfe_results_with_covariate(fixest_available, r_benchmark_panel_data_with_covariate):
+    """Cache R fixest results for the covariate panel (session-scoped)."""
+    if not fixest_available:
+        pytest.skip("R or fixest package not available")
+    _, csv_path = r_benchmark_panel_data_with_covariate
+    return _run_r_feols_twfe(csv_path, covariates=["x1"])
+
+
 class TestRBenchmarkTWFE:
     """Compare TWFE estimates against R's fixest::feols() with absorbed FE."""
-
-    @pytest.fixture
-    def benchmark_panel_data(self, tmp_path):
-        """Generate panel data and save to CSV for R comparison."""
-        np.random.seed(12345)
-        n_units = 50
-        n_periods = 4
-
-        data = []
-        for unit in range(n_units):
-            is_treated = unit < n_units // 2
-            unit_effect = unit * 0.2
-
-            for period in range(n_periods):
-                post = 1 if period >= 2 else 0
-                period_effect = period * 1.0
-
-                y = 10.0 + unit_effect + period_effect
-                if is_treated and post:
-                    y += 3.0
-                y += np.random.normal(0, 0.5)
-
-                data.append({
-                    "unit": unit,
-                    "period": period,
-                    "treated": int(is_treated),
-                    "post": post,
-                    "outcome": y,
-                })
-
-        df = pd.DataFrame(data)
-        csv_path = tmp_path / "panel_data.csv"
-        df.to_csv(csv_path, index=False)
-        return df, str(csv_path)
-
-    @pytest.fixture
-    def benchmark_panel_data_with_covariate(self, tmp_path):
-        """Generate panel data with a time-varying covariate."""
-        np.random.seed(12345)
-        n_units = 50
-        n_periods = 4
-
-        data = []
-        for unit in range(n_units):
-            is_treated = unit < n_units // 2
-            unit_effect = unit * 0.2
-
-            for period in range(n_periods):
-                post = 1 if period >= 2 else 0
-                period_effect = period * 1.0
-                x1 = np.random.normal(0, 1) + period * 0.3
-
-                y = 10.0 + unit_effect + period_effect + 1.5 * x1
-                if is_treated and post:
-                    y += 3.0
-                y += np.random.normal(0, 0.5)
-
-                data.append({
-                    "unit": unit,
-                    "period": period,
-                    "treated": int(is_treated),
-                    "post": post,
-                    "outcome": y,
-                    "x1": x1,
-                })
-
-        df = pd.DataFrame(data)
-        csv_path = tmp_path / "panel_data_cov.csv"
-        df.to_csv(csv_path, index=False)
-        return df, str(csv_path)
-
-    def _run_r_feols_twfe(self, data_path: str, covariates=None) -> Dict[str, Any]:
-        """Run R's fixest::feols() with absorbed unit+post FE, clustered at unit."""
-        escaped_path = data_path.replace("\\", "/")
-
-        if covariates:
-            cov_str = " + ".join(covariates)
-            formula = f"outcome ~ treated:post + {cov_str} | unit + post"
-        else:
-            formula = "outcome ~ treated:post | unit + post"
-
-        r_script = f'''
-        suppressMessages(library(fixest))
-        suppressMessages(library(jsonlite))
-
-        data <- read.csv("{escaped_path}")
-        data$treated <- as.numeric(data$treated)
-        data$post <- as.numeric(data$post)
-
-        result <- feols({formula}, data = data, cluster = ~unit)
-
-        # Use coeftable() to get fixest's own inference (SE, t-stat, p-value)
-        # This ensures we use fixest's df adjustment, not a manual pt() call
-        ct <- coeftable(result)
-        att_row <- which(rownames(ct) == "treated:post")
-        if (length(att_row) == 0) {{
-            att_row <- which(grepl("treated.*post", rownames(ct)))
-        }}
-
-        att <- ct[att_row, "Estimate"]
-        se_val <- ct[att_row, "Std. Error"]
-        tstat <- ct[att_row, "t value"]
-        pval <- ct[att_row, "Pr(>|t|)"]
-        ci <- confint(result)
-        ci_lower <- ci[att_row, 1]
-        ci_upper <- ci[att_row, 2]
-
-        output <- list(
-            att = unbox(att),
-            se = unbox(se_val),
-            t_stat = unbox(tstat),
-            p_value = unbox(pval),
-            ci_lower = unbox(ci_lower),
-            ci_upper = unbox(ci_upper),
-            n_obs = unbox(result$nobs)
-        )
-
-        cat(toJSON(output, pretty = TRUE, digits = 15))
-        '''
-
-        result = subprocess.run(
-            ["Rscript", "-e", r_script],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-
-        if result.returncode != 0:
-            raise RuntimeError(f"R script failed: {result.stderr}")
-
-        parsed = json.loads(result.stdout)
-        # Unwrap single-element lists from R's JSON encoding
-        for key in parsed:
-            if isinstance(parsed[key], list) and len(parsed[key]) == 1:
-                parsed[key] = parsed[key][0]
-
-        return parsed
 
     def _run_python_twfe(self, data, covariates=None):
         """Run Python TWFE estimator."""
@@ -394,84 +417,78 @@ class TestRBenchmarkTWFE:
         )
         return results
 
-    def test_att_matches_r_twfe(self, require_fixest, benchmark_panel_data):
+    def test_att_matches_r_twfe(self, r_twfe_results, r_benchmark_panel_data):
         """ATT within rtol=1e-3 (0.1%) of R's fixest."""
-        data, csv_path = benchmark_panel_data
+        data, _ = r_benchmark_panel_data
 
         py_results = self._run_python_twfe(data)
-        r_results = self._run_r_feols_twfe(csv_path)
 
         np.testing.assert_allclose(
-            py_results.att, r_results["att"], rtol=1e-3,
-            err_msg=f"ATT mismatch: Python={py_results.att:.6f}, R={r_results['att']:.6f}",
+            py_results.att, r_twfe_results["att"], rtol=1e-3,
+            err_msg=f"ATT mismatch: Python={py_results.att:.6f}, R={r_twfe_results['att']:.6f}",
         )
 
-    def test_se_matches_r_twfe(self, require_fixest, benchmark_panel_data):
+    def test_se_matches_r_twfe(self, r_twfe_results, r_benchmark_panel_data):
         """Cluster-robust SE within rtol=0.01 (1%) of R's fixest."""
-        data, csv_path = benchmark_panel_data
+        data, _ = r_benchmark_panel_data
 
         py_results = self._run_python_twfe(data)
-        r_results = self._run_r_feols_twfe(csv_path)
 
         np.testing.assert_allclose(
-            py_results.se, r_results["se"], rtol=0.01,
-            err_msg=f"SE mismatch: Python={py_results.se:.6f}, R={r_results['se']:.6f}",
+            py_results.se, r_twfe_results["se"], rtol=0.01,
+            err_msg=f"SE mismatch: Python={py_results.se:.6f}, R={r_twfe_results['se']:.6f}",
         )
 
-    def test_pvalue_matches_r_twfe(self, require_fixest, benchmark_panel_data):
+    def test_pvalue_matches_r_twfe(self, r_twfe_results, r_benchmark_panel_data):
         """P-value within atol=0.01 of R's fixest."""
-        data, csv_path = benchmark_panel_data
+        data, _ = r_benchmark_panel_data
 
         py_results = self._run_python_twfe(data)
-        r_results = self._run_r_feols_twfe(csv_path)
 
         np.testing.assert_allclose(
-            py_results.p_value, r_results["p_value"], atol=0.01,
-            err_msg=f"P-value mismatch: Python={py_results.p_value:.6f}, R={r_results['p_value']:.6f}",
+            py_results.p_value, r_twfe_results["p_value"], atol=0.01,
+            err_msg=f"P-value mismatch: Python={py_results.p_value:.6f}, R={r_twfe_results['p_value']:.6f}",
         )
 
-    def test_ci_matches_r_twfe(self, require_fixest, benchmark_panel_data):
+    def test_ci_matches_r_twfe(self, r_twfe_results, r_benchmark_panel_data):
         """CI bounds within rtol=0.01 (1%) of R's fixest."""
-        data, csv_path = benchmark_panel_data
+        data, _ = r_benchmark_panel_data
 
         py_results = self._run_python_twfe(data)
-        r_results = self._run_r_feols_twfe(csv_path)
 
         np.testing.assert_allclose(
-            py_results.conf_int[0], r_results["ci_lower"], rtol=0.01,
-            err_msg=f"CI lower mismatch: Python={py_results.conf_int[0]:.6f}, R={r_results['ci_lower']:.6f}",
+            py_results.conf_int[0], r_twfe_results["ci_lower"], rtol=0.01,
+            err_msg=f"CI lower mismatch: Python={py_results.conf_int[0]:.6f}, R={r_twfe_results['ci_lower']:.6f}",
         )
         np.testing.assert_allclose(
-            py_results.conf_int[1], r_results["ci_upper"], rtol=0.01,
-            err_msg=f"CI upper mismatch: Python={py_results.conf_int[1]:.6f}, R={r_results['ci_upper']:.6f}",
+            py_results.conf_int[1], r_twfe_results["ci_upper"], rtol=0.01,
+            err_msg=f"CI upper mismatch: Python={py_results.conf_int[1]:.6f}, R={r_twfe_results['ci_upper']:.6f}",
         )
 
     def test_att_matches_r_with_covariate(
-        self, require_fixest, benchmark_panel_data_with_covariate
+        self, r_twfe_results_with_covariate, r_benchmark_panel_data_with_covariate
     ):
         """ATT with demeaned covariate within rtol=1e-3 of R."""
-        data, csv_path = benchmark_panel_data_with_covariate
+        data, _ = r_benchmark_panel_data_with_covariate
 
         py_results = self._run_python_twfe(data, covariates=["x1"])
-        r_results = self._run_r_feols_twfe(csv_path, covariates=["x1"])
 
         np.testing.assert_allclose(
-            py_results.att, r_results["att"], rtol=1e-3,
-            err_msg=f"ATT w/ cov mismatch: Python={py_results.att:.6f}, R={r_results['att']:.6f}",
+            py_results.att, r_twfe_results_with_covariate["att"], rtol=1e-3,
+            err_msg=f"ATT w/ cov mismatch: Python={py_results.att:.6f}, R={r_twfe_results_with_covariate['att']:.6f}",
         )
 
     def test_se_matches_r_with_covariate(
-        self, require_fixest, benchmark_panel_data_with_covariate
+        self, r_twfe_results_with_covariate, r_benchmark_panel_data_with_covariate
     ):
         """SE with covariate within rtol=0.01 of R."""
-        data, csv_path = benchmark_panel_data_with_covariate
+        data, _ = r_benchmark_panel_data_with_covariate
 
         py_results = self._run_python_twfe(data, covariates=["x1"])
-        r_results = self._run_r_feols_twfe(csv_path, covariates=["x1"])
 
         np.testing.assert_allclose(
-            py_results.se, r_results["se"], rtol=0.01,
-            err_msg=f"SE w/ cov mismatch: Python={py_results.se:.6f}, R={r_results['se']:.6f}",
+            py_results.se, r_twfe_results_with_covariate["se"], rtol=0.01,
+            err_msg=f"SE w/ cov mismatch: Python={py_results.se:.6f}, R={r_twfe_results_with_covariate['se']:.6f}",
         )
 
 
@@ -598,6 +615,74 @@ class TestTWFEEdgeCases:
         multiperiod_warnings = [x for x in w if "unique values" in str(x.message)]
         assert len(multiperiod_warnings) == 0, (
             "Multi-period time warning should NOT fire with binary time"
+        )
+
+    def test_non_binary_time_values_warning(self):
+        """Non-{0,1} binary time values emit warning but ATT is correct."""
+        data = generate_hand_calculable_panel()
+        data["year"] = data["post"].map({0: 2020, 1: 2021})
+
+        twfe = TwoWayFixedEffects(robust=True)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            results = twfe.fit(
+                data, outcome="outcome", treatment="treated", time="year", unit="unit"
+            )
+
+        non_binary_warnings = [x for x in w if "instead of {0, 1}" in str(x.message)]
+        assert len(non_binary_warnings) > 0, (
+            "Expected warning about non-{0,1} binary time values"
+        )
+        assert np.isfinite(results.att), "ATT should be finite"
+        np.testing.assert_allclose(results.att, 3.0, rtol=1e-10)
+
+    def test_boolean_time_no_warning(self):
+        """Boolean time values ({False, True}) do NOT emit non-{0,1} warning."""
+        data = generate_hand_calculable_panel()
+        data["post_bool"] = data["post"].astype(bool)
+
+        twfe = TwoWayFixedEffects(robust=True)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            twfe.fit(
+                data, outcome="outcome", treatment="treated",
+                time="post_bool", unit="unit",
+            )
+
+        non_binary_warnings = [x for x in w if "instead of {0, 1}" in str(x.message)]
+        assert len(non_binary_warnings) == 0, (
+            "Boolean time values should NOT trigger non-{0,1} warning"
+        )
+
+    def test_att_invariant_to_time_encoding(self):
+        """ATT, SE, and p-value are identical for {0,1} vs {2020,2021} time encoding."""
+        data = generate_hand_calculable_panel()
+
+        # Fit with binary {0,1}
+        twfe = TwoWayFixedEffects(robust=True)
+        results_binary = twfe.fit(
+            data, outcome="outcome", treatment="treated", time="post", unit="unit"
+        )
+
+        # Fit with year encoding {2020, 2021}
+        data["year"] = data["post"].map({0: 2020, 1: 2021})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results_year = twfe.fit(
+                data, outcome="outcome", treatment="treated", time="year", unit="unit"
+            )
+
+        np.testing.assert_allclose(
+            results_binary.att, results_year.att, rtol=1e-10,
+            err_msg="ATT should be invariant to time encoding",
+        )
+        np.testing.assert_allclose(
+            results_binary.se, results_year.se, rtol=1e-10,
+            err_msg="SE should be invariant to time encoding",
+        )
+        np.testing.assert_allclose(
+            results_binary.p_value, results_year.p_value, rtol=1e-10,
+            err_msg="P-value should be invariant to time encoding",
         )
 
     def test_auto_clusters_at_unit_level(self):

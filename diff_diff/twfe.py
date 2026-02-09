@@ -106,6 +106,17 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                 UserWarning,
                 stacklevel=2,
             )
+        elif n_unique_time == 2:
+            unique_vals = set(data[time].unique())
+            if unique_vals != {0, 1} and unique_vals != {False, True}:
+                warnings.warn(
+                    f"The '{time}' column has values {sorted(unique_vals)} instead of {{0, 1}}. "
+                    f"The ATT estimate is mathematically correct (within-transformation "
+                    f"absorbs the scaling), but 0/1 encoding is recommended for clarity. "
+                    f"Consider: df['{time}'] = (df['{time}'] == {max(unique_vals)}).astype(int)",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         # Use unit-level clustering if not specified (use local variable to avoid mutation)
         cluster_var = self.cluster if self.cluster is not None else unit

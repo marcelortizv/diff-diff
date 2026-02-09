@@ -46,7 +46,7 @@ class ImputationBootstrapResults:
     n_bootstrap : int
         Number of bootstrap iterations.
     weight_type : str
-        Type of bootstrap weights ("rademacher", "mammen", "webb").
+        Type of bootstrap weights (currently "rademacher" only).
     alpha : float
         Significance level used for confidence intervals.
     overall_att_se : float
@@ -645,6 +645,11 @@ class ImputationDiD:
                 UserWarning,
                 stacklevel=2,
             )
+
+            # Coerce to per-unit value so downstream code
+            # (_never_treated, _treated, _rel_time) uses a single
+            # consistent first_treat per unit.
+            df[first_treat] = df.groupby(unit)[first_treat].transform("first")
 
         # Identify treatment status
         df["_never_treated"] = (df[first_treat] == 0) | (df[first_treat] == np.inf)

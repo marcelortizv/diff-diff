@@ -1769,6 +1769,14 @@ class TestImputationEdgeCases:
         assert isinstance(results, ImputationDiDResults)
         assert np.isfinite(results.overall_att)
 
+        # Behavioral assertion: coercion applied — first_treat is now constant per unit
+        fit_df = est._fit_data["df"]
+        bad_rows = fit_df[fit_df["unit"] == bad_unit]
+        ft_vals = bad_rows["first_treat"].unique()
+        assert (
+            len(ft_vals) == 1
+        ), f"first_treat should be coerced to single value per unit, got {ft_vals}"
+
     def test_treatment_effects_weight_nan_consistency(self):
         """Test that treatment_effects weights are 0 for NaN tau_hat and 1/n_valid for finite."""
         # Reuse the partial-NaN scenario from test_overall_se_with_partial_nan_tau_hat

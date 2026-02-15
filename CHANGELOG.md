@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.3.1] - 2026-02-15
 
 ### Fixed
 - Fix docs/PyPI version mismatch (issue #146) — RTD now builds versioned docs from source
@@ -700,6 +700,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.3.1]: https://github.com/igerber/diff-diff/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/igerber/diff-diff/compare/v2.2.1...v2.3.0
 [2.2.1]: https://github.com/igerber/diff-diff/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/igerber/diff-diff/compare/v2.1.9...v2.2.0

@@ -35,9 +35,6 @@ try:
         compute_time_weights as _rust_compute_time_weights,
         compute_noise_level as _rust_compute_noise_level,
         sc_weight_fw as _rust_sc_weight_fw,
-        # SDID variance estimation (parallel placebo and bootstrap)
-        placebo_variance_sdid as _rust_placebo_variance_sdid,
-        bootstrap_variance_sdid as _rust_bootstrap_variance_sdid,
     )
     _rust_available = True
 except ImportError:
@@ -59,9 +56,6 @@ except ImportError:
     _rust_compute_time_weights = None
     _rust_compute_noise_level = None
     _rust_sc_weight_fw = None
-    # SDID variance estimation (parallel placebo and bootstrap)
-    _rust_placebo_variance_sdid = None
-    _rust_bootstrap_variance_sdid = None
 
 # Determine final backend based on environment variable and availability
 if _backend_env == 'python':
@@ -84,9 +78,6 @@ if _backend_env == 'python':
     _rust_compute_time_weights = None
     _rust_compute_noise_level = None
     _rust_sc_weight_fw = None
-    # SDID variance estimation (parallel placebo and bootstrap)
-    _rust_placebo_variance_sdid = None
-    _rust_bootstrap_variance_sdid = None
 elif _backend_env == 'rust':
     # Force Rust mode - fail if not available
     if not _rust_available:
@@ -118,7 +109,4 @@ __all__ = [
     '_rust_compute_time_weights',
     '_rust_compute_noise_level',
     '_rust_sc_weight_fw',
-    # SDID variance estimation (parallel placebo and bootstrap)
-    '_rust_placebo_variance_sdid',
-    '_rust_bootstrap_variance_sdid',
 ]

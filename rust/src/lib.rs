@@ -7,7 +7,6 @@ use pyo3::prelude::*;
 
 mod bootstrap;
 mod linalg;
-mod sdid_variance;
 mod trop;
 mod weights;
 
@@ -42,10 +41,6 @@ fn _rust_backend(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // TROP estimator acceleration (joint method)
     m.add_function(wrap_pyfunction!(trop::loocv_grid_search_joint, m)?)?;
     m.add_function(wrap_pyfunction!(trop::bootstrap_trop_variance_joint, m)?)?;
-
-    // SDID variance estimation (parallel placebo and bootstrap)
-    m.add_function(wrap_pyfunction!(sdid_variance::placebo_variance_sdid, m)?)?;
-    m.add_function(wrap_pyfunction!(sdid_variance::bootstrap_variance_sdid, m)?)?;
 
     // Version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

@@ -167,9 +167,6 @@ cross-platform compilation - no OpenBLAS or Intel MKL installation required.
     - `compute_unit_distance_matrix()` - Parallel pairwise RMSE distance computation (4-8x speedup)
     - `loocv_grid_search()` - Parallel LOOCV across tuning parameters (10-50x speedup)
     - `bootstrap_trop_variance()` - Parallel bootstrap variance estimation (5-15x speedup)
-  - **`rust/src/sdid_variance.rs`** - SDID variance estimation acceleration:
-    - `placebo_variance_sdid()` - Parallel placebo SE computation (~8x speedup)
-    - `bootstrap_variance_sdid()` - Parallel bootstrap SE computation (~6x speedup)
   - Uses pure-Rust `faer` library for linear algebra (no external BLAS/LAPACK dependencies)
   - Cross-platform: builds on Linux, macOS, and Windows without additional setup
   - Provides 4-8x speedup for SyntheticDiD, 5-20x speedup for TROP

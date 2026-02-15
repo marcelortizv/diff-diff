@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Remove Rust outer-loop variance estimation for SyntheticDiD (placebo and bootstrap)
+  - Fixes SE mismatch between pure Python and Rust backends (different RNG sequences)
+  - Fixes Rust performance regression at 1k+ scale (memory bandwidth saturation from rayon parallelism)
+  - Inner Frank-Wolfe weight computation still uses Rust when available
+
+### Documentation
+- Re-run SyntheticDiD benchmarks against R after Frank-Wolfe methodology rewrite
+- Updated `docs/benchmarks.rst` SDID validation results, performance tables, and known differences
+- ATT now matches R to < 1e-10 (previously 0.3% diff) since both use Frank-Wolfe optimizer
+
 ## [2.3.0] - 2026-02-09
 
 ### Added

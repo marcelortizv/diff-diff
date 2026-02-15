@@ -88,8 +88,8 @@ Summary Table
      - Yes
      - **PASS**
    * - SyntheticDiD
-     - 0.011
-     - 3.1%
+     - < 1e-10
+     - 0.3%
      - Yes
      - **PASS**
 
@@ -173,32 +173,36 @@ Synthetic DiD Results
    :header-rows: 1
 
    * - Metric
-     - diff-diff
+     - diff-diff (Pure)
+     - diff-diff (Rust)
      - R synthdid
      - Difference
    * - ATT
-     - 3.851
      - 3.840
-     - 0.011 (0.3%)
+     - 3.840
+     - 3.840
+     - < 1e-10
    * - SE
-     - 0.106
-     - 0.103
-     - 3.1%
+     - 0.105
+     - 0.099
+     - 0.105
+     - 0.3% (pure)
    * - Time (s)
-     - 0.017
-     - 7.49
-     - **433x faster**
+     - 3.41
+     - 1.65
+     - 8.19
+     - **2.4x faster** (pure)
 
-**Validation**: PASS - Both ATT and SE estimates match closely. Both implementations
-use placebo-based variance estimation (R's Algorithm 4 from Arkhangelsky et al. 2021).
+**Validation**: PASS - ATT estimates are numerically identical across all
+implementations. Both diff-diff and R's synthdid use Frank-Wolfe optimization
+with two-pass sparsification and auto-computed regularization (``zeta_omega``,
+``zeta_lambda``), producing identical unit and time weights. Both use
+placebo-based variance estimation (Algorithm 4 from Arkhangelsky et al. 2021).
 
-The small SE difference (3.1%) is due to different unit/time weight optimization
-algorithms:
-
-- diff-diff uses projected gradient descent
-- R synthdid uses Frank-Wolfe optimization with adaptive regularization
-
-This leads to slightly different weights, which propagate to the placebo estimates.
+The small SE difference (0.3% at small scale, up to ~7% at larger scales) is
+due to Monte Carlo variance in the placebo procedure, which randomly permutes
+control units to construct pseudo-treated groups. Different random seeds across
+implementations produce slightly different placebo samples.
 
 Callaway-Sant'Anna Results
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -362,49 +366,38 @@ Three-Way Performance Summary
      - R (s)
      - Python Pure (s)
      - Python Rust (s)
-     - Rust/R
+     - Pure/R
      - Rust/Pure
    * - small
-     - 7.73
-     - 0.016
-     - 0.004
-     - **2147x**
-     - **4.4x**
+     - 8.19
+     - 3.41
+     - 1.65
+     - **2.4x**
+     - **2.1x**
    * - 1k
-     - 108.1
-     - 0.068
-     - 0.101
-     - **1070x**
-     - 0.7x
+     - 111.7
+     - 24.0
+     - 76.1
+     - **4.7x**
+     - 0.3x
    * - 5k
-     - 504.5
-     - 2.97
-     - 0.69
-     - **734x**
-     - **4.3x**
-   * - 10k
-     - 1107.2
-     - 19.54
-     - 2.58
-     - **429x**
-     - **7.6x**
-   * - 20k
-     - 2451.0
-     - 137.3
-     - 10.9
-     - **225x**
-     - **12.6x**
+     - 524.2
+     - 31.7
+     - 307.5
+     - **16.5x**
+     - 0.1x
 
 .. note::
 
-   **SyntheticDiD Performance**: diff-diff achieves **225x to 2147x speedup** over
-   R's synthdid package. At 10k scale, R takes ~18 minutes while Python Rust
-   completes in 2.6 seconds. At 20k scale, R takes ~41 minutes while Python Rust
-   completes in 11 seconds. The Rust backend provides **4-13x additional speedup**
-   over pure Python for SyntheticDiD due to optimized simplex projection and
-   synthetic weight computation. ATT estimates differ slightly due to different
-   weight optimization algorithms (projected gradient descent vs Frank-Wolfe),
-   but confidence intervals overlap.
+   **SyntheticDiD Performance**: diff-diff's pure Python backend achieves
+   **2.4x to 16.5x speedup** over R's synthdid package using the same
+   Frank-Wolfe optimization algorithm. At 5k scale, R takes ~9 minutes while
+   pure Python completes in 32 seconds. ATT estimates are numerically identical
+   (< 1e-10 difference) since both implementations use the same Frank-Wolfe
+   optimizer with two-pass sparsification. The Rust backend provides a speedup
+   at small scale (2.1x over pure Python) but is slower at larger scales due to
+   overhead in the placebo variance estimation loop; this is a known area for
+   future optimization.
 
 Dataset Sizes
 ~~~~~~~~~~~~~
@@ -457,29 +450,30 @@ Key Observations
 
    - **BasicDiD/TWFE**: 2-17x faster than R at all scales
    - **CallawaySantAnna**: 4-11x faster than R at all scales (vectorized WIF computation)
-   - **SyntheticDiD**: 225-2147x faster than R (R takes 41 minutes at 20k scale!)
+   - **SyntheticDiD**: 2.4-16.5x faster than R (pure Python), with both
+     implementations using the same Frank-Wolfe algorithm
 
 2. **Rust backend benefit depends on the estimator**:
 
-   - **SyntheticDiD**: Rust provides **4-13x speedup** over pure Python due to
-     optimized simplex projection and synthetic weight computation
+   - **SyntheticDiD**: Rust provides speedup at small scale (2.1x) but is
+     slower at larger scales due to placebo variance loop overhead
    - **BasicDiD/CallawaySantAnna**: Rust provides minimal benefit (~1x) since
      these estimators use OLS/variance computations already optimized in NumPy/SciPy
 
 3. **When to use Rust backend**:
 
-   - **SyntheticDiD**: Recommended - provides significant speedup (4-13x)
+   - **SyntheticDiD at small scale**: Rust is ~2x faster than pure Python
    - **Bootstrap inference**: May help with parallelized iterations
    - **BasicDiD/CallawaySantAnna**: Optional - pure Python is equally fast
 
 4. **Scaling behavior**: Python implementations show excellent scaling behavior
-   across all estimators. SyntheticDiD is 225x faster than R at 20k scale.
-   CallawaySantAnna achieves **exact SE accuracy** (0.0% difference) while
-   being 4-11x faster than R through vectorized NumPy operations.
+   across all estimators. SyntheticDiD pure Python is 16.5x faster than R at
+   5k scale. CallawaySantAnna achieves **exact SE accuracy** (0.0% difference)
+   while being 4-11x faster than R through vectorized NumPy operations.
 
 5. **No Rust required for most use cases**: Users without Rust/maturin can
    install diff-diff and get full functionality with excellent performance.
-   Only SyntheticDiD benefits significantly from the Rust backend.
+   Pure Python is the fastest option for SyntheticDiD at 1k+ scales.
 
 6. **CallawaySantAnna accuracy and speed**: As of v2.0.3, CallawaySantAnna
    achieves both exact numerical accuracy (0.0% SE difference from R) AND
@@ -650,9 +644,11 @@ When to Trust Results
   ``treated * time_f | unit`` interaction syntax (unit FE absorbed). Both average
   ATT and all period-level effects match to machine precision. Use with confidence.
 
-- **SyntheticDiD**: Both point estimates (0.3% diff) and standard errors (3.1% diff)
-  match R closely. Use ``variance_method="placebo"`` (default) to match R's
-  inference. Results are fully validated.
+- **SyntheticDiD**: Point estimates are numerically identical (< 1e-10 diff) and
+  standard errors match closely (0.3% diff at small scale). Both implementations
+  use Frank-Wolfe optimization with identical weights. Use
+  ``variance_method="placebo"`` (default) to match R's inference. Results are
+  fully validated.
 
 - **CallawaySantAnna**: Both group-time effects (ATT(g,t)) and overall ATT
   aggregation match R exactly. Standard errors are numerically equivalent
@@ -668,9 +664,10 @@ Known Differences
 2. **Aggregation Weights**: Overall ATT is a weighted average of ATT(g,t).
    Weighting schemes may differ between implementations.
 
-3. **Weight Optimization**: SyntheticDiD uses different optimization algorithms
-   for unit/time weights (projected gradient descent vs Frank-Wolfe). This leads
-   to slightly different weights but equivalent ATT estimates.
+3. **Placebo Variance**: SyntheticDiD SE estimates differ slightly (0.3-7%)
+   across implementations due to Monte Carlo variance in the placebo procedure.
+   Point estimates and unit/time weights are numerically identical since both
+   implementations use the same Frank-Wolfe optimizer.
 
 References
 ----------

@@ -1039,6 +1039,94 @@ class TestMinDecreaseFloor:
         assert abs(w_floor.sum() - 1.0) < 1e-10, "Weights should sum to 1"
 
 
+class TestBackendSEConsistency:
+    """Test that pure Python and Rust-accelerated backends produce identical SEs."""
+
+    def test_placebo_se_matches_across_backends(self):
+        """SyntheticDiD placebo SE is identical regardless of backend.
+
+        After removing the Rust outer-loop variance fast paths, both backends
+        use the same Python loop for placebo/bootstrap variance. The only
+        difference is that inner Frank-Wolfe weight calls may dispatch to Rust
+        (faer) vs NumPy. With the same seed, RNG sequences are identical, so
+        SEs should match within floating-point tolerance (rtol=1e-4 allows for
+        accumulated faer vs NumPy differences across hundreds of iterations).
+        """
+        import sys
+
+        df = _make_panel(n_control=20, n_treated=3, n_pre=5, n_post=3,
+                         att=5.0, seed=42)
+        post_periods = list(range(5, 8))
+
+        # Run with default backend (Rust-accelerated inner calls if available)
+        sdid_default = SyntheticDiD(
+            variance_method="placebo", n_bootstrap=50, seed=42
+        )
+        results_default = sdid_default.fit(
+            df, "outcome", "treated", "unit", "period", post_periods
+        )
+
+        # Run with pure Python backend
+        utils_mod = sys.modules["diff_diff.utils"]
+        with patch.object(utils_mod, "HAS_RUST_BACKEND", False):
+            sdid_py = SyntheticDiD(
+                variance_method="placebo", n_bootstrap=50, seed=42
+            )
+            results_py = sdid_py.fit(
+                df.copy(), "outcome", "treated", "unit", "period", post_periods
+            )
+
+        # ATT must be identical (same data, same algorithm)
+        np.testing.assert_allclose(
+            results_default.att, results_py.att, rtol=1e-6,
+            err_msg="ATT should match between backends"
+        )
+
+        # SE must match within tolerance (faer vs NumPy in FW inner loop)
+        np.testing.assert_allclose(
+            results_default.se, results_py.se, rtol=1e-4,
+            err_msg="Placebo SE should match between backends"
+        )
+
+    def test_bootstrap_se_matches_across_backends(self):
+        """SyntheticDiD bootstrap SE is identical regardless of backend."""
+        import sys
+
+        df = _make_panel(n_control=20, n_treated=3, n_pre=5, n_post=3,
+                         att=5.0, seed=42)
+        post_periods = list(range(5, 8))
+
+        # Run with default backend
+        sdid_default = SyntheticDiD(
+            variance_method="bootstrap", n_bootstrap=50, seed=42
+        )
+        results_default = sdid_default.fit(
+            df, "outcome", "treated", "unit", "period", post_periods
+        )
+
+        # Run with pure Python backend
+        utils_mod = sys.modules["diff_diff.utils"]
+        with patch.object(utils_mod, "HAS_RUST_BACKEND", False):
+            sdid_py = SyntheticDiD(
+                variance_method="bootstrap", n_bootstrap=50, seed=42
+            )
+            results_py = sdid_py.fit(
+                df.copy(), "outcome", "treated", "unit", "period", post_periods
+            )
+
+        # ATT must match
+        np.testing.assert_allclose(
+            results_default.att, results_py.att, rtol=1e-6,
+            err_msg="ATT should match between backends"
+        )
+
+        # Bootstrap SE must match (same RNG, same loop, only inner FW differs)
+        np.testing.assert_allclose(
+            results_default.se, results_py.se, rtol=1e-4,
+            err_msg="Bootstrap SE should match between backends"
+        )
+
+
 class TestEmptyPostGuard:
     """Test compute_time_weights guard for empty Y_post_control."""
 

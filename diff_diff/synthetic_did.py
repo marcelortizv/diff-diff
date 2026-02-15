@@ -583,62 +583,6 @@ class SyntheticDiD(DifferenceInDifferences):
         ])
         n_pre = Y_pre_control.shape[0]
 
-        # Try Rust parallel implementation for ~6x speedup
-        from diff_diff._backend import HAS_RUST_BACKEND, _rust_bootstrap_variance_sdid
-
-        if HAS_RUST_BACKEND and _rust_bootstrap_variance_sdid is not None:
-            # Generate random seed when self.seed is None
-            rust_seed = self.seed if self.seed is not None else int(
-                np.random.default_rng(None).integers(0, 2**63)
-            )
-
-            se, boot_arr, n_failed = _rust_bootstrap_variance_sdid(
-                np.ascontiguousarray(Y_pre_control, dtype=np.float64),
-                np.ascontiguousarray(Y_post_control, dtype=np.float64),
-                np.ascontiguousarray(Y_pre_treated, dtype=np.float64),
-                np.ascontiguousarray(Y_post_treated, dtype=np.float64),
-                np.ascontiguousarray(unit_weights, dtype=np.float64),
-                np.ascontiguousarray(time_weights, dtype=np.float64),
-                self.n_bootstrap, rust_seed,
-            )
-            bootstrap_estimates = np.asarray(boot_arr)
-            n_successful = len(bootstrap_estimates)
-            failure_rate = 1 - (n_successful / self.n_bootstrap)
-
-            # Apply same warning/error logic as Python path
-            if n_successful == 0:
-                raise ValueError(
-                    f"All {self.n_bootstrap} bootstrap iterations failed. "
-                    f"This typically occurs when:\n"
-                    f"  - Sample size is too small for reliable resampling\n"
-                    f"  - Weight matrices are singular or near-singular\n"
-                    f"  - Insufficient pre-treatment periods for weight estimation\n"
-                    f"  - Too few control units relative to treated units\n"
-                    f"Consider using variance_method='placebo' or increasing "
-                    f"the regularization parameters (zeta_omega, zeta_lambda)."
-                )
-            elif n_successful == 1:
-                warnings.warn(
-                    f"Only 1/{self.n_bootstrap} bootstrap iteration succeeded. "
-                    f"Standard error cannot be computed reliably (requires at least 2). "
-                    f"Returning SE=0.0. Consider using variance_method='placebo' or "
-                    f"increasing the regularization (zeta_omega, zeta_lambda).",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                return 0.0, bootstrap_estimates
-            elif failure_rate > 0.05:
-                warnings.warn(
-                    f"Only {n_successful}/{self.n_bootstrap} bootstrap iterations succeeded "
-                    f"({failure_rate:.1%} failure rate). Standard errors may be unreliable. "
-                    f"This can occur with small samples or insufficient pre-treatment periods.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-
-            return se, bootstrap_estimates
-
-        # Python fallback
         bootstrap_estimates = []
 
         for _ in range(self.n_bootstrap):
@@ -796,53 +740,6 @@ class SyntheticDiD(DifferenceInDifferences):
             )
             return 0.0, np.array([])
 
-        # Try Rust parallel implementation for ~8x speedup
-        from diff_diff._backend import HAS_RUST_BACKEND, _rust_placebo_variance_sdid
-
-        if HAS_RUST_BACKEND and _rust_placebo_variance_sdid is not None:
-            # Generate random seed when self.seed is None (matching Python's non-reproducible behavior)
-            rust_seed = self.seed if self.seed is not None else int(
-                np.random.default_rng(None).integers(0, 2**63)
-            )
-
-            se, placebo_arr = _rust_placebo_variance_sdid(
-                np.ascontiguousarray(Y_pre_control, dtype=np.float64),
-                np.ascontiguousarray(Y_post_control, dtype=np.float64),
-                np.ascontiguousarray(Y_pre_treated_mean, dtype=np.float64),
-                np.ascontiguousarray(Y_post_treated_mean, dtype=np.float64),
-                n_treated, zeta_omega, zeta_lambda, min_decrease,
-                True,   # intercept
-                100,    # max_iter_pre_sparsify
-                10000,  # max_iter
-                replications, rust_seed,
-            )
-            placebo_estimates = np.asarray(placebo_arr)
-            n_successful = len(placebo_estimates)
-
-            # Apply same warning/error logic as Python path
-            if n_successful < 2:
-                warnings.warn(
-                    f"Only {n_successful} placebo replications completed successfully. "
-                    f"Standard error cannot be estimated reliably. "
-                    f"Consider using variance_method='bootstrap' or increasing "
-                    f"the number of control units.",
-                    UserWarning,
-                    stacklevel=3,
-                )
-                return 0.0, placebo_estimates
-
-            failure_rate = 1 - (n_successful / replications)
-            if failure_rate > 0.05:
-                warnings.warn(
-                    f"Only {n_successful}/{replications} placebo replications succeeded "
-                    f"({failure_rate:.1%} failure rate). Standard errors may be unreliable.",
-                    UserWarning,
-                    stacklevel=3,
-                )
-
-            return se, placebo_estimates
-
-        # Python fallback
         placebo_estimates = []
 
         for _ in range(replications):

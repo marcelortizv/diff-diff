@@ -1,0 +1,67 @@
+#!/bin/bash
+# PreToolUse hook for ExitPlanMode: ensure a plan review exists before approval.
+#
+# Output protocol: PreToolUse hooks must output JSON to stdout and exit 0.
+#   Allow: exit 0 (no output, or JSON with permissionDecision: "allow")
+#   Deny:  exit 0 with JSON { hookSpecificOutput: { permissionDecision: "deny", ... } }
+#   Error: exit 2 means hook error (not a deliberate block) — avoid this.
+#
+# Strategy:
+#   1. Read ~/.claude/plans/.last-reviewed sentinel (written by review step)
+#   2. If sentinel exists, use its contents as the plan path
+#   3. If no sentinel, fall back to most recent .md in ~/.claude/plans/
+#   4. Check for sibling .review.md — deny if missing
+#
+# Known limitations:
+#   - The ls -t fallback (step 3) can pick the wrong plan if multiple files exist.
+#   - A stale sentinel from a prior session can allow a new plan through unreviewed.
+#   The CLAUDE.md guidance mitigates both by updating the sentinel on new plan creation.
+#   - printf %s in deny() does not escape quotes/backslashes in $1. Plan file paths
+#     almost never contain these characters. If needed later, add sanitization:
+#     MSG=$(echo "$1" | sed 's/"/\\"/g')
+#
+# Dependencies: None (uses printf for JSON output, no jq required).
+
+deny() {
+  # Output JSON deny decision to stdout, then exit 0 (not exit 2)
+  # Sanitize message: escape double quotes and backslashes for valid JSON
+  local msg
+  msg=$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}' "$msg"
+  exit 0
+}
+
+PLANS_DIR="$HOME/.claude/plans"
+SENTINEL="$PLANS_DIR/.last-reviewed"
+
+# Step 1-2: Try sentinel first
+if [ -f "$SENTINEL" ]; then
+  PLAN_FILE=$(head -1 "$SENTINEL" 2>/dev/null)
+  # Expand ~ if present
+  PLAN_FILE="${PLAN_FILE/#\~/$HOME}"
+  if [ -n "$PLAN_FILE" ] && [ -f "$PLAN_FILE" ]; then
+    REVIEW_FILE="${PLAN_FILE%.md}.review.md"
+    if [ -f "$REVIEW_FILE" ]; then
+      exit 0  # Review exists, allow
+    else
+      deny "No plan review found for: $PLAN_FILE. Expected: $REVIEW_FILE. Run a plan review before presenting for approval."
+    fi
+  fi
+fi
+
+# Step 3: Fall back to most recent plan file
+PLAN_FILE=$(ls -t "$PLANS_DIR"/*.md 2>/dev/null | grep -v '\.review\.md$' | head -1)
+
+if [ -z "$PLAN_FILE" ]; then
+  # No plan files at all — allow ExitPlanMode (not a plan-mode session)
+  exit 0
+fi
+
+# Step 4: Check for review
+REVIEW_FILE="${PLAN_FILE%.md}.review.md"
+
+if [ -f "$REVIEW_FILE" ]; then
+  exit 0  # Review exists, allow
+else
+  deny "No plan review found. Expected: $REVIEW_FILE. Follow the Plan Review Before Approval instructions in CLAUDE.md."
+fi

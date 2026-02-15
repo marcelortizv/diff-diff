@@ -41,11 +41,11 @@ Options:
 
 ## Constraints
 
-- **Read-only**: Do NOT create, edit, or delete any files. This skill only reads and reports.
+- **Read-only for project files**: Do NOT create, edit, or delete any project files (source code, tests, documentation, configuration). The only files this skill writes are the review output (`<plan-stem>.review.md`) and the sentinel (`~/.claude/plans/.last-reviewed`), both alongside the plan file.
 - **Advisory-only**: Provide feedback and recommendations. Do not implement fixes.
 - **No code changes**: Do not modify any source code, test files, or documentation.
-- Use the Read tool for files and the Glob/Grep tools for searching. Do not use Write, Edit, NotebookEdit, or any file-modifying Bash commands.
-- The `gh api` calls used with `--pr` are read-only API requests, consistent with the read-only constraint.
+- Use the Read tool for files and the Glob/Grep tools for searching. Do not use Edit, NotebookEdit, or file-modifying Bash commands. The Write tool may only be used for the review output file and sentinel.
+- The `gh api` calls used with `--pr` are read-only API requests, consistent with the project-files read-only constraint.
 
 ## Instructions
 
@@ -69,7 +69,9 @@ After completing the standard 8-dimension review in Step 4, add a **Delta Assess
 - Which previously-raised issues remain unresolved?
 - Are there any new issues introduced by the revisions?
 
-If no prior review is available in conversation context (e.g., the user passed `--updated` on the first invocation, or the context was compressed), still include the Delta Assessment section but fill each subsection with: "Delta assessment unavailable — no prior review found in conversation context. Full fresh review performed."
+Additionally, check if a prior review file exists at `<plan-stem>.review.md` (sibling to the plan file — replace the trailing `.md` with `.review.md`). If it exists, read it as a supplementary source of prior review context. When conversation context has been compressed between rounds, use the review file's content for delta assessment instead. If both conversation context and the review file are available, prefer whichever source is more detailed.
+
+If no prior review is available from either source (conversation context or review file), still include the Delta Assessment section but fill each subsection with: "Delta assessment unavailable — no prior review found in conversation context or review file. Full fresh review performed."
 
 ### Step 2: Read CLAUDE.md for Project Context
 
@@ -294,7 +296,7 @@ Use judgment, not just substring matching — the plan may use different words t
 
 ### Step 5: Present Structured Feedback
 
-Present the review in the following format. Do NOT skip any section — if a section has no findings, write "None." for that section. The Delta Assessment section is only included when the `--updated` flag was provided (see Step 1b). The PR Context and PR Feedback Coverage sections are only included when `--pr` was provided with a non-empty comment.
+Present the review in the following format. Number each issue sequentially within its severity section (e.g., CRITICAL #1, CRITICAL #2, MEDIUM #1) to enable cross-referencing with `/revise-plan`. Do NOT skip any section — if a section has no findings, write "None." for that section. The Delta Assessment section is only included when the `--updated` flag was provided (see Step 1b). The PR Context and PR Feedback Coverage sections are only included when `--pr` was provided with a non-empty comment.
 
 ```
 ## Overall Assessment
@@ -402,11 +404,59 @@ The `--pr` URL must be the same across the initial review and the `--updated` re
 - **Needs revision**: Has critical issues or many medium issues that require rethinking the approach
 ```
 
+### Step 6: Save Review to File
+
+After displaying the review in the conversation (Step 5), persist it to a file alongside the plan.
+
+1. **Derive the review file path**: Replace the trailing `.md` in the plan file path with `.review.md`.
+
+2. **Get the current timestamp**:
+   ```bash
+   date -u +%Y-%m-%dT%H:%M:%SZ
+   ```
+
+3. **Construct the review file** with YAML frontmatter followed by the review body:
+
+   ```yaml
+   ---
+   plan: ~/.claude/plans/foo.md
+   reviewed_at: "2026-02-15T14:30:00Z"
+   verdict: "Needs revision"
+   critical_count: 2
+   medium_count: 3
+   low_count: 1
+   flags: ["--updated", "--pr"]
+   ---
+   ```
+
+   The `flags` field is a list of CLI flags that were active during this review. Possible values: `"--updated"`, `"--pr"`. Empty list `[]` if no flags were used.
+
+   Followed by the full review content (everything from "## Overall Assessment" through "## Summary", exactly as displayed in the conversation).
+
+4. **Write the review file** using the Write tool. Overwrite any existing file at this path (expected on `--updated` re-reviews).
+
+5. **Write the sentinel file** `~/.claude/plans/.last-reviewed` containing the plan file path (just the path, no YAML):
+   ```
+   ~/.claude/plans/foo.md
+   ```
+   This sentinel is read by the ExitPlanMode hook to identify which plan was most recently reviewed.
+
+6. **Handle write failure gracefully**: If either write fails (permissions, directory doesn't exist, etc.), emit a warning in the conversation but do NOT fail the review. The conversation output is the primary artifact.
+
+7. **Append a footer** to the conversation output:
+   ```
+   ---
+   Review saved to: <review-file-path>
+   Tip: In the planning window, the review will be read automatically before plan approval.
+   ```
+
 ## Notes
 
-- This skill is strictly read-only — it does not create, edit, or delete any files
+- This skill is read-only for project files — it writes two files outside the repo: the review output (`<plan-stem>.review.md`) and a sentinel (`~/.claude/plans/.last-reviewed`)
 - Plan files are typically located in `~/.claude/plans/`
-- The review is displayed directly in the conversation, not saved to a file
+- The review is displayed in the conversation (primary reading surface) and saved to a `.review.md` file alongside the plan (for persistence and cross-session exchange)
+- On `--updated` re-reviews, the prior `.review.md` file is read for delta context and then overwritten with the new review
+- Pairs with the in-plan-mode review workflow (CLAUDE.md) for in-session review
 - For best results, run this before implementing a plan to catch issues early
 - The 8 dimensions are tuned for plan-specific failure modes, not generic code review
 - Use `--updated` when re-reviewing a revised plan to get a delta assessment of what changed since the prior review

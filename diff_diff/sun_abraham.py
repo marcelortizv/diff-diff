@@ -456,9 +456,9 @@ class SunAbraham:
         covariates : list, optional
             List of covariate column names to include in regression.
         min_pre_periods : int, default=1
-            Minimum number of pre-treatment periods to include in event study.
+            **Deprecated**: Accepted but ignored. Will be removed in a future version.
         min_post_periods : int, default=1
-            Minimum number of post-treatment periods to include in event study.
+            **Deprecated**: Accepted but ignored. Will be removed in a future version.
 
         Returns
         -------
@@ -843,7 +843,8 @@ class SunAbraham:
 
         β_e = Σ_g w_{g,e} × δ_{g,e}
 
-        where w_{g,e} is the share of cohort g among treated units at relative time e.
+        where w_{g,e} = n_{g,e} / Σ_g n_{g,e} is the share of observations from cohort g
+        at event-time e among all treated observations at that event-time.
 
         Returns
         -------
@@ -855,9 +856,8 @@ class SunAbraham:
         event_study_effects: Dict[int, Dict[str, Any]] = {}
         cohort_weights: Dict[int, Dict[Any, float]] = {}
 
-        # Get cohort sizes
-        unit_cohorts = df.groupby(unit)[first_treat].first()
-        cohort_sizes = unit_cohorts[unit_cohorts > 0].value_counts().to_dict()
+        # Pre-compute per-event-time observation counts: n_{g,e}
+        event_time_counts = df[df[first_treat] > 0].groupby([first_treat, "_rel_time"]).size()
 
         for e in rel_periods:
             # Get cohorts that have observations at this relative time
@@ -869,13 +869,13 @@ class SunAbraham:
             if not cohorts_at_e:
                 continue
 
-            # Compute IW weights: share of each cohort among those observed at e
+            # Compute IW weights: n_{g,e} / Σ_g n_{g,e}
             weights = {}
             total_size = 0
             for g in cohorts_at_e:
-                n_g = cohort_sizes.get(g, 0)
-                weights[g] = n_g
-                total_size += n_g
+                n_g_e = event_time_counts.get((g, e), 0)
+                weights[g] = n_g_e
+                total_size += n_g_e
 
             if total_size == 0:
                 continue

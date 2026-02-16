@@ -1282,10 +1282,10 @@ class TestSunAbrahamMethodology:
         )
 
     def test_iw_weights_match_cohort_shares(self):
-        """Test that IW weights match cohort unit shares at each relative period.
+        """Test that IW weights match event-time sample shares.
 
         For each relative period, Σ_g w_{g,e} = 1.0 and individual weights
-        match n_g / Σ_g n_g (cohort unit share among cohorts with effects at e).
+        match n_{g,e} / Σ_g n_{g,e} (sample share of cohort g at event-time e).
         """
         data = generate_staggered_data(n_units=200, n_periods=10, n_cohorts=3, seed=42)
 
@@ -1294,10 +1294,6 @@ class TestSunAbrahamMethodology:
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
-        # Compute expected cohort sizes
-        unit_cohorts = data.groupby("unit")["first_treat"].first()
-        cohort_sizes = unit_cohorts[unit_cohorts > 0].value_counts().to_dict()
-
         for e, weights in results.cohort_weights.items():
             # Weights should sum to 1
             total = sum(weights.values())
@@ -1305,10 +1301,68 @@ class TestSunAbrahamMethodology:
                 f"Weights for e={e} sum to {total}, expected 1.0"
             )
 
-            # Individual weights should match cohort shares
-            total_size = sum(cohort_sizes.get(g, 0) for g in weights.keys())
+            # Individual weights should match event-time sample shares
+            cohort_counts = {}
+            for g in weights.keys():
+                cohort_counts[g] = len(
+                    data[
+                        (data["first_treat"] == g)
+                        & (data["time"] - data["first_treat"] == e)
+                    ]
+                )
+            total_count = sum(cohort_counts.values())
             for g, w in weights.items():
-                expected_w = cohort_sizes.get(g, 0) / total_size
+                expected_w = cohort_counts[g] / total_count
                 assert abs(w - expected_w) < 1e-10, (
                     f"Weight for cohort {g} at e={e}: got {w}, expected {expected_w}"
                 )
+
+    def test_iw_weights_unbalanced_panel(self):
+        """Test that IW weights use event-time counts, not cohort sizes, for unbalanced panels."""
+        data = generate_staggered_data(n_units=200, n_periods=10, n_cohorts=3, seed=42)
+
+        # Make panel unbalanced by dropping some observations from one cohort
+        # at specific time periods
+        cohorts = data.groupby("unit")["first_treat"].first()
+        first_cohort = sorted(cohorts[cohorts > 0].unique())[0]
+        units_in_first_cohort = cohorts[cohorts == first_cohort].index.tolist()
+
+        # Drop ~half the units from first cohort at the last time period
+        units_to_drop = units_in_first_cohort[: len(units_in_first_cohort) // 2]
+        max_time = data["time"].max()
+        drop_mask = data["unit"].isin(units_to_drop) & (data["time"] == max_time)
+        data_unbal = data[~drop_mask].copy()
+
+        sa = SunAbraham(n_bootstrap=0)
+        results = sa.fit(
+            data_unbal,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+        )
+
+        # Find an event-time where the dropped observations cause n_{g,e} != n_g
+        # The dropped units are from the first cohort at max_time
+        affected_e = max_time - first_cohort
+
+        assert affected_e in results.cohort_weights, (
+            f"Expected event-time {affected_e} in cohort_weights but not found"
+        )
+
+        weights = results.cohort_weights[affected_e]
+        # Verify weights use actual observation counts, not total cohort sizes
+        cohort_counts = {}
+        for g in weights.keys():
+            cohort_counts[g] = len(
+                data_unbal[
+                    (data_unbal["first_treat"] == g)
+                    & (data_unbal["time"] - data_unbal["first_treat"] == affected_e)
+                ]
+            )
+        total_count = sum(cohort_counts.values())
+        for g, w in weights.items():
+            expected_w = cohort_counts[g] / total_count
+            assert abs(w - expected_w) < 1e-10, (
+                f"Weight for cohort {g} at e={affected_e}: got {w}, expected {expected_w}"
+            )

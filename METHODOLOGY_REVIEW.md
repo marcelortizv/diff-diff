@@ -301,7 +301,7 @@ variables appear to the left of the `|` separator.
 - [x] Saturated TWFE regression with cohort × relative-time interactions
 - [x] Within-transformation for unit and time fixed effects
 - [x] Interaction-weighted event study effects (δ̂_e = Σ_g ŵ_{g,e} × δ̂_{g,e})
-- [x] IW weights match cohort unit shares (n_g / Σ_g n_g)
+- [x] IW weights match event-time sample shares (n_{g,e} / Σ_g n_{g,e})
 - [x] Overall ATT as weighted average of post-treatment effects
 - [x] Delta method SE for aggregated effects (Var = w' Σ w)
 - [x] Cluster-robust SEs at unit level
@@ -350,6 +350,12 @@ variables appear to the left of the `|` separator.
 5. **Warning for variance fallback path** (`sun_abraham.py`, `_compute_overall_att()`):
    Added `UserWarning` when the full weight vector cannot be constructed and a
    simplified variance (ignoring covariances between periods) is used as fallback.
+
+6. **IW weights use event-time sample shares** (`sun_abraham.py`, `_compute_iw_effects()`):
+   Changed IW weights from `n_g / Σ_g n_g` (cohort sizes) to `n_{g,e} / Σ_g n_{g,e}`
+   (per-event-time observation counts) to match the REGISTRY.md formula. For balanced
+   panels these are identical; for unbalanced panels the new formula correctly reflects
+   actual sample composition at each event-time. Added unbalanced panel test.
 
 **Outstanding Concerns:**
 - **Inference distribution**: Cohort-level p-values use t-distribution (via

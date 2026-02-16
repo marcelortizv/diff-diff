@@ -1123,6 +1123,61 @@ class TestSunAbrahamMethodology:
             f"Expected (NaN, NaN) overall_conf_int, got {results.overall_conf_int}"
         )
 
+    def test_no_post_effects_bootstrap_returns_nan(self, ci_params):
+        """Test that no post-treatment effects returns NaN even with bootstrap.
+
+        When there are no post-treatment periods, overall_att/se/t_stat/p_value/ci
+        should all be NaN. The bootstrap path must not overwrite NaN with non-NaN
+        values (regression test for P0 bug where _compute_bootstrap_pvalue returned
+        1/(B+1) instead of NaN when original_effect was NaN).
+        """
+        # Create data where all periods are pre-treatment
+        np.random.seed(42)
+        n_units = 40
+        n_periods = 6
+
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(n_periods), n_units)
+
+        # All treated units have first_treat at period 100 (well beyond data range)
+        first_treat = np.zeros(n_units)
+        first_treat[12:] = 100  # treated at period 100, but data only goes to period 5
+        first_treat_expanded = np.repeat(first_treat, n_periods)
+
+        unit_fe = np.repeat(np.random.randn(n_units), n_periods)
+        time_fe = np.tile(np.arange(n_periods) * 0.1, n_units)
+        outcomes = unit_fe + time_fe + np.random.randn(len(units)) * 0.3
+
+        data = pd.DataFrame({
+            "unit": units,
+            "time": times,
+            "outcome": outcomes,
+            "first_treat": first_treat_expanded.astype(int),
+        })
+
+        n_boot = ci_params.bootstrap(50)
+        sa = SunAbraham(n_bootstrap=n_boot, seed=42)
+        results = sa.fit(
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+        )
+
+        # All overall inference fields should be NaN
+        assert np.isnan(results.overall_att), (
+            f"Expected NaN overall_att, got {results.overall_att}"
+        )
+        assert np.isnan(results.overall_se), (
+            f"Expected NaN overall_se, got {results.overall_se}"
+        )
+        assert np.isnan(results.overall_t_stat), (
+            f"Expected NaN overall_t_stat, got {results.overall_t_stat}"
+        )
+        assert np.isnan(results.overall_p_value), (
+            f"Expected NaN overall_p_value with bootstrap, got {results.overall_p_value}"
+        )
+        assert np.isnan(results.overall_conf_int[0]) and np.isnan(results.overall_conf_int[1]), (
+            f"Expected (NaN, NaN) overall_conf_int, got {results.overall_conf_int}"
+        )
+
     def test_deprecated_min_pre_periods_warning(self):
         """Test that min_pre_periods emits FutureWarning (Step 5c)."""
         data = generate_staggered_data(seed=42)
@@ -1377,8 +1432,9 @@ class TestSunAbrahamMethodology:
             data.copy(), outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
-        # Re-encode never-treated from 0 to np.inf
+        # Re-encode never-treated from 0 to np.inf (cast to float first for pandas compat)
         data_inf = data.copy()
+        data_inf["first_treat"] = data_inf["first_treat"].astype(float)
         data_inf.loc[data_inf["first_treat"] == 0, "first_treat"] = np.inf
 
         results_inf = sa.fit(
@@ -1411,7 +1467,8 @@ class TestSunAbrahamMethodology:
     def test_all_never_treated_inf_raises(self):
         """Test that all-never-treated data with np.inf encoding raises ValueError."""
         data = generate_staggered_data(n_units=100, n_periods=10, n_cohorts=3, seed=42)
-        # Set ALL units to never-treated via np.inf
+        # Set ALL units to never-treated via np.inf (cast to float first for pandas compat)
+        data["first_treat"] = data["first_treat"].astype(float)
         data["first_treat"] = np.inf
 
         sa = SunAbraham(n_bootstrap=0)

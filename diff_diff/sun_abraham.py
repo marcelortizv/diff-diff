@@ -1144,11 +1144,16 @@ class SunAbraham:
             event_study_p_values[e] = p_value
 
         # Overall ATT statistics
-        overall_se = float(np.std(bootstrap_overall, ddof=1))
-        overall_ci = self._compute_percentile_ci(bootstrap_overall, self.alpha)
-        overall_p = self._compute_bootstrap_pvalue(
-            original_overall_att, bootstrap_overall
-        )
+        if not np.isfinite(original_overall_att):
+            overall_se = np.nan
+            overall_ci = (np.nan, np.nan)
+            overall_p = np.nan
+        else:
+            overall_se = float(np.std(bootstrap_overall, ddof=1))
+            overall_ci = self._compute_percentile_ci(bootstrap_overall, self.alpha)
+            overall_p = self._compute_bootstrap_pvalue(
+                original_overall_att, bootstrap_overall
+            )
 
         return SABootstrapResults(
             n_bootstrap=self.n_bootstrap,

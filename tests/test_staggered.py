@@ -111,8 +111,9 @@ class TestCallawaySantAnna:
             data.copy(), outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
-        # Re-encode never-treated from 0 to np.inf
+        # Re-encode never-treated from 0 to np.inf (cast to float first for pandas compat)
         data_inf = data.copy()
+        data_inf["first_treat"] = data_inf["first_treat"].astype(float)
         data_inf.loc[data_inf["first_treat"] == 0, "first_treat"] = np.inf
 
         results_inf = cs.fit(

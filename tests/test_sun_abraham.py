@@ -1195,32 +1195,45 @@ class TestSunAbrahamMethodology:
         After fitting, the internal LinearRegression's df_ should account for
         absorbed unit and time fixed effects.
         """
+        from unittest.mock import patch
+        from diff_diff.linalg import LinearRegression
+
         data = generate_staggered_data(n_units=100, n_periods=8, seed=42)
+        captured_df = {}
+
+        original_fit = LinearRegression.fit
+
+        # Wraps LinearRegression.fit as an unbound method replacement.
+        # self_reg is the LinearRegression instance (not the test class self).
+        # SunAbraham currently calls LinearRegression.fit exactly once in
+        # _fit_saturated_regression(); if that changes, this test captures only
+        # the last call's state.
+        def capturing_fit(self_reg, X, y, **kwargs):
+            result = original_fit(self_reg, X, y, **kwargs)
+            captured_df['df'] = self_reg.df_
+            captured_df['n_obs'] = self_reg.n_obs_
+            captured_df['n_params_effective'] = self_reg.n_params_effective_
+            captured_df['df_adjustment'] = kwargs.get('df_adjustment', 0)
+            return result
 
         sa = SunAbraham(n_bootstrap=0)
-        results = sa.fit(
-            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
-        )
+        with patch.object(LinearRegression, 'fit', capturing_fit):
+            results = sa.fit(data, outcome="outcome", unit="unit",
+                            time="time", first_treat="first_treat")
 
-        # Compute expected values
-        n_obs = len(data)
+        # Verify df_adjustment was passed and applied
         n_units = data["unit"].nunique()
         n_times = data["time"].nunique()
-        n_groups = len(results.groups)
-        n_event_times = len(results.event_study_effects)
-        # Reference period is excluded, so n_event_times covers non-reference periods
-        # The actual number of coefficients is len(coef_index_map) which we can't
-        # access directly, but we can verify the df is reduced by unit+time FE
+        expected_df_adj = n_units + n_times - 1
 
-        # The overall ATT and SE should be finite and positive (regression succeeded)
-        assert np.isfinite(results.overall_att), "ATT should be finite"
-        assert np.isfinite(results.overall_se) and results.overall_se > 0, "SE should be positive"
-
-        # The df_adjustment should reduce the regression degrees of freedom
-        # by (n_units + n_times - 2). We verify this indirectly by checking
-        # that p-values and CIs differ from what we'd get without the adjustment.
-        # With the adjustment, SEs should be slightly larger (fewer DoF).
-        assert results.overall_p_value > 0, "P-value should be positive (test feasibility)"
+        assert captured_df['df_adjustment'] == expected_df_adj, (
+            f"Expected df_adjustment={expected_df_adj}, got {captured_df['df_adjustment']}"
+        )
+        expected_df = captured_df['n_obs'] - captured_df['n_params_effective'] - expected_df_adj
+        assert captured_df['df'] == expected_df, (
+            f"Expected df={expected_df}, got {captured_df['df']}"
+        )
+        assert captured_df['df'] > 0, "Regression df must be positive"
 
     def test_variance_fallback_warning(self):
         """Test that the variance fallback path emits a warning (Step 5e).

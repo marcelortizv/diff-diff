@@ -326,10 +326,12 @@ variables appear to the left of the `|` separator.
 
 **Corrections Made:**
 1. **DF adjustment for absorbed FE** (`sun_abraham.py`, `_fit_saturated_regression()`):
-   Added `df_adjustment = n_units + n_times - 2` to `LinearRegression.fit()` to account
-   for absorbed unit and time fixed effects in degrees of freedom. This matches the
-   TWFE approach at `twfe.py:152-169`. Affects t-distribution DoF for cohort-level
-   p-values/CIs but does NOT change VCV or SE values.
+   Added `df_adjustment = n_units + n_times - 1` to `LinearRegression.fit()` to account
+   for absorbed unit and time fixed effects in degrees of freedom. Unlike TWFE (which uses
+   `-2` plus an explicit intercept column), SunAbraham's saturated regression has no
+   intercept, so all absorbed df must come from the adjustment. Affects t-distribution DoF
+   for cohort-level p-values/CIs (slightly larger p-values, slightly wider CIs) but does
+   NOT change VCV or SE values.
 
 2. **NaN return for no post-treatment effects** (`sun_abraham.py`, `_compute_overall_att()`):
    Changed return from `(0.0, 0.0)` to `(np.nan, np.nan)` when no post-treatment effects

@@ -785,7 +785,7 @@ class SunAbraham:
         # Degrees of freedom adjustment for absorbed unit and time fixed effects
         n_units_fe = df[unit].nunique()
         n_times_fe = df[time].nunique()
-        df_adj = n_units_fe + n_times_fe - 2
+        df_adj = n_units_fe + n_times_fe - 1
 
         reg = LinearRegression(
             include_intercept=False,  # Already demeaned, no intercept needed

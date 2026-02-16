@@ -65,9 +65,9 @@ If "Run a review now" is chosen:
   2. Read the plan file at: <plan-path>
   3. Follow the review instructions: read CLAUDE.md for project context, read referenced files, evaluate across 8 dimensions, present structured feedback
   4. Number each issue sequentially within its severity section (CRITICAL #1, MEDIUM #1, etc.)
-  5. Return the COMPLETE structured review output (from "## Overall Assessment" through "## Summary")
+  5. Return ONLY the structured review output (from "## Overall Assessment" through "## Summary"). Do NOT include the "## Plan Content" display (Step 4b) — it is for terminal display only and must not be persisted to the review file.
   ```
-- Save the agent's output to the review file path with YAML frontmatter (see `.claude/commands/review-plan.md` Step 6 for format)
+- Save the agent's review output (from "## Overall Assessment" through "## Summary") to the review file path with YAML frontmatter (see `.claude/commands/review-plan.md` Step 6 for format). Do not include plan content in the review file.
 - Write the plan path to `~/.claude/plans/.last-reviewed`
 - Proceed to Step 3 with the review content
 

@@ -674,12 +674,12 @@ If review is requested:
 1. **Spawn review agent**: Use the Task tool with `subagent_type: "general-purpose"`. Prompt the agent to:
    - Read `.claude/commands/review-plan.md` and follow its Steps 2 through 5
    - Review the plan file at the current plan path
-   - Return the complete structured review output
+   - Return ONLY the structured review output (from "## Overall Assessment" through "## Summary") — do not include the "## Plan Content" display
    Do NOT specify a model — let the agent inherit the current model for review quality.
 
-2. **Display the review agent's output** in the conversation. The output includes the plan content (via Step 4b of review-plan.md) followed by the structured review. The user reads both here in the terminal — this is the primary reading surface.
+2. **Display the review agent's output** in the conversation, preceded by the plan content (display the plan yourself for terminal reading). The user reads both here in the terminal — this is the primary reading surface.
 
-3. **Save to file**: Ensure `~/.claude/plans` exists (`mkdir -p`) before writing. Write the review to `~/.claude/plans/<plan-basename>.review.md`, with YAML frontmatter (plan path, timestamp, verdict, issue counts). Also write the plan path to `~/.claude/plans/.last-reviewed`. If the review file write fails, report an error and stop — the hook requires this file. If the sentinel write fails, warn but continue (the hook falls back to `ls -t`).
+3. **Save to file**: Ensure `~/.claude/plans` exists (`mkdir -p`) before writing. Write the review output (from "## Overall Assessment" through "## Summary") to `~/.claude/plans/<plan-basename>.review.md`, with YAML frontmatter (plan path, timestamp, verdict, issue counts). Also write the plan path to `~/.claude/plans/.last-reviewed`. If the review file write fails, report an error and stop — the hook requires this file. If the sentinel write fails, warn but continue (the hook falls back to `ls -t`).
 
 4. **Collect feedback**: Use `AskUserQuestion`:
    - "Address all issues and re-review" (Recommended)

@@ -44,7 +44,7 @@ Options:
 - **Read-only for project files**: Do NOT create, edit, or delete any project files (source code, tests, documentation, configuration). The only files this skill writes are the review output (`~/.claude/plans/<plan-stem>.review.md`) and the sentinel (`~/.claude/plans/.last-reviewed`), both in `~/.claude/plans/`.
 - **Advisory-only**: Provide feedback and recommendations. Do not implement fixes.
 - **No code changes**: Do not modify any source code, test files, or documentation.
-- Use the Read tool for files and the Glob/Grep tools for searching. Do not use Edit, NotebookEdit, or file-modifying Bash commands. The Write tool may only be used for the review output file and sentinel.
+- Use the Read tool for files and the Glob/Grep tools for searching. Do not use Edit, NotebookEdit, or file-modifying Bash commands on project files. The Write tool and `mkdir -p` may only target `~/.claude/plans/` (for the review output file, sentinel, and output directory).
 - The `gh api` calls used with `--pr` are read-only API requests, consistent with the project-files read-only constraint.
 
 ## Instructions

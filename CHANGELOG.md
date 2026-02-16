@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-02-16
+
+### Added
+- **Gardner (2022) Two-Stage DiD estimator** (`TwoStageDiD`)
+  - Two-stage estimator: (1) estimate unit+time FE on untreated obs, (2) regress residualized outcomes on treatment indicators
+  - `TwoStageDiDResults` with overall ATT, event study, group effects, per-observation treatment effects
+  - `TwoStageBootstrapResults` for multiplier bootstrap inference on GMM influence function
+  - `two_stage_did()` convenience function for quick estimation
+  - Point estimates identical to ImputationDiD; different variance estimator (GMM sandwich vs. conservative)
+  - No finite-sample adjustments (raw asymptotic sandwich, matching R `did2s`)
+- Proposition 5 detection for unidentified long-run horizons without never-treated units
+
+### Changed
+- Workflow improvements to reduce PR review rounds
+
+### Fixed
+- Zero-observation horizons/cohorts producing se=0 instead of NaN in TwoStageDiD
+- Edge case fixes for TwoStageDiD (PR review feedback)
+- Grep PCRE patterns updated to use POSIX character classes
+
 ## [2.3.2] - 2026-02-16
 
 ### Added
@@ -719,6 +739,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.4.0]: https://github.com/igerber/diff-diff/compare/v2.3.2...v2.4.0
 [2.3.2]: https://github.com/igerber/diff-diff/compare/v2.3.1...v2.3.2
 [2.3.1]: https://github.com/igerber/diff-diff/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/igerber/diff-diff/compare/v2.2.1...v2.3.0

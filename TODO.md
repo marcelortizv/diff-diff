@@ -25,10 +25,10 @@ Target: < 1000 lines per module for maintainability.
 |------|-------|--------|
 | ~~`staggered.py`~~ | ~~2301~~ 1120 | ✅ Split into staggered.py, staggered_bootstrap.py, staggered_aggregation.py, staggered_results.py |
 | ~~`prep.py`~~ | ~~1993~~ 1241 | ✅ Split: DGP functions moved to `prep_dgp.py` (777 lines) |
-| `trop.py` | 2904 | **Needs split** -- nearly 3x the 1000-line target |
-| `imputation.py` | 2480 | **Needs split** -- results, bootstrap, aggregation like staggered |
-| `two_stage.py` | 2209 | **Needs split** -- same pattern as imputation |
-| `utils.py` | 1879 | **Needs split** -- legacy placebo functions could move to diagnostics |
+| ~~`trop.py`~~ | ~~2904~~ ~2560 | ✅ Partially split: results extracted to `trop_results.py` (~340 lines) |
+| ~~`imputation.py`~~ | ~~2480~~ ~1740 | ✅ Split into imputation.py, imputation_results.py, imputation_bootstrap.py |
+| ~~`two_stage.py`~~ | ~~2209~~ ~1490 | ✅ Split into two_stage.py, two_stage_results.py, two_stage_bootstrap.py |
+| `utils.py` | 1879 | Monitor -- legacy placebo functions stay to avoid circular imports |
 | `visualization.py` | 1678 | Monitor -- growing but cohesive |
 | `linalg.py` | 1537 | Monitor -- unified backend, splitting would hurt cohesion |
 | `honest_did.py` | 1511 | Acceptable |
@@ -42,49 +42,11 @@ Target: < 1000 lines per module for maintainability.
 
 All 7 t_stat locations fixed (diagnostics.py, sun_abraham.py, triple_diff.py) -- all now use `np.nan` or `np.isfinite()` guards. Fixed in PR #118 and follow-up PRs.
 
-**Remaining nuance**: `diagnostics.py:785` still has `se = ... else 0.0` for the SE variable itself (not t_stat). The downstream t_stat line correctly returns `np.nan`, so inference is safe, but the SE value of 0.0 is technically incorrect for an undefined SE.
+~~**Remaining nuance**: `diagnostics.py:785` SE = 0.0~~ — ✅ Fixed: SE now returns `np.nan` when undefined, and all downstream inference uses `safe_inference()`.
 
-### Migrate Existing Inference Call Sites to `safe_inference()`
+### ~~Migrate Existing Inference Call Sites to `safe_inference()`~~ -- DONE
 
-`safe_inference()` was added to `diff_diff/utils.py` to compute t_stat, p_value, and CI together with a NaN gate at the top. It is now the prescribed pattern for all new code (see CLAUDE.md design pattern #7). However, ~26 existing inline inference computations across 12 files have **not** been migrated yet.
-
-**Files with inline inference to migrate:**
-
-| File | Approx. Locations |
-|------|-------------------|
-| `estimators.py` | 2 (lines 1038, 1089) |
-| `sun_abraham.py` | 4 (lines 621, 644, 661, 905) |
-| `staggered.py` | 6 (lines 696, 725, 763, 777, 792, 806) |
-| `staggered_aggregation.py` | 2 (lines 407, 479) |
-| `triple_diff.py` | 1 (line 601) |
-| `imputation.py` | 2 (lines 1806, 1927) |
-| `two_stage.py` | 2 (lines 1325, 1431) |
-| `diagnostics.py` | 2 (lines 665, 786) |
-| `synthetic_did.py` | 1 (line 426) |
-| `trop.py` | 2 (lines 1474, 2054) |
-| `utils.py` | 1 (line 641) |
-| `linalg.py` | 1 (line 1310) |
-
-**How to find them:**
-```bash
-grep -En "(t_stat|overall_t)\s*=\s*[^#]*/|\[.t_stat.\]\s*=\s*[^#]*/" diff_diff/*.py | grep -v "def safe_inference"
-```
-
-**Note**: This command has one false positive (`utils.py:178`, inside the `safe_inference()` body) and misses multi-line expressions (e.g., `sun_abraham.py:660-661`). The table above is the authoritative list.
-
-**Migration pattern:**
-```python
-# Before (inline, error-prone)
-t_stat = effect / se if se > 0 else 0.0
-p_value = compute_p_value(t_stat)
-ci = compute_confidence_interval(effect, se, alpha)
-
-# After (NaN-safe, consistent)
-from diff_diff.utils import safe_inference
-t_stat, p_value, ci = safe_inference(effect, se, alpha=alpha, df=df)
-```
-
-**Priority**: Medium — the NaN-handling table above covers the worst cases (those using `0.0`). The remaining sites may use partial guards but should still be migrated for consistency and to prevent regressions.
+✅ All ~32 inline inference call sites migrated to `safe_inference()` across 11 source files: `estimators.py`, `sun_abraham.py`, `staggered.py`, `staggered_aggregation.py`, `triple_diff.py`, `imputation.py`, `two_stage.py`, `diagnostics.py`, `synthetic_did.py`, `trop.py`, `utils.py`. Two sites left as-is with comments: `diagnostics.py:665` (permutation-based p_value) and `linalg.py:1310` (deliberately uses ±inf for zero-SE).
 
 ---
 
@@ -96,17 +58,17 @@ Deferred items from PR reviews that were not addressed before merge.
 
 | Issue | Location | PR | Priority |
 |-------|----------|----|----------|
-| TwoStageDiD & ImputationDiD bootstrap hardcodes Rademacher only; no `bootstrap_weights` parameter unlike CallawaySantAnna | `two_stage.py:1860`, `imputation.py:2363` | #156, #141 | Medium |
-| TwoStageDiD GMM score logic duplicated between analytic/bootstrap with inconsistent NaN/overflow handling | `two_stage.py:1454-1784` | #156 | Medium |
-| ImputationDiD weight construction duplicated between aggregation and bootstrap (drift risk) -- has explicit code comment acknowledging duplication | `imputation.py:1777-1786`, `imputation.py:2216-2221` | #141 | Medium |
-| ImputationDiD dense `(A0'A0).toarray()` scales O((U+T+K)^2), OOM risk on large panels | `imputation.py:1564` | #141 | Medium |
+| TwoStageDiD & ImputationDiD bootstrap hardcodes Rademacher only; no `bootstrap_weights` parameter unlike CallawaySantAnna | `two_stage_bootstrap.py`, `imputation_bootstrap.py` | #156, #141 | Medium |
+| TwoStageDiD GMM score logic duplicated between analytic/bootstrap with inconsistent NaN/overflow handling | `two_stage.py`, `two_stage_bootstrap.py` | #156 | Medium |
+| ImputationDiD weight construction duplicated between aggregation and bootstrap (drift risk) -- has explicit code comment acknowledging duplication | `imputation.py`, `imputation_bootstrap.py` | #141 | Medium |
+| ImputationDiD dense `(A0'A0).toarray()` scales O((U+T+K)^2), OOM risk on large panels | `imputation.py` | #141 | Medium |
 
 #### Performance
 
 | Issue | Location | PR | Priority |
 |-------|----------|----|----------|
-| TwoStageDiD per-column `.toarray()` in loop for cluster scores | `two_stage.py:1766-1767` | #156 | Medium |
-| ImputationDiD event-study SEs recompute full conservative variance per horizon (should cache A0/A1 factorization) | `imputation.py:1772-1804` | #141 | Low |
+| TwoStageDiD per-column `.toarray()` in loop for cluster scores | `two_stage_bootstrap.py` | #156 | Medium |
+| ImputationDiD event-study SEs recompute full conservative variance per horizon (should cache A0/A1 factorization) | `imputation.py` | #141 | Low |
 | Legacy `compute_placebo_effects` uses deprecated projected-gradient weights (marked deprecated, users directed to `SyntheticDiD`) | `utils.py:1689-1691` | #145 | Low |
 | Rust faer SVD ndarray-to-faer conversion overhead (minimal vs SVD cost) | `rust/src/linalg.rs:67` | #115 | Low |
 
@@ -115,7 +77,7 @@ Deferred items from PR reviews that were not addressed before merge.
 | Issue | Location | PR | Priority |
 |-------|----------|----|----------|
 | Tutorial notebooks not executed in CI | `docs/tutorials/*.ipynb` | #159 | Low |
-| TwoStageDiD `test_nan_propagation` is a no-op (only `pass`) | `tests/test_two_stage.py:643-652` | #156 | Low |
+| ~~TwoStageDiD `test_nan_propagation` is a no-op~~ | ~~`tests/test_two_stage.py:643-652`~~ | ~~#156~~ | ✅ Fixed |
 | ImputationDiD bootstrap + covariate path untested | `tests/test_imputation.py` | #141 | Low |
 | TROP `n_bootstrap >= 2` validation missing (can yield 0/NaN SE silently) | `trop.py:462` | #124 | Low |
 | SunAbraham deprecated `min_pre_periods`/`min_post_periods` still in `fit()` docstring | `sun_abraham.py:458-487` | #153 | Low |
@@ -209,19 +171,9 @@ Spurious RuntimeWarnings ("divide by zero", "overflow", "invalid value") are emi
   - Occurs in IPW and DR estimation methods with covariates
   - Related to logistic regression overflow in edge cases (separate from BLAS bug)
 
-### Fix Plan (follow-up PR)
+### ~~Fix Plan (follow-up PR)~~ -- DONE
 
-Replace `@` operator with `np.dot()` at affected call sites. `np.dot()` bypasses the ufunc FPE dispatch layer and produces identical results with zero spurious warnings on M4.
-
-**Affected files and lines:**
-- `linalg.py`: 332, 690, 704, 829, 1463
-- `staggered.py`: 78, 85, 102, 860, 1024-1025
-- `triple_diff.py`: 301, 307, 323
-- `utils.py`: 515
-- `imputation.py`: 1253, 1301, 1602, 1662
-- `trop.py`: 1098
-
-**Regression test:** Assert no RuntimeWarnings from `solve_ols()` with n ≥ 500 on all platforms.
+✅ Replaced `@` operator with `np.dot()` at all 19 affected call sites across 6 files: `linalg.py` (5), `staggered.py` (5), `triple_diff.py` (3), `utils.py` (1), `imputation.py` (4), `trop.py` (1). Regression test added in `test_linalg.py::TestNoDotRuntimeWarnings`.
 
 **Long-term:** Revert to `@` operator when numpy ≥ 2.3 becomes the minimum supported version.
 

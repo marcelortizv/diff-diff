@@ -27,9 +27,8 @@ from diff_diff.linalg import (
 from diff_diff.results import DiDResults, MultiPeriodDiDResults, PeriodEffect
 from diff_diff.utils import (
     WildBootstrapResults,
-    compute_confidence_interval,
-    compute_p_value,
     demean_by_group,
+    safe_inference,
     validate_binary,
     wild_bootstrap_se,
 )
@@ -1034,14 +1033,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
             idx = interaction_indices[period]
             effect = coefficients[idx]
             se = np.sqrt(vcov[idx, idx])
-            if np.isfinite(se) and se > 0:
-                t_stat = effect / se
-                p_value = compute_p_value(t_stat, df=df)
-                conf_int = compute_confidence_interval(effect, se, self.alpha, df=df)
-            else:
-                t_stat = np.nan
-                p_value = np.nan
-                conf_int = (np.nan, np.nan)
+            t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha, df=df)
 
             period_effects[period] = PeriodEffect(
                 period=period,
@@ -1085,15 +1077,9 @@ class MultiPeriodDiD(DifferenceInDifferences):
                 avg_conf_int = (np.nan, np.nan)
             else:
                 avg_se = float(np.sqrt(avg_var))
-                if np.isfinite(avg_se) and avg_se > 0:
-                    avg_t_stat = avg_att / avg_se
-                    avg_p_value = compute_p_value(avg_t_stat, df=df)
-                    avg_conf_int = compute_confidence_interval(avg_att, avg_se, self.alpha, df=df)
-                else:
-                    # Zero SE (degenerate case)
-                    avg_t_stat = np.nan
-                    avg_p_value = np.nan
-                    avg_conf_int = (np.nan, np.nan)
+                avg_t_stat, avg_p_value, avg_conf_int = safe_inference(
+                    avg_att, avg_se, alpha=self.alpha, df=df
+                )
 
         # Count observations
         n_treated = int(np.sum(d))

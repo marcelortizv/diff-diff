@@ -19,7 +19,7 @@ import pandas as pd
 
 from diff_diff.estimators import DifferenceInDifferences
 from diff_diff.results import _get_significance_stars
-from diff_diff.utils import compute_confidence_interval, compute_p_value
+from diff_diff.utils import safe_inference
 
 
 @dataclass
@@ -661,7 +661,7 @@ def permutation_test(
     ci_lower = np.percentile(valid_effects, alpha / 2 * 100)
     ci_upper = np.percentile(valid_effects, (1 - alpha / 2) * 100)
 
-    # T-stat from original estimate
+    # NOTE: Not using safe_inference — p_value is permutation-based, CI is percentile-based.
     t_stat = original_att / se if np.isfinite(se) and se > 0 else np.nan
 
     return PlaceboTestResults(
@@ -782,15 +782,9 @@ def leave_one_out_test(
 
     # Statistics of LOO distribution
     mean_effect = np.mean(valid_effects)
-    se = np.std(valid_effects, ddof=1) if len(valid_effects) > 1 else 0.0
-    t_stat = mean_effect / se if np.isfinite(se) and se > 0 else np.nan
-
-    # Use t-distribution for p-value
+    se = np.std(valid_effects, ddof=1) if len(valid_effects) > 1 else np.nan
     df = len(valid_effects) - 1 if len(valid_effects) > 1 else 1
-    p_value = compute_p_value(t_stat, df=df)
-
-    # CI
-    conf_int = compute_confidence_interval(mean_effect, se, alpha, df=df) if np.isfinite(se) and se > 0 else (np.nan, np.nan)
+    t_stat, p_value, conf_int = safe_inference(mean_effect, se, alpha=alpha, df=df)
 
     return PlaceboTestResults(
         test_type="leave_one_out",

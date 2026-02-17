@@ -103,22 +103,35 @@ cross-platform compilation - no OpenBLAS or Intel MKL installation required.
 
 - **`diff_diff/imputation.py`** - Borusyak-Jaravel-Spiess imputation DiD estimator:
   - `ImputationDiD` - Borusyak et al. (2024) efficient imputation estimator for staggered DiD
-  - `ImputationDiDResults` - Results with overall ATT, event study, group effects, pre-trend test
-  - `ImputationBootstrapResults` - Multiplier bootstrap inference results
   - `imputation_did()` - Convenience function
   - Steps: (1) OLS on untreated obs for unit+time FE, (2) impute counterfactual Y(0), (3) aggregate
   - Conservative variance (Theorem 3) with `aux_partition` parameter for SE tightness
   - Pre-trend test (Equation 9) via `results.pretrend_test()`
   - Proposition 5: NaN for unidentified long-run horizons without never-treated units
+  - Re-exports result and bootstrap classes for backward compatibility
+
+- **`diff_diff/imputation_results.py`** - Result container classes:
+  - `ImputationBootstrapResults` - Multiplier bootstrap inference results
+  - `ImputationDiDResults` - Results with overall ATT, event study, group effects, pre-trend test
+
+- **`diff_diff/imputation_bootstrap.py`** - Bootstrap inference:
+  - `ImputationDiDBootstrapMixin` - Mixin with multiplier bootstrap methods
+  - Cluster-level influence function sums (Theorem 3) with Rademacher weights
 
 - **`diff_diff/two_stage.py`** - Gardner (2022) Two-Stage DiD estimator:
   - `TwoStageDiD` - Two-stage estimator: (1) estimate unit+time FE on untreated obs, (2) regress residualized outcomes on treatment indicators
-  - `TwoStageDiDResults` - Results with overall ATT, event study, group effects, per-observation treatment effects
-  - `TwoStageBootstrapResults` - Multiplier bootstrap inference on GMM influence function
   - `two_stage_did()` - Convenience function
   - Point estimates identical to ImputationDiD; different variance estimator (GMM sandwich vs. conservative)
   - Custom `_compute_gmm_variance()` — cannot reuse `compute_robust_vcov()` because correction term uses GLOBAL cross-moment
   - No finite-sample adjustments (raw asymptotic sandwich, matching R `did2s`)
+  - Re-exports result and bootstrap classes for backward compatibility
+
+- **`diff_diff/two_stage_results.py`** - Result container classes:
+  - `TwoStageBootstrapResults` - Multiplier bootstrap inference on GMM influence function
+  - `TwoStageDiDResults` - Results with overall ATT, event study, group effects, per-observation treatment effects
+
+- **`diff_diff/two_stage_bootstrap.py`** - Bootstrap inference:
+  - `TwoStageDiDBootstrapMixin` - Mixin with GMM influence function bootstrap methods
 
 - **`diff_diff/triple_diff.py`** - Triple Difference (DDD) estimator:
   - `TripleDifference` - Ortiz-Villavicencio & Sant'Anna (2025) estimator for DDD designs
@@ -129,7 +142,6 @@ cross-platform compilation - no OpenBLAS or Intel MKL installation required.
 
 - **`diff_diff/trop.py`** - Triply Robust Panel (TROP) estimator (v2.1.0):
   - `TROP` - Athey, Imbens, Qu & Viviano (2025) estimator with factor model adjustment
-  - `TROPResults` - Results with ATT, factors, loadings, unit/time weights
   - `trop()` - Convenience function for quick estimation
   - Three robustness components: factor adjustment, unit weights, time weights
   - Two estimation methods via `method` parameter:
@@ -137,6 +149,12 @@ cross-platform compilation - no OpenBLAS or Intel MKL installation required.
     - `"joint"`: Weighted least squares with homogeneous treatment effect (faster)
   - Automatic rank selection via cross-validation, information criterion, or elbow detection
   - Bootstrap and placebo-based variance estimation
+  - Re-exports result classes for backward compatibility
+
+- **`diff_diff/trop_results.py`** - Result container classes:
+  - `_LAMBDA_INF` - Sentinel value for disabled factor model (λ_nn=∞)
+  - `_PrecomputedStructures` - TypedDict for cached matrices
+  - `TROPResults` - Results with ATT, factors, loadings, unit/time weights
 
 - **`diff_diff/bacon.py`** - Goodman-Bacon decomposition for TWFE diagnostics:
   - `BaconDecomposition` - Decompose TWFE into weighted 2x2 comparisons (Goodman-Bacon 2021)

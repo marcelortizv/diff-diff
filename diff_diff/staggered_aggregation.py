@@ -10,10 +10,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import numpy as np
 import pandas as pd
 
-from diff_diff.utils import (
-    compute_confidence_interval,
-    compute_p_value,
-)
+from diff_diff.utils import safe_inference
 
 # Type alias for pre-computed structures (defined at module scope for runtime access)
 PrecomputedData = Dict[str, Any]
@@ -404,9 +401,7 @@ class CallawaySantAnnaAggregationMixin:
                 gt_pairs, weights, influence_func_info
             )
 
-            t_stat = agg_effect / agg_se if np.isfinite(agg_se) and agg_se > 0 else np.nan
-            p_val = compute_p_value(t_stat)
-            ci = compute_confidence_interval(agg_effect, agg_se, self.alpha)
+            t_stat, p_val, ci = safe_inference(agg_effect, agg_se, alpha=self.alpha)
 
             event_study_effects[e] = {
                 'effect': agg_effect,
@@ -476,9 +471,7 @@ class CallawaySantAnnaAggregationMixin:
                 gt_pairs, weights, influence_func_info
             )
 
-            t_stat = agg_effect / agg_se if np.isfinite(agg_se) and agg_se > 0 else np.nan
-            p_val = compute_p_value(t_stat)
-            ci = compute_confidence_interval(agg_effect, agg_se, self.alpha)
+            t_stat, p_val, ci = safe_inference(agg_effect, agg_se, alpha=self.alpha)
 
             group_effects[g] = {
                 'effect': agg_effect,

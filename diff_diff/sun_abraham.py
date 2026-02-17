@@ -19,8 +19,7 @@ import pandas as pd
 from diff_diff.linalg import LinearRegression, compute_robust_vcov
 from diff_diff.results import _get_significance_stars
 from diff_diff.utils import (
-    compute_confidence_interval,
-    compute_p_value,
+    safe_inference,
     within_transform as _within_transform_util,
 )
 
@@ -618,9 +617,7 @@ class SunAbraham:
             coef_index_map,
         )
 
-        overall_t = overall_att / overall_se if np.isfinite(overall_se) and overall_se > 0 else np.nan
-        overall_p = compute_p_value(overall_t)
-        overall_ci = compute_confidence_interval(overall_att, overall_se, self.alpha) if np.isfinite(overall_se) and overall_se > 0 else (np.nan, np.nan)
+        overall_t, overall_p, overall_ci = safe_inference(overall_att, overall_se, alpha=self.alpha)
 
         # Run bootstrap if requested
         bootstrap_results = None
@@ -641,7 +638,7 @@ class SunAbraham:
 
             # Update results with bootstrap inference
             overall_se = bootstrap_results.overall_att_se
-            overall_t = overall_att / overall_se if np.isfinite(overall_se) and overall_se > 0 else np.nan
+            overall_t = safe_inference(overall_att, overall_se, alpha=self.alpha)[0]
             overall_p = bootstrap_results.overall_att_p_value
             overall_ci = bootstrap_results.overall_att_ci
 
@@ -657,9 +654,9 @@ class SunAbraham:
                     )
                     eff_val = event_study_effects[e]["effect"]
                     se_val = event_study_effects[e]["se"]
-                    event_study_effects[e]["t_stat"] = (
-                        eff_val / se_val if np.isfinite(se_val) and se_val > 0 else np.nan
-                    )
+                    event_study_effects[e]["t_stat"] = safe_inference(
+                        eff_val, se_val, alpha=self.alpha
+                    )[0]
 
         # Convert cohort effects to storage format
         cohort_effects_storage: Dict[Tuple[Any, int], Dict[str, Any]] = {}
@@ -902,9 +899,7 @@ class SunAbraham:
             agg_var = float(weight_vec @ vcov_subset @ weight_vec)
             agg_se = np.sqrt(max(agg_var, 0))
 
-            t_stat = agg_effect / agg_se if np.isfinite(agg_se) and agg_se > 0 else np.nan
-            p_val = compute_p_value(t_stat)
-            ci = compute_confidence_interval(agg_effect, agg_se, self.alpha) if np.isfinite(agg_se) and agg_se > 0 else (np.nan, np.nan)
+            t_stat, p_val, ci = safe_inference(agg_effect, agg_se, alpha=self.alpha)
 
             event_study_effects[e] = {
                 "effect": agg_effect,

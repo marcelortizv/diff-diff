@@ -15,7 +15,6 @@ Inference uses the conservative clustered variance estimator (Theorem 3).
 """
 
 import warnings
-from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
@@ -23,420 +22,11 @@ import pandas as pd
 from scipy import sparse, stats
 from scipy.sparse.linalg import spsolve
 
+from diff_diff.imputation_bootstrap import ImputationDiDBootstrapMixin
+from diff_diff.imputation_results import ImputationBootstrapResults, ImputationDiDResults  # noqa: F401 (re-export)
 from diff_diff.linalg import solve_ols
-from diff_diff.results import _get_significance_stars
-from diff_diff.utils import compute_confidence_interval, compute_p_value
+from diff_diff.utils import safe_inference
 
-# =============================================================================
-# Results Dataclasses
-# =============================================================================
-
-
-@dataclass
-class ImputationBootstrapResults:
-    """
-    Results from ImputationDiD bootstrap inference.
-
-    Bootstrap is a library extension beyond Borusyak et al. (2024), which
-    proposes only analytical inference via the conservative variance estimator.
-    Provided for consistency with CallawaySantAnna and SunAbraham.
-
-    Attributes
-    ----------
-    n_bootstrap : int
-        Number of bootstrap iterations.
-    weight_type : str
-        Type of bootstrap weights (currently "rademacher" only).
-    alpha : float
-        Significance level used for confidence intervals.
-    overall_att_se : float
-        Bootstrap standard error for overall ATT.
-    overall_att_ci : tuple
-        Bootstrap confidence interval for overall ATT.
-    overall_att_p_value : float
-        Bootstrap p-value for overall ATT.
-    event_study_ses : dict, optional
-        Bootstrap SEs for event study effects.
-    event_study_cis : dict, optional
-        Bootstrap CIs for event study effects.
-    event_study_p_values : dict, optional
-        Bootstrap p-values for event study effects.
-    group_ses : dict, optional
-        Bootstrap SEs for group effects.
-    group_cis : dict, optional
-        Bootstrap CIs for group effects.
-    group_p_values : dict, optional
-        Bootstrap p-values for group effects.
-    bootstrap_distribution : np.ndarray, optional
-        Full bootstrap distribution of overall ATT.
-    """
-
-    n_bootstrap: int
-    weight_type: str
-    alpha: float
-    overall_att_se: float
-    overall_att_ci: Tuple[float, float]
-    overall_att_p_value: float
-    event_study_ses: Optional[Dict[int, float]] = None
-    event_study_cis: Optional[Dict[int, Tuple[float, float]]] = None
-    event_study_p_values: Optional[Dict[int, float]] = None
-    group_ses: Optional[Dict[Any, float]] = None
-    group_cis: Optional[Dict[Any, Tuple[float, float]]] = None
-    group_p_values: Optional[Dict[Any, float]] = None
-    bootstrap_distribution: Optional[np.ndarray] = field(default=None, repr=False)
-
-
-@dataclass
-class ImputationDiDResults:
-    """
-    Results from Borusyak-Jaravel-Spiess (2024) imputation DiD estimation.
-
-    Attributes
-    ----------
-    treatment_effects : pd.DataFrame
-        Unit-level treatment effects with columns: unit, time, tau_hat, weight.
-    overall_att : float
-        Overall average treatment effect on the treated.
-    overall_se : float
-        Standard error of overall ATT.
-    overall_t_stat : float
-        T-statistic for overall ATT.
-    overall_p_value : float
-        P-value for overall ATT.
-    overall_conf_int : tuple
-        Confidence interval for overall ATT.
-    event_study_effects : dict, optional
-        Dictionary mapping relative time h to effect dict with keys:
-        'effect', 'se', 't_stat', 'p_value', 'conf_int', 'n_obs'.
-    group_effects : dict, optional
-        Dictionary mapping cohort g to effect dict.
-    groups : list
-        List of treatment cohorts.
-    time_periods : list
-        List of all time periods.
-    n_obs : int
-        Total number of observations.
-    n_treated_obs : int
-        Number of treated observations (|Omega_1|).
-    n_untreated_obs : int
-        Number of untreated observations (|Omega_0|).
-    n_treated_units : int
-        Number of ever-treated units.
-    n_control_units : int
-        Number of units contributing to Omega_0.
-    alpha : float
-        Significance level used.
-    pretrend_results : dict, optional
-        Populated by pretrend_test().
-    bootstrap_results : ImputationBootstrapResults, optional
-        Bootstrap inference results.
-    """
-
-    treatment_effects: pd.DataFrame
-    overall_att: float
-    overall_se: float
-    overall_t_stat: float
-    overall_p_value: float
-    overall_conf_int: Tuple[float, float]
-    event_study_effects: Optional[Dict[int, Dict[str, Any]]]
-    group_effects: Optional[Dict[Any, Dict[str, Any]]]
-    groups: List[Any]
-    time_periods: List[Any]
-    n_obs: int
-    n_treated_obs: int
-    n_untreated_obs: int
-    n_treated_units: int
-    n_control_units: int
-    alpha: float = 0.05
-    pretrend_results: Optional[Dict[str, Any]] = field(default=None, repr=False)
-    bootstrap_results: Optional[ImputationBootstrapResults] = field(default=None, repr=False)
-    # Internal: stores data needed for pretrend_test()
-    _estimator_ref: Optional[Any] = field(default=None, repr=False)
-
-    def __repr__(self) -> str:
-        """Concise string representation."""
-        sig = _get_significance_stars(self.overall_p_value)
-        return (
-            f"ImputationDiDResults(ATT={self.overall_att:.4f}{sig}, "
-            f"SE={self.overall_se:.4f}, "
-            f"n_groups={len(self.groups)}, "
-            f"n_treated_obs={self.n_treated_obs})"
-        )
-
-    def summary(self, alpha: Optional[float] = None) -> str:
-        """
-        Generate formatted summary of estimation results.
-
-        Parameters
-        ----------
-        alpha : float, optional
-            Significance level. Defaults to alpha used in estimation.
-
-        Returns
-        -------
-        str
-            Formatted summary.
-        """
-        alpha = alpha or self.alpha
-        conf_level = int((1 - alpha) * 100)
-
-        lines = [
-            "=" * 85,
-            "Imputation DiD Estimator Results (Borusyak et al. 2024)".center(85),
-            "=" * 85,
-            "",
-            f"{'Total observations:':<30} {self.n_obs:>10}",
-            f"{'Treated observations:':<30} {self.n_treated_obs:>10}",
-            f"{'Untreated observations:':<30} {self.n_untreated_obs:>10}",
-            f"{'Treated units:':<30} {self.n_treated_units:>10}",
-            f"{'Control units:':<30} {self.n_control_units:>10}",
-            f"{'Treatment cohorts:':<30} {len(self.groups):>10}",
-            f"{'Time periods:':<30} {len(self.time_periods):>10}",
-            "",
-        ]
-
-        # Overall ATT
-        lines.extend(
-            [
-                "-" * 85,
-                "Overall Average Treatment Effect on the Treated".center(85),
-                "-" * 85,
-                f"{'Parameter':<15} {'Estimate':>12} {'Std. Err.':>12} "
-                f"{'t-stat':>10} {'P>|t|':>10} {'Sig.':>6}",
-                "-" * 85,
-            ]
-        )
-
-        t_str = (
-            f"{self.overall_t_stat:>10.3f}" if np.isfinite(self.overall_t_stat) else f"{'NaN':>10}"
-        )
-        p_str = (
-            f"{self.overall_p_value:>10.4f}"
-            if np.isfinite(self.overall_p_value)
-            else f"{'NaN':>10}"
-        )
-        sig = _get_significance_stars(self.overall_p_value)
-
-        lines.extend(
-            [
-                f"{'ATT':<15} {self.overall_att:>12.4f} {self.overall_se:>12.4f} "
-                f"{t_str} {p_str} {sig:>6}",
-                "-" * 85,
-                "",
-                f"{conf_level}% Confidence Interval: "
-                f"[{self.overall_conf_int[0]:.4f}, {self.overall_conf_int[1]:.4f}]",
-                "",
-            ]
-        )
-
-        # Event study effects
-        if self.event_study_effects:
-            lines.extend(
-                [
-                    "-" * 85,
-                    "Event Study (Dynamic) Effects".center(85),
-                    "-" * 85,
-                    f"{'Rel. Period':<15} {'Estimate':>12} {'Std. Err.':>12} "
-                    f"{'t-stat':>10} {'P>|t|':>10} {'Sig.':>6}",
-                    "-" * 85,
-                ]
-            )
-
-            for h in sorted(self.event_study_effects.keys()):
-                eff = self.event_study_effects[h]
-                if eff.get("n_obs", 1) == 0:
-                    # Reference period marker
-                    lines.append(
-                        f"[ref: {h}]" f"{'0.0000':>17} {'---':>12} {'---':>10} {'---':>10} {'':>6}"
-                    )
-                elif np.isnan(eff["effect"]):
-                    lines.append(f"{h:<15} {'NaN':>12} {'NaN':>12} {'NaN':>10} {'NaN':>10} {'':>6}")
-                else:
-                    e_sig = _get_significance_stars(eff["p_value"])
-                    e_t = (
-                        f"{eff['t_stat']:>10.3f}" if np.isfinite(eff["t_stat"]) else f"{'NaN':>10}"
-                    )
-                    e_p = (
-                        f"{eff['p_value']:>10.4f}"
-                        if np.isfinite(eff["p_value"])
-                        else f"{'NaN':>10}"
-                    )
-                    lines.append(
-                        f"{h:<15} {eff['effect']:>12.4f} {eff['se']:>12.4f} "
-                        f"{e_t} {e_p} {e_sig:>6}"
-                    )
-
-            lines.extend(["-" * 85, ""])
-
-        # Group effects
-        if self.group_effects:
-            lines.extend(
-                [
-                    "-" * 85,
-                    "Group (Cohort) Effects".center(85),
-                    "-" * 85,
-                    f"{'Cohort':<15} {'Estimate':>12} {'Std. Err.':>12} "
-                    f"{'t-stat':>10} {'P>|t|':>10} {'Sig.':>6}",
-                    "-" * 85,
-                ]
-            )
-
-            for g in sorted(self.group_effects.keys()):
-                eff = self.group_effects[g]
-                if np.isnan(eff["effect"]):
-                    lines.append(f"{g:<15} {'NaN':>12} {'NaN':>12} {'NaN':>10} {'NaN':>10} {'':>6}")
-                else:
-                    g_sig = _get_significance_stars(eff["p_value"])
-                    g_t = (
-                        f"{eff['t_stat']:>10.3f}" if np.isfinite(eff["t_stat"]) else f"{'NaN':>10}"
-                    )
-                    g_p = (
-                        f"{eff['p_value']:>10.4f}"
-                        if np.isfinite(eff["p_value"])
-                        else f"{'NaN':>10}"
-                    )
-                    lines.append(
-                        f"{g:<15} {eff['effect']:>12.4f} {eff['se']:>12.4f} "
-                        f"{g_t} {g_p} {g_sig:>6}"
-                    )
-
-            lines.extend(["-" * 85, ""])
-
-        # Pre-trend test
-        if self.pretrend_results is not None:
-            pt = self.pretrend_results
-            lines.extend(
-                [
-                    "-" * 85,
-                    "Pre-Trend Test (Equation 9)".center(85),
-                    "-" * 85,
-                    f"{'F-statistic:':<30} {pt['f_stat']:>10.3f}",
-                    f"{'P-value:':<30} {pt['p_value']:>10.4f}",
-                    f"{'Degrees of freedom:':<30} {pt['df']:>10}",
-                    f"{'Number of leads:':<30} {pt['n_leads']:>10}",
-                    "-" * 85,
-                    "",
-                ]
-            )
-
-        lines.extend(
-            [
-                "Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1",
-                "=" * 85,
-            ]
-        )
-
-        return "\n".join(lines)
-
-    def print_summary(self, alpha: Optional[float] = None) -> None:
-        """Print summary to stdout."""
-        print(self.summary(alpha))
-
-    def to_dataframe(self, level: str = "observation") -> pd.DataFrame:
-        """
-        Convert results to DataFrame.
-
-        Parameters
-        ----------
-        level : str, default="observation"
-            Level of aggregation:
-            - "observation": Unit-level treatment effects
-            - "event_study": Event study effects by relative time
-            - "group": Group (cohort) effects
-
-        Returns
-        -------
-        pd.DataFrame
-            Results as DataFrame.
-        """
-        if level == "observation":
-            return self.treatment_effects.copy()
-
-        elif level == "event_study":
-            if self.event_study_effects is None:
-                raise ValueError(
-                    "Event study effects not computed. "
-                    "Use aggregate='event_study' or aggregate='all'."
-                )
-            rows = []
-            for h, data in sorted(self.event_study_effects.items()):
-                rows.append(
-                    {
-                        "relative_period": h,
-                        "effect": data["effect"],
-                        "se": data["se"],
-                        "t_stat": data["t_stat"],
-                        "p_value": data["p_value"],
-                        "conf_int_lower": data["conf_int"][0],
-                        "conf_int_upper": data["conf_int"][1],
-                        "n_obs": data.get("n_obs", np.nan),
-                    }
-                )
-            return pd.DataFrame(rows)
-
-        elif level == "group":
-            if self.group_effects is None:
-                raise ValueError(
-                    "Group effects not computed. " "Use aggregate='group' or aggregate='all'."
-                )
-            rows = []
-            for g, data in sorted(self.group_effects.items()):
-                rows.append(
-                    {
-                        "group": g,
-                        "effect": data["effect"],
-                        "se": data["se"],
-                        "t_stat": data["t_stat"],
-                        "p_value": data["p_value"],
-                        "conf_int_lower": data["conf_int"][0],
-                        "conf_int_upper": data["conf_int"][1],
-                        "n_obs": data.get("n_obs", np.nan),
-                    }
-                )
-            return pd.DataFrame(rows)
-
-        else:
-            raise ValueError(
-                f"Unknown level: {level}. Use 'observation', 'event_study', or 'group'."
-            )
-
-    def pretrend_test(self, n_leads: Optional[int] = None) -> Dict[str, Any]:
-        """
-        Run a pre-trend test (Equation 9 of Borusyak et al. 2024).
-
-        Adds pre-treatment lead indicators to the Step 1 OLS and tests
-        their joint significance via a cluster-robust Wald F-test.
-
-        Parameters
-        ----------
-        n_leads : int, optional
-            Number of pre-treatment leads to include. If None, uses all
-            available pre-treatment periods minus one (for the reference period).
-
-        Returns
-        -------
-        dict
-            Dictionary with keys: 'f_stat', 'p_value', 'df', 'n_leads',
-            'lead_coefficients'.
-        """
-        if self._estimator_ref is None:
-            raise RuntimeError(
-                "Pre-trend test requires internal estimator reference. "
-                "Re-fit the model to use this method."
-            )
-        result = self._estimator_ref._pretrend_test(n_leads=n_leads)
-        self.pretrend_results = result
-        return result
-
-    @property
-    def is_significant(self) -> bool:
-        """Check if overall ATT is significant."""
-        return bool(self.overall_p_value < self.alpha)
-
-    @property
-    def significance_stars(self) -> str:
-        """Significance stars for overall ATT."""
-        return _get_significance_stars(self.overall_p_value)
 
 
 # =============================================================================
@@ -444,7 +34,7 @@ class ImputationDiDResults:
 # =============================================================================
 
 
-class ImputationDiD:
+class ImputationDiD(ImputationDiDBootstrapMixin):
     """
     Borusyak-Jaravel-Spiess (2024) imputation DiD estimator.
 
@@ -818,14 +408,8 @@ class ImputationDiD:
                 kept_cov_mask=kept_cov_mask,
             )
 
-        overall_t = (
-            overall_att / overall_se if np.isfinite(overall_se) and overall_se > 0 else np.nan
-        )
-        overall_p = compute_p_value(overall_t)
-        overall_ci = (
-            compute_confidence_interval(overall_att, overall_se, self.alpha)
-            if np.isfinite(overall_se) and overall_se > 0
-            else (np.nan, np.nan)
+        overall_t, overall_p, overall_ci = safe_inference(
+            overall_att, overall_se, alpha=self.alpha
         )
 
         # Event study and group aggregation
@@ -966,9 +550,9 @@ class ImputationDiD:
                         ]
                         eff_val = event_study_effects[h]["effect"]
                         se_val = event_study_effects[h]["se"]
-                        event_study_effects[h]["t_stat"] = (
-                            eff_val / se_val if np.isfinite(se_val) and se_val > 0 else np.nan
-                        )
+                        event_study_effects[h]["t_stat"] = safe_inference(
+                            eff_val, se_val, alpha=self.alpha
+                        )[0]
 
             # Update group effects
             if group_effects and bootstrap_results.group_ses:
@@ -979,9 +563,9 @@ class ImputationDiD:
                         group_effects[g]["p_value"] = bootstrap_results.group_p_values[g]
                         eff_val = group_effects[g]["effect"]
                         se_val = group_effects[g]["se"]
-                        group_effects[g]["t_stat"] = (
-                            eff_val / se_val if np.isfinite(se_val) and se_val > 0 else np.nan
-                        )
+                        group_effects[g]["t_stat"] = safe_inference(
+                            eff_val, se_val, alpha=self.alpha
+                        )[0]
 
         # Construct results
         self.results_ = ImputationDiDResults(
@@ -1250,7 +834,7 @@ class ImputationDiD:
             delta_hat_clean = np.where(np.isfinite(delta_hat), delta_hat, 0.0)
 
             # Step C: Recover FE from covariate-adjusted outcome using iterative FE
-            y_adj = y - X_raw @ delta_hat_clean
+            y_adj = y - np.dot(X_raw, delta_hat_clean)
             unit_fe, time_fe = self._iterative_fe(y_adj, units, times, df_0.index)
 
             # grand_mean = 0: iterative FE absorb the intercept
@@ -1298,7 +882,7 @@ class ImputationDiD:
 
         if delta_hat is not None and covariates:
             X_1 = df_1[covariates].values
-            y_hat_0 = y_hat_0 + X_1 @ delta_hat
+            y_hat_0 = y_hat_0 + np.dot(X_1, delta_hat)
 
         tau_hat = df_1[outcome].values - y_hat_0
 
@@ -1599,7 +1183,7 @@ class ImputationDiD:
         y_hat_0 = grand_mean + alpha_i + beta_t
 
         if delta_hat is not None and covariates:
-            y_hat_0 = y_hat_0 + df_1[covariates].values @ delta_hat
+            y_hat_0 = y_hat_0 + np.dot(df_1[covariates].values, delta_hat)
 
         tau_hat = df_1[outcome].values - y_hat_0
 
@@ -1659,7 +1243,7 @@ class ImputationDiD:
         y_hat = grand_mean + alpha_i + beta_t
 
         if delta_hat is not None and covariates:
-            y_hat = y_hat + df_0[covariates].values @ delta_hat
+            y_hat = y_hat + np.dot(df_0[covariates].values, delta_hat)
 
         return df_0[outcome].values - y_hat
 
@@ -1803,13 +1387,7 @@ class ImputationDiD:
                 kept_cov_mask=kept_cov_mask,
             )
 
-            t_stat = effect / se if np.isfinite(se) and se > 0 else np.nan
-            p_value = compute_p_value(t_stat)
-            conf_int = (
-                compute_confidence_interval(effect, se, self.alpha)
-                if np.isfinite(se) and se > 0
-                else (np.nan, np.nan)
-            )
+            t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha)
 
             event_study_effects[h] = {
                 "effect": effect,
@@ -1924,13 +1502,7 @@ class ImputationDiD:
                 kept_cov_mask=kept_cov_mask,
             )
 
-            t_stat = effect / se if np.isfinite(se) and se > 0 else np.nan
-            p_value = compute_p_value(t_stat)
-            conf_int = (
-                compute_confidence_interval(effect, se, self.alpha)
-                if np.isfinite(se) and se > 0
-                else (np.nan, np.nan)
-            )
+            t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha)
 
             group_effects[g] = {
                 "effect": effect,
@@ -2080,299 +1652,6 @@ class ImputationDiD:
             "n_leads": n_leads_actual,
             "lead_coefficients": lead_coefficients,
         }
-
-    # =========================================================================
-    # Bootstrap
-    # =========================================================================
-
-    def _compute_percentile_ci(
-        self,
-        boot_dist: np.ndarray,
-        alpha: float,
-    ) -> Tuple[float, float]:
-        """Compute percentile confidence interval from bootstrap distribution."""
-        lower = float(np.percentile(boot_dist, alpha / 2 * 100))
-        upper = float(np.percentile(boot_dist, (1 - alpha / 2) * 100))
-        return (lower, upper)
-
-    def _compute_bootstrap_pvalue(
-        self,
-        original_effect: float,
-        boot_dist: np.ndarray,
-        n_valid: Optional[int] = None,
-    ) -> float:
-        """
-        Compute two-sided bootstrap p-value.
-
-        Uses the percentile method: p-value is the proportion of bootstrap
-        estimates on the opposite side of zero from the original estimate,
-        doubled for two-sided test.
-
-        Parameters
-        ----------
-        original_effect : float
-            Original point estimate.
-        boot_dist : np.ndarray
-            Bootstrap distribution of the effect.
-        n_valid : int, optional
-            Number of valid bootstrap samples. If None, uses self.n_bootstrap.
-        """
-        if original_effect >= 0:
-            p_one_sided = float(np.mean(boot_dist <= 0))
-        else:
-            p_one_sided = float(np.mean(boot_dist >= 0))
-        p_value = min(2 * p_one_sided, 1.0)
-        n_for_floor = n_valid if n_valid is not None else self.n_bootstrap
-        p_value = max(p_value, 1 / (n_for_floor + 1))
-        return p_value
-
-    def _precompute_bootstrap_psi(
-        self,
-        df: pd.DataFrame,
-        outcome: str,
-        unit: str,
-        time: str,
-        first_treat: str,
-        covariates: Optional[List[str]],
-        omega_0_mask: pd.Series,
-        omega_1_mask: pd.Series,
-        unit_fe: Dict[Any, float],
-        time_fe: Dict[Any, float],
-        grand_mean: float,
-        delta_hat: Optional[np.ndarray],
-        cluster_var: str,
-        kept_cov_mask: Optional[np.ndarray],
-        overall_weights: np.ndarray,
-        event_study_effects: Optional[Dict[int, Dict[str, Any]]],
-        group_effects: Optional[Dict[Any, Dict[str, Any]]],
-        treatment_groups: List[Any],
-        tau_hat: np.ndarray,
-        balance_e: Optional[int],
-    ) -> Dict[str, Any]:
-        """
-        Pre-compute cluster-level influence function sums for each bootstrap target.
-
-        For each aggregation target (overall, per-horizon, per-group), computes
-        psi_i = sum_t v_it * epsilon_tilde_it for each cluster. The multiplier
-        bootstrap then perturbs these psi sums with Rademacher weights.
-
-        Computational cost scales with the number of aggregation targets, since
-        each target requires its own v_untreated computation (weight-dependent).
-        """
-        result: Dict[str, Any] = {}
-
-        common = dict(
-            df=df,
-            outcome=outcome,
-            unit=unit,
-            time=time,
-            first_treat=first_treat,
-            covariates=covariates,
-            omega_0_mask=omega_0_mask,
-            omega_1_mask=omega_1_mask,
-            unit_fe=unit_fe,
-            time_fe=time_fe,
-            grand_mean=grand_mean,
-            delta_hat=delta_hat,
-            cluster_var=cluster_var,
-            kept_cov_mask=kept_cov_mask,
-        )
-
-        # Overall ATT
-        overall_psi, cluster_ids = self._compute_cluster_psi_sums(**common, weights=overall_weights)
-        result["overall"] = (overall_psi, cluster_ids)
-
-        # Event study: per-horizon weights
-        # NOTE: weight logic duplicated from _aggregate_event_study.
-        # If weight scheme changes there, update here too.
-        if event_study_effects:
-            result["event_study"] = {}
-            df_1 = df.loc[omega_1_mask]
-            rel_times = df_1["_rel_time"].values
-            n_omega_1 = int(omega_1_mask.sum())
-
-            # Balanced cohort mask (same logic as _aggregate_event_study)
-            balanced_mask = None
-            if balance_e is not None:
-                all_horizons = sorted(set(int(h) for h in rel_times if np.isfinite(h)))
-                if self.horizon_max is not None:
-                    all_horizons = [h for h in all_horizons if abs(h) <= self.horizon_max]
-                cohort_rel_times = self._build_cohort_rel_times(df, first_treat)
-                balanced_mask = self._compute_balanced_cohort_mask(
-                    df_1, first_treat, all_horizons, balance_e, cohort_rel_times
-                )
-
-            ref_period = -1 - self.anticipation
-            for h in event_study_effects:
-                if event_study_effects[h].get("n_obs", 0) == 0:
-                    continue
-                if h == ref_period:
-                    continue
-                if not np.isfinite(event_study_effects[h].get("effect", np.nan)):
-                    continue
-                h_mask = rel_times == h
-                if balanced_mask is not None:
-                    h_mask = h_mask & balanced_mask
-                weights_h = np.zeros(n_omega_1)
-                finite_h = np.isfinite(tau_hat) & h_mask
-                n_valid_h = int(finite_h.sum())
-                if n_valid_h == 0:
-                    continue
-                weights_h[np.where(finite_h)[0]] = 1.0 / n_valid_h
-
-                psi_h, _ = self._compute_cluster_psi_sums(**common, weights=weights_h)
-                result["event_study"][h] = psi_h
-
-        # Group effects: per-group weights
-        # NOTE: weight logic duplicated from _aggregate_group.
-        # If weight scheme changes there, update here too.
-        if group_effects:
-            result["group"] = {}
-            df_1 = df.loc[omega_1_mask]
-            cohorts = df_1[first_treat].values
-            n_omega_1 = int(omega_1_mask.sum())
-
-            for g in group_effects:
-                if group_effects[g].get("n_obs", 0) == 0:
-                    continue
-                if not np.isfinite(group_effects[g].get("effect", np.nan)):
-                    continue
-                g_mask = cohorts == g
-                weights_g = np.zeros(n_omega_1)
-                finite_g = np.isfinite(tau_hat) & g_mask
-                n_valid_g = int(finite_g.sum())
-                if n_valid_g == 0:
-                    continue
-                weights_g[np.where(finite_g)[0]] = 1.0 / n_valid_g
-
-                psi_g, _ = self._compute_cluster_psi_sums(**common, weights=weights_g)
-                result["group"][g] = psi_g
-
-        return result
-
-    def _run_bootstrap(
-        self,
-        original_att: float,
-        original_event_study: Optional[Dict[int, Dict[str, Any]]],
-        original_group: Optional[Dict[Any, Dict[str, Any]]],
-        psi_data: Dict[str, Any],
-    ) -> ImputationBootstrapResults:
-        """
-        Run multiplier bootstrap on pre-computed influence function sums.
-
-        Uses T_b = sum_i w_b_i * psi_i where w_b_i are Rademacher weights
-        and psi_i are cluster-level influence function sums from Theorem 3.
-        SE = std(T_b, ddof=1).
-        """
-        if self.n_bootstrap < 50:
-            warnings.warn(
-                f"n_bootstrap={self.n_bootstrap} is low. Consider n_bootstrap >= 199 "
-                "for reliable inference.",
-                UserWarning,
-                stacklevel=3,
-            )
-
-        rng = np.random.default_rng(self.seed)
-
-        from diff_diff.staggered_bootstrap import _generate_bootstrap_weights_batch
-
-        overall_psi, cluster_ids = psi_data["overall"]
-        n_clusters = len(cluster_ids)
-
-        # Generate ALL weights upfront: shape (n_bootstrap, n_clusters)
-        all_weights = _generate_bootstrap_weights_batch(
-            self.n_bootstrap, n_clusters, "rademacher", rng
-        )
-
-        # Overall ATT bootstrap draws
-        boot_overall = all_weights @ overall_psi  # (n_bootstrap,)
-
-        # Event study: loop over horizons
-        boot_event_study: Optional[Dict[int, np.ndarray]] = None
-        if original_event_study and "event_study" in psi_data:
-            boot_event_study = {}
-            for h, psi_h in psi_data["event_study"].items():
-                boot_event_study[h] = all_weights @ psi_h
-
-        # Group effects: loop over groups
-        boot_group: Optional[Dict[Any, np.ndarray]] = None
-        if original_group and "group" in psi_data:
-            boot_group = {}
-            for g, psi_g in psi_data["group"].items():
-                boot_group[g] = all_weights @ psi_g
-
-        # --- Inference (percentile bootstrap, matching CS/SA convention) ---
-        # Shift perturbation-centered draws to effect-centered draws.
-        # The multiplier bootstrap produces T_b = sum w_b_i * psi_i centered at 0.
-        # CS adds the original effect back (L411 of staggered_bootstrap.py).
-        # We do the same here so percentile CIs and empirical p-values work correctly.
-        boot_overall_shifted = boot_overall + original_att
-
-        overall_se = float(np.std(boot_overall, ddof=1))
-        overall_ci = (
-            self._compute_percentile_ci(boot_overall_shifted, self.alpha)
-            if overall_se > 0
-            else (np.nan, np.nan)
-        )
-        overall_p = (
-            self._compute_bootstrap_pvalue(original_att, boot_overall_shifted)
-            if overall_se > 0
-            else np.nan
-        )
-
-        event_study_ses = None
-        event_study_cis = None
-        event_study_p_values = None
-        if boot_event_study and original_event_study:
-            event_study_ses = {}
-            event_study_cis = {}
-            event_study_p_values = {}
-            for h in boot_event_study:
-                se_h = float(np.std(boot_event_study[h], ddof=1))
-                event_study_ses[h] = se_h
-                orig_eff = original_event_study[h]["effect"]
-                if se_h > 0 and np.isfinite(orig_eff):
-                    shifted_h = boot_event_study[h] + orig_eff
-                    event_study_p_values[h] = self._compute_bootstrap_pvalue(orig_eff, shifted_h)
-                    event_study_cis[h] = self._compute_percentile_ci(shifted_h, self.alpha)
-                else:
-                    event_study_p_values[h] = np.nan
-                    event_study_cis[h] = (np.nan, np.nan)
-
-        group_ses = None
-        group_cis = None
-        group_p_values = None
-        if boot_group and original_group:
-            group_ses = {}
-            group_cis = {}
-            group_p_values = {}
-            for g in boot_group:
-                se_g = float(np.std(boot_group[g], ddof=1))
-                group_ses[g] = se_g
-                orig_eff = original_group[g]["effect"]
-                if se_g > 0 and np.isfinite(orig_eff):
-                    shifted_g = boot_group[g] + orig_eff
-                    group_p_values[g] = self._compute_bootstrap_pvalue(orig_eff, shifted_g)
-                    group_cis[g] = self._compute_percentile_ci(shifted_g, self.alpha)
-                else:
-                    group_p_values[g] = np.nan
-                    group_cis[g] = (np.nan, np.nan)
-
-        return ImputationBootstrapResults(
-            n_bootstrap=self.n_bootstrap,
-            weight_type="rademacher",
-            alpha=self.alpha,
-            overall_att_se=overall_se,
-            overall_att_ci=overall_ci,
-            overall_att_p_value=overall_p,
-            event_study_ses=event_study_ses,
-            event_study_cis=event_study_cis,
-            event_study_p_values=event_study_p_values,
-            group_ses=group_ses,
-            group_cis=group_cis,
-            group_p_values=group_p_values,
-            bootstrap_distribution=boot_overall_shifted,
-        )
 
     # =========================================================================
     # sklearn-compatible interface

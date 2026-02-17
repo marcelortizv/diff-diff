@@ -549,6 +549,45 @@ class TestLeaveOneOutTest:
         assert "Units analyzed" in summary
         assert "Mean effect" in summary
 
+    def test_loo_single_valid_effect_nan_inference(self):
+        """SE should be NaN when only 1 valid LOO effect (len(valid_effects) <= 1)."""
+        from tests.conftest import assert_nan_inference
+
+        # Unit 0: treated, both periods (the only unit providing a valid LOO effect)
+        # Unit 1: treated, pre-period only → removing unit 0 leaves unit 1 with
+        #   no post-treatment data, making treated*post unidentified → NaN ATT
+        # Controls: units 2-5 with both periods
+        data = []
+        data.append({"unit": 0, "post": 0, "outcome": 1.0, "treated": 1})
+        data.append({"unit": 0, "post": 1, "outcome": 4.0, "treated": 1})
+        data.append({"unit": 1, "post": 0, "outcome": 1.5, "treated": 1})
+        for u in [2, 3, 4, 5]:
+            data.append({"unit": u, "post": 0, "outcome": 1.0, "treated": 0})
+            data.append({"unit": u, "post": 1, "outcome": 2.0, "treated": 0})
+
+        df = pd.DataFrame(data)
+
+        import warnings
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            result = leave_one_out_test(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                unit="unit",
+            )
+
+        # Only 1 valid LOO effect → SE should be NaN (not 0.0)
+        assert np.isnan(result.se), f"SE should be NaN with 1 valid effect, got {result.se}"
+        assert_nan_inference({
+            "se": result.se,
+            "t_stat": result.t_stat,
+            "p_value": result.p_value,
+            "conf_int": result.conf_int,
+        })
+
 
 # =============================================================================
 # run_placebo_test dispatcher

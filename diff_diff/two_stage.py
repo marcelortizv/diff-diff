@@ -22,8 +22,7 @@ Butts, K. & Gardner, J. (2022). did2s: Two-Stage
 """
 
 import warnings
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -31,372 +30,9 @@ from scipy import sparse
 from scipy.sparse.linalg import factorized as sparse_factorized
 
 from diff_diff.linalg import solve_ols
-from diff_diff.results import _get_significance_stars
-from diff_diff.utils import compute_confidence_interval, compute_p_value
-
-# =============================================================================
-# Results Dataclasses
-# =============================================================================
-
-
-@dataclass
-class TwoStageBootstrapResults:
-    """
-    Results from TwoStageDiD bootstrap inference.
-
-    Bootstrap uses multiplier bootstrap on the GMM influence function,
-    consistent with other library estimators. The R `did2s` package uses
-    block bootstrap by default; multiplier bootstrap is asymptotically
-    equivalent.
-
-    Attributes
-    ----------
-    n_bootstrap : int
-        Number of bootstrap iterations.
-    weight_type : str
-        Type of bootstrap weights (currently "rademacher" only).
-    alpha : float
-        Significance level used for confidence intervals.
-    overall_att_se : float
-        Bootstrap standard error for overall ATT.
-    overall_att_ci : tuple
-        Bootstrap confidence interval for overall ATT.
-    overall_att_p_value : float
-        Bootstrap p-value for overall ATT.
-    event_study_ses : dict, optional
-        Bootstrap SEs for event study effects.
-    event_study_cis : dict, optional
-        Bootstrap CIs for event study effects.
-    event_study_p_values : dict, optional
-        Bootstrap p-values for event study effects.
-    group_ses : dict, optional
-        Bootstrap SEs for group effects.
-    group_cis : dict, optional
-        Bootstrap CIs for group effects.
-    group_p_values : dict, optional
-        Bootstrap p-values for group effects.
-    bootstrap_distribution : np.ndarray, optional
-        Full bootstrap distribution of overall ATT.
-    """
-
-    n_bootstrap: int
-    weight_type: str
-    alpha: float
-    overall_att_se: float
-    overall_att_ci: Tuple[float, float]
-    overall_att_p_value: float
-    event_study_ses: Optional[Dict[int, float]] = None
-    event_study_cis: Optional[Dict[int, Tuple[float, float]]] = None
-    event_study_p_values: Optional[Dict[int, float]] = None
-    group_ses: Optional[Dict[Any, float]] = None
-    group_cis: Optional[Dict[Any, Tuple[float, float]]] = None
-    group_p_values: Optional[Dict[Any, float]] = None
-    bootstrap_distribution: Optional[np.ndarray] = field(default=None, repr=False)
-
-
-@dataclass
-class TwoStageDiDResults:
-    """
-    Results from Gardner (2022) two-stage DiD estimation.
-
-    Attributes
-    ----------
-    treatment_effects : pd.DataFrame
-        Per-observation treatment effects with columns: unit, time,
-        tau_hat, weight. tau_hat is the residualized outcome y_tilde
-        for treated observations; weight is 1/n_treated.
-    overall_att : float
-        Overall average treatment effect on the treated.
-    overall_se : float
-        Standard error of overall ATT (GMM sandwich).
-    overall_t_stat : float
-        T-statistic for overall ATT.
-    overall_p_value : float
-        P-value for overall ATT.
-    overall_conf_int : tuple
-        Confidence interval for overall ATT.
-    event_study_effects : dict, optional
-        Dictionary mapping relative time h to effect dict with keys:
-        'effect', 'se', 't_stat', 'p_value', 'conf_int', 'n_obs'.
-    group_effects : dict, optional
-        Dictionary mapping cohort g to effect dict.
-    groups : list
-        List of treatment cohorts.
-    time_periods : list
-        List of all time periods.
-    n_obs : int
-        Total number of observations.
-    n_treated_obs : int
-        Number of treated observations.
-    n_untreated_obs : int
-        Number of untreated observations.
-    n_treated_units : int
-        Number of ever-treated units.
-    n_control_units : int
-        Number of units contributing to untreated observations.
-    alpha : float
-        Significance level used.
-    bootstrap_results : TwoStageBootstrapResults, optional
-        Bootstrap inference results.
-    """
-
-    treatment_effects: pd.DataFrame
-    overall_att: float
-    overall_se: float
-    overall_t_stat: float
-    overall_p_value: float
-    overall_conf_int: Tuple[float, float]
-    event_study_effects: Optional[Dict[int, Dict[str, Any]]]
-    group_effects: Optional[Dict[Any, Dict[str, Any]]]
-    groups: List[Any]
-    time_periods: List[Any]
-    n_obs: int
-    n_treated_obs: int
-    n_untreated_obs: int
-    n_treated_units: int
-    n_control_units: int
-    alpha: float = 0.05
-    bootstrap_results: Optional[TwoStageBootstrapResults] = field(default=None, repr=False)
-
-    def __repr__(self) -> str:
-        """Concise string representation."""
-        sig = _get_significance_stars(self.overall_p_value)
-        return (
-            f"TwoStageDiDResults(ATT={self.overall_att:.4f}{sig}, "
-            f"SE={self.overall_se:.4f}, "
-            f"n_groups={len(self.groups)}, "
-            f"n_treated_obs={self.n_treated_obs})"
-        )
-
-    def summary(self, alpha: Optional[float] = None) -> str:
-        """
-        Generate formatted summary of estimation results.
-
-        Parameters
-        ----------
-        alpha : float, optional
-            Significance level. Defaults to alpha used in estimation.
-
-        Returns
-        -------
-        str
-            Formatted summary.
-        """
-        alpha = alpha or self.alpha
-        conf_level = int((1 - alpha) * 100)
-
-        lines = [
-            "=" * 85,
-            "Two-Stage DiD Estimator Results (Gardner 2022)".center(85),
-            "=" * 85,
-            "",
-            f"{'Total observations:':<30} {self.n_obs:>10}",
-            f"{'Treated observations:':<30} {self.n_treated_obs:>10}",
-            f"{'Untreated observations:':<30} {self.n_untreated_obs:>10}",
-            f"{'Treated units:':<30} {self.n_treated_units:>10}",
-            f"{'Control units:':<30} {self.n_control_units:>10}",
-            f"{'Treatment cohorts:':<30} {len(self.groups):>10}",
-            f"{'Time periods:':<30} {len(self.time_periods):>10}",
-            "",
-        ]
-
-        # Overall ATT
-        lines.extend(
-            [
-                "-" * 85,
-                "Overall Average Treatment Effect on the Treated".center(85),
-                "-" * 85,
-                f"{'Parameter':<15} {'Estimate':>12} {'Std. Err.':>12} "
-                f"{'t-stat':>10} {'P>|t|':>10} {'Sig.':>6}",
-                "-" * 85,
-            ]
-        )
-
-        t_str = (
-            f"{self.overall_t_stat:>10.3f}" if np.isfinite(self.overall_t_stat) else f"{'NaN':>10}"
-        )
-        p_str = (
-            f"{self.overall_p_value:>10.4f}"
-            if np.isfinite(self.overall_p_value)
-            else f"{'NaN':>10}"
-        )
-        sig = _get_significance_stars(self.overall_p_value)
-
-        lines.extend(
-            [
-                f"{'ATT':<15} {self.overall_att:>12.4f} {self.overall_se:>12.4f} "
-                f"{t_str} {p_str} {sig:>6}",
-                "-" * 85,
-                "",
-                f"{conf_level}% Confidence Interval: "
-                f"[{self.overall_conf_int[0]:.4f}, {self.overall_conf_int[1]:.4f}]",
-                "",
-            ]
-        )
-
-        # Event study effects
-        if self.event_study_effects:
-            lines.extend(
-                [
-                    "-" * 85,
-                    "Event Study (Dynamic) Effects".center(85),
-                    "-" * 85,
-                    f"{'Rel. Period':<15} {'Estimate':>12} {'Std. Err.':>12} "
-                    f"{'t-stat':>10} {'P>|t|':>10} {'Sig.':>6}",
-                    "-" * 85,
-                ]
-            )
-
-            for h in sorted(self.event_study_effects.keys()):
-                eff = self.event_study_effects[h]
-                if eff.get("n_obs", 1) == 0:
-                    # Reference period marker
-                    lines.append(
-                        f"[ref: {h}]" f"{'0.0000':>17} {'---':>12} {'---':>10} {'---':>10} {'':>6}"
-                    )
-                elif np.isnan(eff["effect"]):
-                    lines.append(f"{h:<15} {'NaN':>12} {'NaN':>12} {'NaN':>10} {'NaN':>10} {'':>6}")
-                else:
-                    e_sig = _get_significance_stars(eff["p_value"])
-                    e_t = (
-                        f"{eff['t_stat']:>10.3f}" if np.isfinite(eff["t_stat"]) else f"{'NaN':>10}"
-                    )
-                    e_p = (
-                        f"{eff['p_value']:>10.4f}"
-                        if np.isfinite(eff["p_value"])
-                        else f"{'NaN':>10}"
-                    )
-                    lines.append(
-                        f"{h:<15} {eff['effect']:>12.4f} {eff['se']:>12.4f} "
-                        f"{e_t} {e_p} {e_sig:>6}"
-                    )
-
-            lines.extend(["-" * 85, ""])
-
-        # Group effects
-        if self.group_effects:
-            lines.extend(
-                [
-                    "-" * 85,
-                    "Group (Cohort) Effects".center(85),
-                    "-" * 85,
-                    f"{'Cohort':<15} {'Estimate':>12} {'Std. Err.':>12} "
-                    f"{'t-stat':>10} {'P>|t|':>10} {'Sig.':>6}",
-                    "-" * 85,
-                ]
-            )
-
-            for g in sorted(self.group_effects.keys()):
-                eff = self.group_effects[g]
-                if np.isnan(eff["effect"]):
-                    lines.append(f"{g:<15} {'NaN':>12} {'NaN':>12} {'NaN':>10} {'NaN':>10} {'':>6}")
-                else:
-                    g_sig = _get_significance_stars(eff["p_value"])
-                    g_t = (
-                        f"{eff['t_stat']:>10.3f}" if np.isfinite(eff["t_stat"]) else f"{'NaN':>10}"
-                    )
-                    g_p = (
-                        f"{eff['p_value']:>10.4f}"
-                        if np.isfinite(eff["p_value"])
-                        else f"{'NaN':>10}"
-                    )
-                    lines.append(
-                        f"{g:<15} {eff['effect']:>12.4f} {eff['se']:>12.4f} "
-                        f"{g_t} {g_p} {g_sig:>6}"
-                    )
-
-            lines.extend(["-" * 85, ""])
-
-        lines.extend(
-            [
-                "Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1",
-                "=" * 85,
-            ]
-        )
-
-        return "\n".join(lines)
-
-    def print_summary(self, alpha: Optional[float] = None) -> None:
-        """Print summary to stdout."""
-        print(self.summary(alpha))
-
-    def to_dataframe(self, level: str = "event_study") -> pd.DataFrame:
-        """
-        Convert results to DataFrame.
-
-        Parameters
-        ----------
-        level : str, default="event_study"
-            Level of aggregation:
-            - "event_study": Event study effects by relative time
-            - "group": Group (cohort) effects
-            - "observation": Per-observation treatment effects
-
-        Returns
-        -------
-        pd.DataFrame
-            Results as DataFrame.
-        """
-        if level == "observation":
-            return self.treatment_effects.copy()
-
-        elif level == "event_study":
-            if self.event_study_effects is None:
-                raise ValueError(
-                    "Event study effects not computed. "
-                    "Use aggregate='event_study' or aggregate='all'."
-                )
-            rows = []
-            for h, data in sorted(self.event_study_effects.items()):
-                rows.append(
-                    {
-                        "relative_period": h,
-                        "effect": data["effect"],
-                        "se": data["se"],
-                        "t_stat": data["t_stat"],
-                        "p_value": data["p_value"],
-                        "conf_int_lower": data["conf_int"][0],
-                        "conf_int_upper": data["conf_int"][1],
-                        "n_obs": data.get("n_obs", np.nan),
-                    }
-                )
-            return pd.DataFrame(rows)
-
-        elif level == "group":
-            if self.group_effects is None:
-                raise ValueError(
-                    "Group effects not computed. " "Use aggregate='group' or aggregate='all'."
-                )
-            rows = []
-            for g, data in sorted(self.group_effects.items()):
-                rows.append(
-                    {
-                        "group": g,
-                        "effect": data["effect"],
-                        "se": data["se"],
-                        "t_stat": data["t_stat"],
-                        "p_value": data["p_value"],
-                        "conf_int_lower": data["conf_int"][0],
-                        "conf_int_upper": data["conf_int"][1],
-                        "n_obs": data.get("n_obs", np.nan),
-                    }
-                )
-            return pd.DataFrame(rows)
-
-        else:
-            raise ValueError(
-                f"Unknown level: {level}. Use 'event_study', 'group', or 'observation'."
-            )
-
-    @property
-    def is_significant(self) -> bool:
-        """Check if overall ATT is significant."""
-        return bool(self.overall_p_value < self.alpha)
-
-    @property
-    def significance_stars(self) -> str:
-        """Significance stars for overall ATT."""
-        return _get_significance_stars(self.overall_p_value)
+from diff_diff.two_stage_bootstrap import TwoStageDiDBootstrapMixin
+from diff_diff.two_stage_results import TwoStageBootstrapResults, TwoStageDiDResults  # noqa: F401 (re-export)
+from diff_diff.utils import safe_inference
 
 
 # =============================================================================
@@ -404,7 +40,7 @@ class TwoStageDiDResults:
 # =============================================================================
 
 
-class TwoStageDiD:
+class TwoStageDiD(TwoStageDiDBootstrapMixin):
     """
     Gardner (2022) two-stage Difference-in-Differences estimator.
 
@@ -723,14 +359,8 @@ class TwoStageDiD:
             kept_cov_mask=kept_cov_mask,
         )
 
-        overall_t = (
-            overall_att / overall_se if np.isfinite(overall_se) and overall_se > 0 else np.nan
-        )
-        overall_p = compute_p_value(overall_t)
-        overall_ci = (
-            compute_confidence_interval(overall_att, overall_se, self.alpha)
-            if np.isfinite(overall_se) and overall_se > 0
-            else (np.nan, np.nan)
+        overall_t, overall_p, overall_ci = safe_inference(
+            overall_att, overall_se, alpha=self.alpha
         )
 
         # Event study and group aggregation
@@ -845,9 +475,9 @@ class TwoStageDiD:
                             )
                             eff_val = event_study_effects[h]["effect"]
                             se_val = event_study_effects[h]["se"]
-                            event_study_effects[h]["t_stat"] = (
-                                eff_val / se_val if np.isfinite(se_val) and se_val > 0 else np.nan
-                            )
+                            event_study_effects[h]["t_stat"] = safe_inference(
+                                eff_val, se_val, alpha=self.alpha
+                            )[0]
 
                 # Update group effects
                 if group_effects and bootstrap_results.group_ses:
@@ -858,9 +488,9 @@ class TwoStageDiD:
                             group_effects[g]["p_value"] = bootstrap_results.group_p_values[g]
                             eff_val = group_effects[g]["effect"]
                             se_val = group_effects[g]["se"]
-                            group_effects[g]["t_stat"] = (
-                                eff_val / se_val if np.isfinite(se_val) and se_val > 0 else np.nan
-                            )
+                            group_effects[g]["t_stat"] = safe_inference(
+                                eff_val, se_val, alpha=self.alpha
+                            )[0]
 
         # Construct results
         self.results_ = TwoStageDiDResults(
@@ -1027,7 +657,7 @@ class TwoStageDiD:
             kept_cov_mask = np.isfinite(delta_hat)
             delta_hat_clean = np.where(np.isfinite(delta_hat), delta_hat, 0.0)
 
-            y_adj = y - X_raw @ delta_hat_clean
+            y_adj = y - np.dot(X_raw, delta_hat_clean)
             unit_fe, time_fe = self._iterative_fe(y_adj, units, times, df_0.index)
 
             return unit_fe, time_fe, 0.0, delta_hat_clean, kept_cov_mask
@@ -1063,7 +693,7 @@ class TwoStageDiD:
         y_hat = grand_mean + alpha_i + beta_t
 
         if delta_hat is not None and covariates:
-            y_hat = y_hat + df[covariates].values @ delta_hat
+            y_hat = y_hat + np.dot(df[covariates].values, delta_hat)
 
         y_tilde = df[outcome].values - y_hat
         return y_tilde
@@ -1118,7 +748,7 @@ class TwoStageDiD:
         att = float(coef[0])
 
         # GMM sandwich variance
-        eps_2 = y_tilde - X_2 @ coef  # Stage 2 residuals
+        eps_2 = y_tilde - np.dot(X_2, coef)  # Stage 2 residuals
 
         V = self._compute_gmm_variance(
             df=df,
@@ -1273,7 +903,7 @@ class TwoStageDiD:
 
         # Stage 2 OLS
         coef, residuals, _ = solve_ols(X_2, y_tilde, return_vcov=False)
-        eps_2 = y_tilde - X_2 @ coef
+        eps_2 = y_tilde - np.dot(X_2, coef)
 
         # GMM variance for full coefficient vector
         V = self._compute_gmm_variance(
@@ -1322,13 +952,7 @@ class TwoStageDiD:
             effect = float(coef[j])
             se = float(np.sqrt(max(V[j, j], 0.0)))
 
-            t_stat = effect / se if np.isfinite(se) and se > 0 else np.nan
-            p_val = compute_p_value(t_stat)
-            ci = (
-                compute_confidence_interval(effect, se, self.alpha)
-                if np.isfinite(se) and se > 0
-                else (np.nan, np.nan)
-            )
+            t_stat, p_val, ci = safe_inference(effect, se, alpha=self.alpha)
 
             event_study_effects[h] = {
                 "effect": effect,
@@ -1391,7 +1015,7 @@ class TwoStageDiD:
 
         # Stage 2 OLS
         coef, residuals, _ = solve_ols(X_2, y_tilde, return_vcov=False)
-        eps_2 = y_tilde - X_2 @ coef
+        eps_2 = y_tilde - np.dot(X_2, coef)
 
         # GMM variance
         V = self._compute_gmm_variance(
@@ -1428,13 +1052,7 @@ class TwoStageDiD:
             effect = float(coef[j])
             se = float(np.sqrt(max(V[j, j], 0.0)))
 
-            t_stat = effect / se if np.isfinite(se) and se > 0 else np.nan
-            p_val = compute_p_value(t_stat)
-            ci = (
-                compute_confidence_interval(effect, se, self.alpha)
-                if np.isfinite(se) and se > 0
-                else (np.nan, np.nan)
-            )
+            t_stat, p_val, ci = safe_inference(effect, se, alpha=self.alpha)
 
             group_effects[g] = {
                 "effect": effect,
@@ -1522,9 +1140,9 @@ class TwoStageDiD:
         fitted_1 = alpha_i + beta_t
         if delta_hat is not None and cov_list:
             if kept_cov_mask is not None and not np.all(kept_cov_mask):
-                fitted_1 = fitted_1 + df[cov_list].values @ delta_hat[kept_cov_mask]
+                fitted_1 = fitted_1 + np.dot(df[cov_list].values, delta_hat[kept_cov_mask])
             else:
-                fitted_1 = fitted_1 + df[cov_list].values @ delta_hat
+                fitted_1 = fitted_1 + np.dot(df[cov_list].values, delta_hat)
 
         y_tilde = df["_y_tilde"].values
         y_vals = y_tilde + fitted_1  # reconstruct Y
@@ -1575,7 +1193,7 @@ class TwoStageDiD:
 
         # 4. S_g = gamma_hat' c_g - X'_{2g} eps_{2g}
         with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
-            correction = c_by_cluster @ gamma_hat  # (G x p) @ (p x k) = (G x k)
+            correction = np.dot(c_by_cluster, gamma_hat)  # (G x p) @ (p x k) = (G x k)
         # Replace NaN/inf from overflow (rank-deficient FE) with 0
         np.nan_to_num(correction, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
         S = correction - s2_by_cluster  # (G x k)
@@ -1674,435 +1292,6 @@ class TwoStageDiD:
         X_10 = _build_rows(mask=omega_0)
 
         return X_1, X_10, unit_to_idx, time_to_idx
-
-    # =========================================================================
-    # Bootstrap
-    # =========================================================================
-
-    def _compute_cluster_S_scores(
-        self,
-        df: pd.DataFrame,
-        unit: str,
-        time: str,
-        covariates: Optional[List[str]],
-        omega_0_mask: pd.Series,
-        unit_fe: Dict[Any, float],
-        time_fe: Dict[Any, float],
-        delta_hat: Optional[np.ndarray],
-        kept_cov_mask: Optional[np.ndarray],
-        X_2: np.ndarray,
-        eps_2: np.ndarray,
-        cluster_ids: np.ndarray,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Compute per-cluster S_g scores for bootstrap.
-
-        Returns
-        -------
-        S : np.ndarray, shape (G, k)
-            Per-cluster influence scores.
-        bread : np.ndarray, shape (k, k)
-            (X'_2 X_2)^{-1}.
-        unique_clusters : np.ndarray
-            Unique cluster identifiers.
-        """
-        n = len(df)
-        k = X_2.shape[1]
-
-        cov_list = covariates
-        if covariates and kept_cov_mask is not None and not np.all(kept_cov_mask):
-            cov_list = [c for c, k_ in zip(covariates, kept_cov_mask) if k_]
-
-        X_1_sparse, X_10_sparse, _, _ = self._build_fe_design(
-            df, unit, time, cov_list, omega_0_mask
-        )
-        p = X_1_sparse.shape[1]
-
-        # Reconstruct Y and compute eps_10
-        alpha_i = df[unit].map(unit_fe).values
-        beta_t = df[time].map(time_fe).values
-        alpha_i = np.where(pd.isna(alpha_i), 0.0, alpha_i).astype(float)
-        beta_t = np.where(pd.isna(beta_t), 0.0, beta_t).astype(float)
-        fitted_1 = alpha_i + beta_t
-        if delta_hat is not None and cov_list:
-            if kept_cov_mask is not None and not np.all(kept_cov_mask):
-                fitted_1 = fitted_1 + df[cov_list].values @ delta_hat[kept_cov_mask]
-            else:
-                fitted_1 = fitted_1 + df[cov_list].values @ delta_hat
-
-        y_tilde = df["_y_tilde"].values
-        y_vals = y_tilde + fitted_1
-
-        eps_10 = np.empty(n)
-        omega_0 = omega_0_mask.values
-        eps_10[omega_0] = y_vals[omega_0] - fitted_1[omega_0]
-        eps_10[~omega_0] = y_vals[~omega_0]
-
-        # gamma_hat
-        XtX_10 = X_10_sparse.T @ X_10_sparse
-        Xt1_X2 = X_1_sparse.T @ X_2
-
-        try:
-            solve_XtX = sparse_factorized(XtX_10.tocsc())
-            if Xt1_X2.ndim == 1:
-                gamma_hat = solve_XtX(Xt1_X2).reshape(-1, 1)
-            else:
-                gamma_hat = np.column_stack(
-                    [solve_XtX(Xt1_X2[:, j]) for j in range(Xt1_X2.shape[1])]
-                )
-        except RuntimeError:
-            gamma_hat = np.linalg.lstsq(XtX_10.toarray(), Xt1_X2, rcond=None)[0]
-            if gamma_hat.ndim == 1:
-                gamma_hat = gamma_hat.reshape(-1, 1)
-
-        # Per-cluster aggregation
-        weighted_X10 = X_10_sparse.multiply(eps_10[:, None])
-        unique_clusters, cluster_indices = np.unique(cluster_ids, return_inverse=True)
-        G = len(unique_clusters)
-
-        weighted_X10_csc = weighted_X10.tocsc()
-        c_by_cluster = np.zeros((G, p))
-        for j_col in range(p):
-            col_data = weighted_X10_csc.getcol(j_col).toarray().ravel()
-            np.add.at(c_by_cluster[:, j_col], cluster_indices, col_data)
-
-        weighted_X2 = X_2 * eps_2[:, None]
-        s2_by_cluster = np.zeros((G, k))
-        for j_col in range(k):
-            np.add.at(s2_by_cluster[:, j_col], cluster_indices, weighted_X2[:, j_col])
-
-        correction = c_by_cluster @ gamma_hat
-        S = correction - s2_by_cluster
-
-        # Bread
-        XtX_2 = X_2.T @ X_2
-        try:
-            bread = np.linalg.solve(XtX_2, np.eye(k))
-        except np.linalg.LinAlgError:
-            bread = np.linalg.lstsq(XtX_2, np.eye(k), rcond=None)[0]
-
-        return S, bread, unique_clusters
-
-    def _run_bootstrap(
-        self,
-        df: pd.DataFrame,
-        unit: str,
-        time: str,
-        first_treat: str,
-        covariates: Optional[List[str]],
-        omega_0_mask: pd.Series,
-        omega_1_mask: pd.Series,
-        unit_fe: Dict[Any, float],
-        time_fe: Dict[Any, float],
-        grand_mean: float,
-        delta_hat: Optional[np.ndarray],
-        cluster_var: str,
-        kept_cov_mask: Optional[np.ndarray],
-        treatment_groups: List[Any],
-        ref_period: int,
-        balance_e: Optional[int],
-        original_att: float,
-        original_event_study: Optional[Dict[int, Dict[str, Any]]],
-        original_group: Optional[Dict[Any, Dict[str, Any]]],
-        aggregate: Optional[str],
-    ) -> Optional[TwoStageBootstrapResults]:
-        """Run multiplier bootstrap on GMM influence function."""
-        if self.n_bootstrap < 50:
-            warnings.warn(
-                f"n_bootstrap={self.n_bootstrap} is low. Consider n_bootstrap >= 199 "
-                "for reliable inference.",
-                UserWarning,
-                stacklevel=3,
-            )
-
-        rng = np.random.default_rng(self.seed)
-
-        from diff_diff.staggered_bootstrap import _generate_bootstrap_weights_batch
-
-        y_tilde = df["_y_tilde"].values.copy()  # .copy() to avoid mutating df column
-        n = len(df)
-        cluster_ids = df[cluster_var].values
-
-        # Handle NaN y_tilde (from unidentified FEs) — matches _stage2_static logic
-        nan_mask = ~np.isfinite(y_tilde)
-        if nan_mask.any():
-            y_tilde[nan_mask] = 0.0
-
-        # --- Static specification bootstrap ---
-        D = omega_1_mask.values.astype(float)  # .astype() already creates a copy
-        D[nan_mask] = 0.0  # Exclude NaN y_tilde obs from bootstrap estimation
-
-        # Degenerate case: all treated obs have NaN y_tilde
-        if D.sum() == 0:
-            return None
-
-        X_2_static = D.reshape(-1, 1)
-        coef_static = solve_ols(X_2_static, y_tilde, return_vcov=False)[0]
-        eps_2_static = y_tilde - X_2_static @ coef_static
-
-        S_static, bread_static, unique_clusters = self._compute_cluster_S_scores(
-            df=df,
-            unit=unit,
-            time=time,
-            covariates=covariates,
-            omega_0_mask=omega_0_mask,
-            unit_fe=unit_fe,
-            time_fe=time_fe,
-            delta_hat=delta_hat,
-            kept_cov_mask=kept_cov_mask,
-            X_2=X_2_static,
-            eps_2=eps_2_static,
-            cluster_ids=cluster_ids,
-        )
-
-        n_clusters = len(unique_clusters)
-        all_weights = _generate_bootstrap_weights_batch(
-            self.n_bootstrap, n_clusters, "rademacher", rng
-        )
-
-        # T_b = bread @ (sum_g w_bg * S_g) = bread @ (W @ S)'  per boot
-        # IF_b = bread @ S_g for each cluster, then perturb
-        # boot_coef = all_weights @ S_static @ bread_static.T  → (B, k)
-        # For static (k=1): boot_att = all_weights @ S_static @ bread_static.T
-        boot_att_vec = all_weights @ S_static  # (B, 1)
-        boot_att_vec = boot_att_vec @ bread_static.T  # (B, 1)
-        boot_overall = boot_att_vec[:, 0]
-
-        boot_overall_shifted = boot_overall + original_att
-        overall_se = float(np.std(boot_overall, ddof=1))
-        overall_ci = (
-            self._compute_percentile_ci(boot_overall_shifted, self.alpha)
-            if overall_se > 0
-            else (np.nan, np.nan)
-        )
-        overall_p = (
-            self._compute_bootstrap_pvalue(original_att, boot_overall_shifted)
-            if overall_se > 0
-            else np.nan
-        )
-
-        # --- Event study bootstrap ---
-        event_study_ses = None
-        event_study_cis = None
-        event_study_p_values = None
-
-        if original_event_study and aggregate in ("event_study", "all"):
-            # Recompute S scores for event study specification
-            rel_times = df["_rel_time"].values
-            treated_rel = rel_times[omega_1_mask.values]
-            all_horizons = sorted(set(int(h) for h in treated_rel if np.isfinite(h)))
-            if self.horizon_max is not None:
-                all_horizons = [h for h in all_horizons if abs(h) <= self.horizon_max]
-
-            if balance_e is not None:
-                cohort_rel_times = self._build_cohort_rel_times(df, first_treat)
-                balanced_cohorts = set()
-                if all_horizons:
-                    max_h = max(all_horizons)
-                    required_range = set(range(-balance_e, max_h + 1))
-                    for g, horizons in cohort_rel_times.items():
-                        if required_range.issubset(horizons):
-                            balanced_cohorts.add(g)
-                if not balanced_cohorts:
-                    all_horizons = []  # No qualifying cohorts -> skip event study bootstrap
-                else:
-                    balance_mask = df[first_treat].isin(balanced_cohorts).values
-            else:
-                balance_mask = np.ones(n, dtype=bool)
-
-            est_horizons = [h for h in all_horizons if h != ref_period]
-
-            # Filter out Prop 5 horizons (same logic as _stage2_event_study)
-            has_never_treated = df["_never_treated"].any()
-            h_bar_boot = np.inf
-            if not has_never_treated and len(treatment_groups) > 1:
-                h_bar_boot = max(treatment_groups) - min(treatment_groups)
-            if h_bar_boot < np.inf:
-                est_horizons = [h for h in est_horizons if h < h_bar_boot]
-
-            if est_horizons:
-                horizon_to_col = {h: j for j, h in enumerate(est_horizons)}
-                k_es = len(est_horizons)
-                X_2_es = np.zeros((n, k_es))
-                for i in range(n):
-                    if not balance_mask[i]:
-                        continue
-                    if nan_mask[i]:
-                        continue  # NaN y_tilde -> exclude from bootstrap event study
-                    h = rel_times[i]
-                    if np.isfinite(h):
-                        h_int = int(h)
-                        if h_int in horizon_to_col:
-                            X_2_es[i, horizon_to_col[h_int]] = 1.0
-
-                coef_es = solve_ols(X_2_es, y_tilde, return_vcov=False)[0]
-                eps_2_es = y_tilde - X_2_es @ coef_es
-
-                S_es, bread_es, _ = self._compute_cluster_S_scores(
-                    df=df,
-                    unit=unit,
-                    time=time,
-                    covariates=covariates,
-                    omega_0_mask=omega_0_mask,
-                    unit_fe=unit_fe,
-                    time_fe=time_fe,
-                    delta_hat=delta_hat,
-                    kept_cov_mask=kept_cov_mask,
-                    X_2=X_2_es,
-                    eps_2=eps_2_es,
-                    cluster_ids=cluster_ids,
-                )
-
-                # boot_coef_es: (B, k_es)
-                boot_coef_es = (all_weights @ S_es) @ bread_es.T
-
-                event_study_ses = {}
-                event_study_cis = {}
-                event_study_p_values = {}
-                for h in original_event_study:
-                    if original_event_study[h].get("n_obs", 0) == 0:
-                        continue
-                    if np.isnan(original_event_study[h]["effect"]):
-                        continue  # Skip Prop 5 and other NaN-effect horizons
-                    if h not in horizon_to_col:
-                        continue
-                    j = horizon_to_col[h]
-                    orig_eff = original_event_study[h]["effect"]
-                    boot_h = boot_coef_es[:, j]
-                    se_h = float(np.std(boot_h, ddof=1))
-                    event_study_ses[h] = se_h
-                    if se_h > 0 and np.isfinite(orig_eff):
-                        shifted_h = boot_h + orig_eff
-                        event_study_p_values[h] = self._compute_bootstrap_pvalue(
-                            orig_eff, shifted_h
-                        )
-                        event_study_cis[h] = self._compute_percentile_ci(shifted_h, self.alpha)
-                    else:
-                        event_study_p_values[h] = np.nan
-                        event_study_cis[h] = (np.nan, np.nan)
-
-        # --- Group bootstrap ---
-        group_ses = None
-        group_cis = None
-        group_p_values = None
-
-        if original_group and aggregate in ("group", "all"):
-            group_to_col = {g: j for j, g in enumerate(treatment_groups)}
-            k_grp = len(treatment_groups)
-            X_2_grp = np.zeros((n, k_grp))
-            ft_vals = df[first_treat].values
-            treated_mask = omega_1_mask.values
-            for i in range(n):
-                if treated_mask[i]:
-                    if nan_mask[i]:
-                        continue  # NaN y_tilde -> exclude from group bootstrap
-                    g = ft_vals[i]
-                    if g in group_to_col:
-                        X_2_grp[i, group_to_col[g]] = 1.0
-
-            coef_grp = solve_ols(X_2_grp, y_tilde, return_vcov=False)[0]
-            eps_2_grp = y_tilde - X_2_grp @ coef_grp
-
-            S_grp, bread_grp, _ = self._compute_cluster_S_scores(
-                df=df,
-                unit=unit,
-                time=time,
-                covariates=covariates,
-                omega_0_mask=omega_0_mask,
-                unit_fe=unit_fe,
-                time_fe=time_fe,
-                delta_hat=delta_hat,
-                kept_cov_mask=kept_cov_mask,
-                X_2=X_2_grp,
-                eps_2=eps_2_grp,
-                cluster_ids=cluster_ids,
-            )
-
-            boot_coef_grp = (all_weights @ S_grp) @ bread_grp.T
-
-            group_ses = {}
-            group_cis = {}
-            group_p_values = {}
-            for g in original_group:
-                if g not in group_to_col:
-                    continue
-                j = group_to_col[g]
-                orig_eff = original_group[g]["effect"]
-                boot_g = boot_coef_grp[:, j]
-                se_g = float(np.std(boot_g, ddof=1))
-                group_ses[g] = se_g
-                if se_g > 0 and np.isfinite(orig_eff):
-                    shifted_g = boot_g + orig_eff
-                    group_p_values[g] = self._compute_bootstrap_pvalue(orig_eff, shifted_g)
-                    group_cis[g] = self._compute_percentile_ci(shifted_g, self.alpha)
-                else:
-                    group_p_values[g] = np.nan
-                    group_cis[g] = (np.nan, np.nan)
-
-        return TwoStageBootstrapResults(
-            n_bootstrap=self.n_bootstrap,
-            weight_type="rademacher",
-            alpha=self.alpha,
-            overall_att_se=overall_se,
-            overall_att_ci=overall_ci,
-            overall_att_p_value=overall_p,
-            event_study_ses=event_study_ses,
-            event_study_cis=event_study_cis,
-            event_study_p_values=event_study_p_values,
-            group_ses=group_ses,
-            group_cis=group_cis,
-            group_p_values=group_p_values,
-            bootstrap_distribution=boot_overall_shifted,
-        )
-
-    # =========================================================================
-    # Bootstrap helpers
-    # =========================================================================
-
-    @staticmethod
-    def _compute_percentile_ci(
-        boot_dist: np.ndarray,
-        alpha: float,
-    ) -> Tuple[float, float]:
-        """Compute percentile confidence interval from bootstrap distribution."""
-        lower = float(np.percentile(boot_dist, alpha / 2 * 100))
-        upper = float(np.percentile(boot_dist, (1 - alpha / 2) * 100))
-        return (lower, upper)
-
-    @staticmethod
-    def _compute_bootstrap_pvalue(
-        original_effect: float,
-        boot_dist: np.ndarray,
-    ) -> float:
-        """Compute two-sided bootstrap p-value."""
-        if original_effect >= 0:
-            p_one_sided = float(np.mean(boot_dist <= 0))
-        else:
-            p_one_sided = float(np.mean(boot_dist >= 0))
-        p_value = min(2 * p_one_sided, 1.0)
-        p_value = max(p_value, 1 / (len(boot_dist) + 1))
-        return p_value
-
-    # =========================================================================
-    # Utility
-    # =========================================================================
-
-    @staticmethod
-    def _build_cohort_rel_times(
-        df: pd.DataFrame,
-        first_treat: str,
-    ) -> Dict[Any, Set[int]]:
-        """Build mapping of cohort -> set of observed relative times."""
-        treated_mask = ~df["_never_treated"]
-        treated_df = df.loc[treated_mask]
-        result: Dict[Any, Set[int]] = {}
-        ft_vals = treated_df[first_treat].values
-        rt_vals = treated_df["_rel_time"].values
-        for i in range(len(treated_df)):
-            h = rt_vals[i]
-            if np.isfinite(h):
-                result.setdefault(ft_vals[i], set()).add(int(h))
-        return result
 
     # =========================================================================
     # sklearn-compatible interface

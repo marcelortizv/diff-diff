@@ -512,7 +512,7 @@ def wild_bootstrap_se(
             obs_weights[indices] = cluster_weights[g]
 
         # Construct bootstrap sample: y* = X @ beta_restricted + e_restricted * weights
-        y_star = X @ beta_restricted + residuals_restricted * obs_weights
+        y_star = np.dot(X, beta_restricted) + residuals_restricted * obs_weights
 
         # Estimate bootstrap coefficients with cluster-robust SE
         beta_star, residuals_star, vcov_star = _solve_ols_linalg(
@@ -638,8 +638,7 @@ def check_parallel_trends(
     # Test for difference in trends
     slope_diff = treated_slope - control_slope
     se_diff = np.sqrt(treated_se ** 2 + control_se ** 2)
-    t_stat = slope_diff / se_diff if se_diff > 0 else np.nan
-    p_value = compute_p_value(t_stat) if not np.isnan(t_stat) else np.nan
+    t_stat, p_value, _ = safe_inference(slope_diff, se_diff)
 
     return {
         "treated_trend": treated_slope,

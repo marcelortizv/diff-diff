@@ -642,14 +642,34 @@ class TestTwoStageDiDEdgeCases:
 
     def test_nan_propagation(self):
         """NaN SE should propagate to t_stat, p_value, conf_int."""
-        data = generate_test_data()
-        results = TwoStageDiD().fit(
-            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
-        )
+        from tests.conftest import assert_nan_inference
 
-        # For a reference period, t_stat and p_value should be NaN
-        if results.event_study_effects:
-            pass  # Only check if event study was computed
+        # Use never_treated_frac=0.0 to trigger Proposition 5 NaN horizons
+        data = generate_test_data(never_treated_frac=0.0)
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            results = TwoStageDiD().fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+
+        # Proposition 5 horizons should have NaN inference fields
+        assert results.event_study_effects, "Event study should be computed"
+        nan_horizons_found = 0
+        for h, eff in results.event_study_effects.items():
+            if np.isnan(eff["effect"]):
+                nan_horizons_found += 1
+                assert_nan_inference({
+                    "se": eff["se"],
+                    "t_stat": eff["t_stat"],
+                    "p_value": eff["p_value"],
+                    "conf_int": eff["conf_int"],
+                })
+        assert nan_horizons_found > 0, "Should have at least one Prop 5 NaN horizon"
 
         # Normal results should have finite values
         assert np.isfinite(results.overall_t_stat)

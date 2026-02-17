@@ -13,10 +13,7 @@ import pandas as pd
 from scipy import optimize
 
 from diff_diff.linalg import solve_ols
-from diff_diff.utils import (
-    compute_confidence_interval,
-    compute_p_value,
-)
+from diff_diff.utils import safe_inference
 
 # Import from split modules
 from diff_diff.staggered_results import (
@@ -75,17 +72,17 @@ def _logistic_regression(
     X_with_intercept = np.column_stack([np.ones(n), X])
 
     def neg_log_likelihood(beta: np.ndarray) -> float:
-        z = X_with_intercept @ beta
+        z = np.dot(X_with_intercept, beta)
         # Clip to prevent overflow
         z = np.clip(z, -500, 500)
         log_lik = np.sum(y * z - np.log(1 + np.exp(z)))
         return -log_lik
 
     def gradient(beta: np.ndarray) -> np.ndarray:
-        z = X_with_intercept @ beta
+        z = np.dot(X_with_intercept, beta)
         z = np.clip(z, -500, 500)
         probs = 1 / (1 + np.exp(-z))
-        return -X_with_intercept.T @ (y - probs)
+        return -np.dot(X_with_intercept.T, y - probs)
 
     # Initialize with zeros
     beta_init = np.zeros(p + 1)
@@ -99,7 +96,7 @@ def _logistic_regression(
     )
 
     beta = result.x
-    z = X_with_intercept @ beta
+    z = np.dot(X_with_intercept, beta)
     z = np.clip(z, -500, 500)
     probs = 1 / (1 + np.exp(-z))
 
@@ -693,9 +690,7 @@ class CallawaySantAnna(
                 )
 
                 if att_gt is not None:
-                    t_stat = att_gt / se_gt if np.isfinite(se_gt) and se_gt > 0 else np.nan
-                    p_val = compute_p_value(t_stat)
-                    ci = compute_confidence_interval(att_gt, se_gt, self.alpha)
+                    t_stat, p_val, ci = safe_inference(att_gt, se_gt, alpha=self.alpha)
 
                     group_time_effects[(g, t)] = {
                         'effect': att_gt,
@@ -720,14 +715,9 @@ class CallawaySantAnna(
         overall_att, overall_se = self._aggregate_simple(
             group_time_effects, influence_func_info, df, unit, precomputed
         )
-        # Use NaN for t-stat and p-value when SE is undefined (NaN or non-positive)
-        if np.isfinite(overall_se) and overall_se > 0:
-            overall_t = overall_att / overall_se
-            overall_p = compute_p_value(overall_t)
-        else:
-            overall_t = np.nan
-            overall_p = np.nan
-        overall_ci = compute_confidence_interval(overall_att, overall_se, self.alpha)
+        overall_t, overall_p, overall_ci = safe_inference(
+            overall_att, overall_se, alpha=self.alpha
+        )
 
         # Compute additional aggregations if requested
         event_study_effects = None
@@ -758,11 +748,7 @@ class CallawaySantAnna(
 
             # Update estimates with bootstrap inference
             overall_se = bootstrap_results.overall_att_se
-            # Use NaN for t-stat when SE is undefined; p-value comes from bootstrap
-            if np.isfinite(overall_se) and overall_se > 0:
-                overall_t = overall_att / overall_se
-            else:
-                overall_t = np.nan
+            overall_t = safe_inference(overall_att, overall_se, alpha=self.alpha)[0]
             overall_p = bootstrap_results.overall_att_p_value
             overall_ci = bootstrap_results.overall_att_ci
 
@@ -774,7 +760,7 @@ class CallawaySantAnna(
                     group_time_effects[gt]['p_value'] = bootstrap_results.group_time_p_values[gt]
                     effect = float(group_time_effects[gt]['effect'])
                     se = float(group_time_effects[gt]['se'])
-                    group_time_effects[gt]['t_stat'] = effect / se if np.isfinite(se) and se > 0 else np.nan
+                    group_time_effects[gt]['t_stat'] = safe_inference(effect, se, alpha=self.alpha)[0]
 
             # Update event study effects with bootstrap SEs
             if (event_study_effects is not None
@@ -789,7 +775,7 @@ class CallawaySantAnna(
                         event_study_effects[e]['p_value'] = p_val
                         effect = float(event_study_effects[e]['effect'])
                         se = float(event_study_effects[e]['se'])
-                        event_study_effects[e]['t_stat'] = effect / se if np.isfinite(se) and se > 0 else np.nan
+                        event_study_effects[e]['t_stat'] = safe_inference(effect, se, alpha=self.alpha)[0]
 
             # Update group effects with bootstrap SEs
             if (group_effects is not None
@@ -803,7 +789,7 @@ class CallawaySantAnna(
                         group_effects[g]['p_value'] = bootstrap_results.group_effect_p_values[g]
                         effect = float(group_effects[g]['effect'])
                         se = float(group_effects[g]['se'])
-                        group_effects[g]['t_stat'] = effect / se if np.isfinite(se) and se > 0 else np.nan
+                        group_effects[g]['t_stat'] = safe_inference(effect, se, alpha=self.alpha)[0]
 
         # Store results
         self.results_ = CallawaySantAnnaResults(
@@ -860,7 +846,7 @@ class CallawaySantAnna(
 
             # Predict counterfactual for treated units
             X_treated_with_intercept = np.column_stack([np.ones(n_t), X_treated])
-            predicted_control = X_treated_with_intercept @ beta
+            predicted_control = np.dot(X_treated_with_intercept, beta)
 
             # ATT = mean(observed treated change - predicted counterfactual)
             att = np.mean(treated_change - predicted_control)
@@ -1024,8 +1010,8 @@ class CallawaySantAnna(
             # Predict counterfactual for both treated and control
             X_treated_with_intercept = np.column_stack([np.ones(n_t), X_treated])
             X_control_with_intercept = np.column_stack([np.ones(n_c), X_control])
-            m_treated = X_treated_with_intercept @ beta
-            m_control = X_control_with_intercept @ beta
+            m_treated = np.dot(X_treated_with_intercept, beta)
+            m_control = np.dot(X_control_with_intercept, beta)
 
             # Step 2: Propensity score estimation
             X_all = np.vstack([X_treated, X_control])

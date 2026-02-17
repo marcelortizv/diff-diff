@@ -15,11 +15,10 @@ from diff_diff.results import SyntheticDiDResults
 from diff_diff.utils import (
     _compute_regularization,
     _sum_normalize,
-    compute_confidence_interval,
-    compute_p_value,
     compute_sdid_estimator,
     compute_sdid_unit_weights,
     compute_time_weights,
+    safe_inference,
     validate_binary,
 )
 
@@ -422,24 +421,14 @@ class SyntheticDiD(DifferenceInDifferences):
             inference_method = "placebo"
 
         # Compute test statistics
-        if np.isfinite(se) and se > 0:
-            t_stat = att / se
-            # Use placebo distribution for p-value if available
-            if len(placebo_effects) > 0:
-                # Two-sided p-value from placebo distribution
-                p_value = np.mean(np.abs(placebo_effects) >= np.abs(att))
-                p_value = max(p_value, 1.0 / (len(placebo_effects) + 1))
-            else:
-                p_value = compute_p_value(t_stat)
+        t_stat, p_value_analytical, conf_int = safe_inference(att, se, alpha=self.alpha)
+        if len(placebo_effects) > 0 and np.isfinite(t_stat):
+            p_value = max(
+                np.mean(np.abs(placebo_effects) >= np.abs(att)),
+                1.0 / (len(placebo_effects) + 1),
+            )
         else:
-            t_stat = np.nan
-            p_value = np.nan
-
-        # Confidence interval
-        if np.isfinite(se) and se > 0:
-            conf_int = compute_confidence_interval(att, se, self.alpha)
-        else:
-            conf_int = (np.nan, np.nan)
+            p_value = p_value_analytical
 
         # Create weight dictionaries
         unit_weights_dict = {

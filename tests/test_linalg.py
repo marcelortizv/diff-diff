@@ -1508,3 +1508,29 @@ class TestEstimatorIntegration:
         assert result.overall_se > 0
         assert np.isfinite(result.overall_att)
         assert len(result.event_study_effects) > 0
+
+
+class TestNoDotRuntimeWarnings:
+    """Verify np.dot replacement avoids Apple M4 BLAS ufunc FPE bug."""
+
+    def test_solve_ols_no_runtime_warnings(self):
+        """No RuntimeWarnings from solve_ols with n >= 500."""
+        import warnings
+
+        rng = np.random.default_rng(42)
+        n = 500
+        k = 5
+        X = rng.standard_normal((n, k))
+        beta_true = rng.standard_normal(k)
+        y = np.dot(X, beta_true) + rng.standard_normal(n) * 0.1
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            coefficients, residuals, vcov = solve_ols(X, y, return_vcov=True)
+
+        runtime_warnings = [x for x in w if issubclass(x.category, RuntimeWarning)]
+        assert len(runtime_warnings) == 0, (
+            f"Got {len(runtime_warnings)} RuntimeWarning(s): "
+            f"{[str(x.message) for x in runtime_warnings]}"
+        )
+        assert np.allclose(coefficients, beta_true, atol=0.1)

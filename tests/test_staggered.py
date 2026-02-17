@@ -2986,3 +2986,41 @@ class TestCallawaySantAnnaTStatNaN:
                 first_treat='first_treat',
                 aggregate='event_study'
             )
+
+
+class TestCallawaySantAnnaCIBugFix:
+    """Regression test: safe_inference fixes CI computed with NaN SE."""
+
+    def test_nan_se_group_time_ci_is_nan(self):
+        """conf_int should be (NaN, NaN) when SE is NaN, not finite values."""
+        from tests.conftest import assert_nan_inference
+
+        # Generate data with very few units to produce NaN-SE group-time effects
+        # (small sample → degenerate groups)
+        data = generate_staggered_data(
+            n_units=20, n_periods=6, n_cohorts=3, never_treated_frac=0.1, seed=123
+        )
+
+        import warnings
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            cs = CallawaySantAnna()
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+
+        # Check all group-time effects: if SE is NaN, CI must also be NaN
+        for (g, t), eff in results.group_time_effects.items():
+            se = eff["se"]
+            if not (np.isfinite(se) and se > 0):
+                assert_nan_inference({
+                    "se": se,
+                    "t_stat": eff["t_stat"],
+                    "p_value": eff["p_value"],
+                    "conf_int": eff["conf_int"],
+                })

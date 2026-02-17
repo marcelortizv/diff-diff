@@ -39,10 +39,7 @@ from scipy import optimize
 
 from diff_diff.linalg import LinearRegression, compute_robust_vcov, solve_ols
 from diff_diff.results import _get_significance_stars
-from diff_diff.utils import (
-    compute_confidence_interval,
-    compute_p_value,
-)
+from diff_diff.utils import safe_inference
 
 # =============================================================================
 # Results Classes
@@ -298,16 +295,16 @@ def _logistic_regression(
     X_with_intercept = np.column_stack([np.ones(n), X])
 
     def neg_log_likelihood(beta: np.ndarray) -> float:
-        z = X_with_intercept @ beta
+        z = np.dot(X_with_intercept, beta)
         z = np.clip(z, -500, 500)
         log_lik = np.sum(y * z - np.log(1 + np.exp(z)))
         return -log_lik
 
     def gradient(beta: np.ndarray) -> np.ndarray:
-        z = X_with_intercept @ beta
+        z = np.dot(X_with_intercept, beta)
         z = np.clip(z, -500, 500)
         probs = 1 / (1 + np.exp(-z))
-        return -X_with_intercept.T @ (y - probs)
+        return -np.dot(X_with_intercept.T, y - probs)
 
     beta_init = np.zeros(p + 1)
 
@@ -320,7 +317,7 @@ def _logistic_regression(
     )
 
     beta = result.x
-    z = X_with_intercept @ beta
+    z = np.dot(X_with_intercept, beta)
     z = np.clip(z, -500, 500)
     probs = 1 / (1 + np.exp(-z))
 
@@ -598,14 +595,12 @@ class TripleDifference:
             )
 
         # Compute inference
-        t_stat = att / se if np.isfinite(se) and se > 0 else np.nan
         df = n_obs - 8  # Approximate df (8 cell means)
         if covariates:
             df -= len(covariates)
         df = max(df, 1)
 
-        p_value = compute_p_value(t_stat, df=df)
-        conf_int = compute_confidence_interval(att, se, self.alpha, df=df) if np.isfinite(se) and se > 0 else (np.nan, np.nan)
+        t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha, df=df)
 
         # Get number of clusters if clustering
         n_clusters = None

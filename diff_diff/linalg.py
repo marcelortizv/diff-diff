@@ -329,7 +329,7 @@ def _solve_ols_rust(
 
     # Return with optional fitted values
     if return_fitted:
-        fitted = X @ coefficients
+        fitted = np.dot(X, coefficients)
         return coefficients, residuals, fitted, vcov
     else:
         return coefficients, residuals, vcov
@@ -687,7 +687,7 @@ def _solve_ols_numpy(
 
         # Compute residuals using only the identified coefficients
         # Note: Dropped coefficients are NaN, so we use the reduced form
-        fitted = X_reduced @ coefficients_reduced
+        fitted = np.dot(X_reduced, coefficients_reduced)
         residuals = y - fitted
 
         # Compute variance-covariance matrix for reduced system, then expand
@@ -701,7 +701,7 @@ def _solve_ols_numpy(
         coefficients = scipy_lstsq(X, y, lapack_driver="gelsd", check_finite=False, cond=1e-07)[0]
 
         # Compute residuals and fitted values
-        fitted = X @ coefficients
+        fitted = np.dot(X, coefficients)
         residuals = y - fitted
 
         # Compute variance-covariance matrix if requested
@@ -826,7 +826,7 @@ def _compute_robust_vcov_numpy(
         adjustment = n / (n - k)
         u_squared = residuals**2
         # Vectorized meat computation: X' diag(u^2) X = (X * u^2)' X
-        meat = X.T @ (X * u_squared[:, np.newaxis])
+        meat = np.dot(X.T, X * u_squared[:, np.newaxis])
     else:
         # Cluster-robust standard errors (vectorized via groupby)
         cluster_ids = np.asarray(cluster_ids)
@@ -1299,7 +1299,7 @@ class LinearRegression:
                 "This may indicate perfect multicollinearity or numerical issues.",
                 UserWarning,
             )
-            # Use inf for t-stat when SE is zero (perfect fit scenario)
+            # NOTE: Deliberately uses ±inf (not NaN via safe_inference) for zero-SE coefficients.
             if coef > 0:
                 t_stat = np.inf
             elif coef < 0:
@@ -1460,7 +1460,7 @@ class LinearRegression:
         coef = self.coefficients_.copy()
         coef[np.isnan(coef)] = 0.0
 
-        return X @ coef
+        return np.dot(X, coef)
 
 
 # =============================================================================

@@ -106,7 +106,8 @@ class TwoStageDiDBootstrapMixin:
         unique_clusters, cluster_indices = np.unique(cluster_ids, return_inverse=True)
         G = len(unique_clusters)
 
-        # Convert sparse to dense once (see _compute_gmm_variance for memory note)
+        # Convert sparse to dense once (see _compute_gmm_variance for memory note).
+        # For panels with >100K FE columns, consider per-column .getcol() instead.
         weighted_X10_dense = weighted_X10.toarray()
         c_by_cluster = np.zeros((G, p))
         for j_col in range(p):

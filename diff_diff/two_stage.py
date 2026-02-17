@@ -1225,6 +1225,8 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         # Convert sparse to dense once for efficient cluster aggregation.
         # Total memory touched is identical to per-column .getcol().toarray();
         # only peak allocation differs (full matrix vs one column at a time).
+        # For panels with >100K FE columns, consider reverting to per-column
+        # .getcol() to limit peak memory.
         weighted_X10_dense = weighted_X10.toarray()
         c_by_cluster = np.zeros((G, p))
         for j_col in range(p):

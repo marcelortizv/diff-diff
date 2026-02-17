@@ -93,7 +93,7 @@ class TROP:
     alpha : float, default=0.05
         Significance level for confidence intervals.
     n_bootstrap : int, default=200
-        Number of bootstrap replications for variance estimation.
+        Number of bootstrap replications for variance estimation. Must be >= 2.
     seed : int, optional
         Random seed for reproducibility.
 

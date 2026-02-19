@@ -616,14 +616,16 @@ class TestEdgeCases:
 
     def test_nan_inference(self):
         """Degenerate case with NaN inference fields."""
-        # Create minimal data where estimation might degenerate
-        # kappa_pre=1 gives window [a-1, a+0] = 2 periods, just enough
+        # Create small data where estimation might degenerate.
+        # Need n > k to avoid division by zero in cluster-robust VCV:
+        # Design matrix has 4 columns (intercept, D_sa, lambda_0, delta_0),
+        # so we need > 4 observations (3 units × 2 periods = 6).
         data = pd.DataFrame(
             {
-                "unit": [1, 1, 2, 2],
-                "period": [1, 2, 1, 2],
-                "outcome": [1.0, 2.0, 1.0, 2.0],
-                "first_treat": [2, 2, 0, 0],
+                "unit": [1, 1, 2, 2, 3, 3],
+                "period": [1, 2, 1, 2, 1, 2],
+                "outcome": [1.0, 2.0, 1.0, 2.0, 1.5, 2.5],
+                "first_treat": [2, 2, 0, 0, 0, 0],
             }
         )
         est = StackedDiD(kappa_pre=1, kappa_post=0)

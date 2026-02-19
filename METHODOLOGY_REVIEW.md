@@ -26,7 +26,7 @@ Each estimator in diff-diff should be periodically reviewed to ensure:
 | CallawaySantAnna | `staggered.py` | `did::att_gt()` | **Complete** | 2026-01-24 |
 | SunAbraham | `sun_abraham.py` | `fixest::sunab()` | **Complete** | 2026-02-15 |
 | SyntheticDiD | `synthetic_did.py` | `synthdid::synthdid_estimate()` | **Complete** | 2026-02-10 |
-| TripleDifference | `triple_diff.py` | (forthcoming) | Not Started | - |
+| TripleDifference | `triple_diff.py` | `triplediff::ddd()` | **Complete** | 2026-02-18 |
 | TROP | `trop.py` | (forthcoming) | Not Started | - |
 | BaconDecomposition | `bacon.py` | `bacondecomp::bacon()` | Not Started | - |
 | HonestDiD | `honest_did.py` | `HonestDiD` package | Not Started | - |

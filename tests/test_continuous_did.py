@@ -488,6 +488,7 @@ class TestEdgeCases:
     def test_inf_first_treat_normalization(self):
         """first_treat=inf should be treated as never-treated."""
         data = generate_continuous_did_data(n_units=50, n_periods=3, seed=42)
+        data["first_treat"] = data["first_treat"].astype(float)
         data.loc[data["first_treat"] == 0, "first_treat"] = np.inf
         est = ContinuousDiD()
         results = est.fit(
@@ -504,3 +505,80 @@ class TestEdgeCases:
         )
         np.testing.assert_array_equal(results.dose_grid, custom_grid)
         assert len(results.dose_response_att.effects) == 3
+
+    def test_negative_dose_raises(self):
+        """Negative doses among treated units should raise ValueError."""
+        data = generate_continuous_did_data(n_units=50, n_periods=3, seed=42)
+        # Set one treated unit's dose to negative
+        treated_units = data.loc[data["first_treat"] > 0, "unit"].unique()
+        data.loc[data["unit"] == treated_units[0], "dose"] = -1.0
+        est = ContinuousDiD()
+        with pytest.raises(ValueError, match="negative dose"):
+            est.fit(data, "outcome", "unit", "period", "first_treat", "dose")
+
+    def test_not_yet_treated_excludes_own_cohort(self):
+        """not_yet_treated control group must not include the treated cohort itself.
+
+        Construct a panel where contamination from including cohort g=2 in its own
+        control set would produce a biased pre-treatment effect. With the fix,
+        the pre-treatment ATT(g=2,t=1) should be near zero.
+        """
+        rng = np.random.RandomState(99)
+        n_per_group = 20
+        periods = [1, 2, 3, 4]
+
+        rows = []
+        # Group 1: never-treated (first_treat=0, dose=0)
+        for i in range(n_per_group):
+            uid = i
+            for t in periods:
+                rows.append({
+                    "unit": uid, "period": t, "first_treat": 0, "dose": 0.0,
+                    "outcome": rng.normal(0, 0.5),
+                })
+        # Group 2: treated at period 2 (g=2), moderate dose
+        for i in range(n_per_group):
+            uid = n_per_group + i
+            dose_i = rng.uniform(1, 3)
+            for t in periods:
+                y = rng.normal(0, 0.5)
+                if t >= 2:
+                    y += 5.0 * dose_i  # strong treatment effect
+                rows.append({
+                    "unit": uid, "period": t, "first_treat": 2, "dose": dose_i,
+                    "outcome": y,
+                })
+        # Group 3: treated at period 3 (g=3), high dose
+        for i in range(n_per_group):
+            uid = 2 * n_per_group + i
+            dose_i = rng.uniform(1, 3)
+            for t in periods:
+                y = rng.normal(0, 0.5)
+                if t >= 3:
+                    y += 5.0 * dose_i
+                rows.append({
+                    "unit": uid, "period": t, "first_treat": 3, "dose": dose_i,
+                    "outcome": y,
+                })
+
+        data = pd.DataFrame(rows)
+        est = ContinuousDiD(
+            control_group="not_yet_treated", degree=1, num_knots=0, n_bootstrap=0,
+        )
+        results = est.fit(
+            data, "outcome", "unit", "period", "first_treat", "dose",
+        )
+
+        # Pre-treatment cells for g=2 should be near zero (t=1 is pre-treatment)
+        # If cohort g=2 were included in its own control set, the pre-treatment
+        # difference would be contaminated by the cohort's own outcomes
+        pre_treatment_effects = {
+            (g, t): v for (g, t), v in results.group_time_effects.items()
+            if t < g
+        }
+        for (g, t), cell in pre_treatment_effects.items():
+            att_glob = cell.get("att_glob", 0)
+            assert abs(att_glob) < 2.0, (
+                f"Pre-treatment ATT(g={g},t={t}) = {att_glob:.4f} is too large; "
+                f"cohort may be contaminating its own control group"
+            )

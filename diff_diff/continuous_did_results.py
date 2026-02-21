@@ -46,16 +46,14 @@ class DoseResponseCurve:
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert to DataFrame with dose, effect, se, CI, t_stat, p_value."""
-        t_stat = np.where(
-            (np.isfinite(self.se) & (self.se > 0)),
-            self.effects / self.se,
-            np.nan,
-        )
-        from scipy import stats
+        from diff_diff.utils import safe_inference
 
-        p_value = np.where(
-            np.isfinite(t_stat), 2 * (1 - stats.norm.cdf(np.abs(t_stat))), np.nan
-        )
+        t_stat = np.full(len(self.effects), np.nan)
+        p_value = np.full(len(self.effects), np.nan)
+        for i in range(len(self.effects)):
+            t_i, p_i, _ = safe_inference(self.effects[i], self.se[i])
+            t_stat[i] = t_i
+            p_value[i] = p_i
         return pd.DataFrame(
             {
                 "dose": self.dose_grid,

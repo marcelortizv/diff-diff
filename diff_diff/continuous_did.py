@@ -197,6 +197,15 @@ class ContinuousDiD:
             )
             df = df[~df[unit].isin(drop_units)]
 
+        # Validate no negative doses among treated units
+        treated_doses = df.loc[df[first_treat] > 0, dose]
+        if (treated_doses < 0).any():
+            n_neg = int((treated_doses < 0).sum())
+            raise ValueError(
+                f"Found {n_neg} treated unit(s) with negative dose. "
+                f"Dose must be strictly positive for treated units (D > 0)."
+            )
+
         # Force dose=0 for never-treated units with nonzero dose
         never_treated_mask = df[first_treat] == 0
         if (df.loc[never_treated_mask, dose] != 0).any():
@@ -538,7 +547,7 @@ class ContinuousDiD:
             control_mask = never_treated_mask
         else:
             # Not-yet-treated: never-treated + first_treat > t
-            control_mask = never_treated_mask | (unit_cohorts > t)
+            control_mask = never_treated_mask | ((unit_cohorts > t) & (unit_cohorts != g))
         n_control = int(np.sum(control_mask))
         if n_control == 0:
             warnings.warn(

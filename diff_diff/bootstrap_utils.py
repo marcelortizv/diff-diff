@@ -234,6 +234,9 @@ def compute_effect_bootstrap_stats(
     p_value : float
         Bootstrap p-value.
     """
+    if not np.isfinite(original_effect):
+        return np.nan, (np.nan, np.nan), np.nan
+
     finite_mask = np.isfinite(boot_dist)
     n_valid = np.sum(finite_mask)
     n_total = len(boot_dist)

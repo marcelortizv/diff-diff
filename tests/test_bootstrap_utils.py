@@ -57,6 +57,17 @@ class TestBootstrapStatsNaNPropagation:
         assert np.isnan(ci[1])
         assert np.isnan(p_value)
 
+    @pytest.mark.parametrize("bad_value", [np.nan, np.inf, -np.inf])
+    def test_nonfinite_original_effect_with_finite_boot_dist(self, bad_value):
+        """Non-finite original_effect must return all-NaN even with finite boot_dist."""
+        boot_dist = np.arange(100.0)
+        se, ci, p_value = compute_effect_bootstrap_stats(
+            original_effect=bad_value, boot_dist=boot_dist
+        )
+        assert np.isnan(se)
+        assert np.isnan(ci[0]) and np.isnan(ci[1])
+        assert np.isnan(p_value)
+
     def test_bootstrap_stats_normal_case(self):
         """Normal case with varied values: all fields finite."""
         boot_dist = np.arange(100.0)

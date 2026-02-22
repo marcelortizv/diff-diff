@@ -93,7 +93,7 @@ class ContinuousDiDResults:
     n_bootstrap : int
         Number of bootstrap iterations used.
     bootstrap_weights : str
-        Bootstrap weight type (``"rademacher"`` or ``"mammen"``).
+        Bootstrap weight type (``"rademacher"``, ``"mammen"``, or ``"webb"``).
     seed : int or None
         Random seed used for bootstrap.
     rank_deficient_action : str

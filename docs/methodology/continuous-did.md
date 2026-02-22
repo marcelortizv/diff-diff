@@ -394,6 +394,9 @@ dvals = quantile(dose[dose > 0], probs = seq(0.10, 0.99, 0.01))
 
 Quantile-based by default: `choose_knots_quantile(dose[dose > 0], num_knots)`.
 With `num_knots=0`, no interior knots (global polynomial of given degree).
+Knots are built **once globally** from all positive doses, not per (g,t) cell.
+This ensures a common basis space across cells so that dose-response vectors
+can be meaningfully aggregated.
 
 ### Dependencies mapping (R -> Python)
 

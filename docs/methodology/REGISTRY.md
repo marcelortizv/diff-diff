@@ -427,13 +427,13 @@ This is stronger than standard PT because it conditions on specific dose values.
 - **All-same dose**: B-spline basis collapses; ACRT(d) = 0 everywhere.
 - **Rank deficiency**: When n_treated <= n_basis, cell is skipped.
 - **Balanced panel required**: Matches R `contdid` v0.1.0.
-- **Boundary knots**: Evaluation grid is clamped to training-dose boundary knots (`range(dose)`). R's `contdid` v0.1.0 has an inconsistency where `splines2::bSpline(dvals)` uses `range(dvals)` instead of `range(dose)`, which can produce extrapolation artifacts at dose grid extremes. Our approach avoids extrapolation and is methodologically sound.
+- **Boundary knots**: Knots are built once from all treated doses (global, not per-cell) to ensure a common basis across (g,t) cells for aggregation. Evaluation grid is clamped to training-dose boundary knots (`range(dose)`). R's `contdid` v0.1.0 has an inconsistency where `splines2::bSpline(dvals)` uses `range(dvals)` instead of `range(dose)`, which can produce extrapolation artifacts at dose grid extremes. Our approach avoids extrapolation and is methodologically sound.
 
 ### Implementation Checklist
 
-- [x] B-spline basis construction matching R's `splines2::bSpline` (boundary knots use training-dose range; see deviation note below)
+- [x] B-spline basis construction matching R's `splines2::bSpline` (global knots from all treated doses; boundary knots use training-dose range; see deviation note above)
 - [x] Multi-period (g,t) cell iteration with base period selection
-- [x] Dose-response and event-study aggregation with n_treated weights
+- [x] Dose-response and event-study aggregation with group-proportional weights (n_treated/n_total per group, divided among post-treatment cells; R `ptetools` convention)
 - [x] Multiplier bootstrap for inference
 - [x] Analytical SEs via influence functions
 - [x] Equation verification tests (linear, quadratic, multi-period)

@@ -276,8 +276,8 @@ differences helps interpret results and choose appropriate inference.
      - Bootstrap or placebo-based
      - Default uses bootstrap resampling. Set ``n_bootstrap=0`` for placebo-based inference using pre-treatment residuals.
    * - ``ContinuousDiD``
-     - Analytical (default)
-     - Uses delta method SEs by default. Use ``n_bootstrap=199`` (or higher) for multiplier bootstrap inference with proper CIs.
+     - Analytical (influence function)
+     - Uses influence-function-based SEs by default. Use ``n_bootstrap=199`` (or higher) for multiplier bootstrap inference with proper CIs.
 
 **Recommendations by sample size:**
 

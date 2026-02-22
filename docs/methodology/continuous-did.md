@@ -298,7 +298,7 @@ ATT(d) +/- z_{0.975} * sigma_K(d) / sqrt(n)
 ### Summary parameter inference
 
 ACRT^{glob} plug-in estimator is sqrt(n)-consistent and asymptotically normal.
-Standard errors via delta method or bootstrap.
+Standard errors via influence functions or multiplier bootstrap.
 
 ---
 

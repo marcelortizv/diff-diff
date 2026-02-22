@@ -785,6 +785,7 @@ class ContinuousDiD:
             "delta_y_control": delta_y_control,
             "mu_0": mu_0,
             "att_glob": att_glob,
+            "acrt_glob": acrt_glob,
         }
 
         return {

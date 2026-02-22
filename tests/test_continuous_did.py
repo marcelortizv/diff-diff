@@ -458,6 +458,30 @@ class TestBootstrap:
         lo, hi = results.overall_att_conf_int
         assert lo <= results.overall_att <= hi
 
+    def test_bootstrap_acrt_ci_centered(self, ci_params):
+        """Bootstrap ACRT CI should bracket the point estimate, not zero."""
+        n_boot = ci_params.bootstrap(99)
+        data = generate_continuous_did_data(
+            n_units=200, n_periods=3, seed=42, noise_sd=0.5,
+            att_function="linear", att_slope=2.0, att_intercept=1.0,
+        )
+        est = ContinuousDiD(n_bootstrap=n_boot, seed=42)
+        results = est.fit(
+            data, "outcome", "unit", "period", "first_treat", "dose"
+        )
+        lo, hi = results.overall_acrt_conf_int
+        assert lo <= results.overall_acrt <= hi, (
+            f"ACRT CI [{lo:.4f}, {hi:.4f}] does not bracket "
+            f"point estimate {results.overall_acrt:.4f}"
+        )
+        # CI midpoint should be closer to estimate than to 0
+        midpoint = (lo + hi) / 2
+        assert abs(midpoint - results.overall_acrt) < abs(midpoint), (
+            f"CI midpoint {midpoint:.4f} is closer to 0 than to "
+            f"estimate {results.overall_acrt:.4f} — bootstrap distribution "
+            f"may still be mis-centered"
+        )
+
     def test_bootstrap_p_values_valid(self, ci_params):
         n_boot = ci_params.bootstrap(99)
         data = generate_continuous_did_data(

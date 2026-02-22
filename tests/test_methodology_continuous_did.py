@@ -193,6 +193,21 @@ class TestEdgeCasesMethodology:
 
         # Verify bootstrap path also produces finite ATT SE (not NaN) for
         # rank-deficient cells — regression test for P1 bootstrap fix.
+        # Use noisy outcomes so residuals are non-zero, giving the bootstrap
+        # actual variance to measure (identical outcomes → zero residuals →
+        # zero-variance bootstrap → SE=0 → NaN by design on all platforms).
+        rng = np.random.default_rng(123)
+        rows_noisy = []
+        for i in range(n_control):
+            noise = rng.normal(0, 0.1)
+            rows_noisy.append({"unit": i, "period": 1, "outcome": noise, "first_treat": 0, "dose": 0.0})
+            rows_noisy.append({"unit": i, "period": 2, "outcome": noise, "first_treat": 0, "dose": 0.0})
+        for j in range(n_treated):
+            uid = n_control + j
+            noise = rng.normal(0, 0.1)
+            rows_noisy.append({"unit": uid, "period": 1, "outcome": noise, "first_treat": 2, "dose": dose_val})
+            rows_noisy.append({"unit": uid, "period": 2, "outcome": 5.0 + noise, "first_treat": 2, "dose": dose_val})
+        data_noisy = pd.DataFrame(rows_noisy)
         # ACRT SE is correctly NaN: zero dose variation → zero-variance
         # bootstrap distribution → degenerate SE → NaN by design.
         est_boot = ContinuousDiD(
@@ -201,7 +216,7 @@ class TestEdgeCasesMethodology:
         )
         with pytest.warns(UserWarning, match="[Ii]dentical"):
             results_boot = est_boot.fit(
-                data, "outcome", "unit", "period", "first_treat", "dose"
+                data_noisy, "outcome", "unit", "period", "first_treat", "dose"
             )
         assert np.all(np.isfinite(results_boot.dose_response_att.se))
 

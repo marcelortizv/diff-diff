@@ -71,13 +71,13 @@ class TROP:
           a model for each treated observation, averaging the individual
           treatment effects. More flexible but computationally intensive.
 
-        - 'global': Global weighted least squares with post-hoc treatment
-          effect extraction. Fits a single model on control observations
-          using (1-W) masked weights per paper Eq. 2, then computes
-          per-observation treatment effects as residuals:
+        - 'global': Computationally efficient adaptation using the (1-W)
+          masking principle from Eq. 2. Fits a single model on control
+          observations with global weights, then computes per-observation
+          treatment effects as residuals:
           tau_it = Y_it - mu - alpha_i - beta_t - L_it for treated cells.
-          ATT is the mean of these effects. Faster than twostep but uses
-          global weights instead of per-observation weights.
+          ATT is the mean of these effects. For the paper's full
+          per-treated-cell estimator, use ``method='twostep'``.
 
         - 'joint': Deprecated alias for 'global'. Will be removed in a
           future version.
@@ -979,6 +979,10 @@ class TROP:
             if np.max(np.abs(L - L_old)) < tol:
                 break
 
+        # Final re-solve with converged L (match Rust behavior)
+        Y_adj = Y_safe - L
+        mu, alpha, beta = self._solve_joint_no_lowrank(Y_adj, delta_masked)
+
         return mu, alpha, beta, L
 
     def _fit_joint(
@@ -1405,7 +1409,8 @@ class TROP:
                     boot_data, outcome, treatment, unit, time,
                     optimal_lambda, treated_periods
                 )
-                bootstrap_estimates_list.append(tau)
+                if np.isfinite(tau):
+                    bootstrap_estimates_list.append(tau)
             except (ValueError, np.linalg.LinAlgError, KeyError):
                 continue
 

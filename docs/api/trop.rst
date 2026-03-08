@@ -121,12 +121,14 @@ the estimator is consistent if any one of the three components
 
 **Global Method** (``method='global'``)
 
-An alternative approach that fits a single model on control data and extracts
-treatment effects as post-hoc residuals:
+A computationally efficient adaptation using the ``(1-W)`` masking principle
+from Eq. 2. Fits a single global model rather than per-treated-cell models.
+For the paper's full per-treated-cell estimator (Algorithm 2), use
+``method='twostep'``.
 
 1. **Compute weights**: Distance-based unit and time weights computed once
    (distance to center of treated block, RMSE to average treated trajectory),
-   with ``(1-W)`` masking to zero out treated observations (per paper Eq. 2).
+   with ``(1-W)`` masking to zero out treated observations.
 
 2. **Fit control model**: Solve weighted least squares on control data only
 

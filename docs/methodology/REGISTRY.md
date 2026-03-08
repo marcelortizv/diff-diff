@@ -1088,8 +1088,9 @@ Gradient step: G = L + (W/max(W)) ⊙ (R - L)
 Proximal step: L = U × soft_threshold(Σ, η·λ_nn) × V'  (SVD of G = UΣV')
 ```
 where R is the residual after removing fixed effects (and τ·D in joint mode).
-The twostep solver's inner L update uses FISTA/Nesterov acceleration (O(1/k²) convergence);
-the Python joint solver uses a single proximal gradient step per outer alternating iteration.
+Both the twostep and global solvers use FISTA/Nesterov acceleration for the
+inner L update (O(1/k²) convergence rate, up to 20 inner iterations per
+outer alternating step).
 
 Per-observation weights (Equation 3):
 ```
@@ -1179,8 +1180,10 @@ Q(λ) = Σ_{j,s: D_js=0} [τ̂_js^loocv(λ)]²
 
 **Method**: `method="global"` in TROP estimator (`method="joint"` is a deprecated alias)
 
-**Approach**: Global weighted least squares on control data with (1-W) masking,
-followed by post-hoc treatment effect extraction. Per paper Eq. 2.
+**Approach**: Computationally efficient adaptation using the (1-W) masking
+principle from Eq. 2. Fits a single global model on control data, then
+extracts treatment effects as post-hoc residuals. For the paper's full
+per-treated-cell estimator (Algorithm 2), use `method='twostep'`.
 
 **Objective function** (Equation G1):
 ```

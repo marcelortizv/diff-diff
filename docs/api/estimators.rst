@@ -17,6 +17,12 @@ for backward compatibility, so you can import any of them using:
 
     from diff_diff import DifferenceInDifferences, TwoWayFixedEffects, MultiPeriodDiD, SyntheticDiD
 
+Most estimators have short aliases (``TROP`` already uses its short canonical name):
+
+.. code-block:: python
+
+    from diff_diff import DiD, TWFE, EventStudy, SDiD, CS, CDiD, SA, BJS, Gardner, DDD, Stacked, Bacon
+
 .. module:: diff_diff.estimators
 
 DifferenceInDifferences

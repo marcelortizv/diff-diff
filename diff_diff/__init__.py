@@ -159,6 +159,20 @@ from diff_diff.datasets import (
     load_mpdta,
 )
 
+# Estimator aliases — short names for convenience
+DiD = DifferenceInDifferences
+TWFE = TwoWayFixedEffects
+EventStudy = MultiPeriodDiD
+SDiD = SyntheticDiD
+CS = CallawaySantAnna
+CDiD = ContinuousDiD
+SA = SunAbraham
+BJS = ImputationDiD
+Gardner = TwoStageDiD
+DDD = TripleDifference
+Stacked = StackedDiD
+Bacon = BaconDecomposition
+
 __version__ = "2.6.0"
 __all__ = [
     # Estimators
@@ -174,6 +188,19 @@ __all__ = [
     "TripleDifference",
     "TROP",
     "StackedDiD",
+    # Estimator aliases (short names)
+    "DiD",
+    "TWFE",
+    "EventStudy",
+    "SDiD",
+    "CS",
+    "CDiD",
+    "SA",
+    "BJS",
+    "Gardner",
+    "DDD",
+    "Stacked",
+    "Bacon",
     # Bacon Decomposition
     "BaconDecomposition",
     "BaconDecompositionResults",

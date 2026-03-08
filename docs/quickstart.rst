@@ -22,6 +22,9 @@ The simplest DiD design has two groups (treated/control) and two periods (pre/po
    import pandas as pd
    from diff_diff import DifferenceInDifferences, generate_did_data
 
+   # Tip: most estimators have short aliases, e.g. DiD, TWFE, CS, DDD
+   # from diff_diff import DiD
+
    # Generate synthetic data with a known treatment effect
    data = generate_did_data(
        n_units=100,

@@ -321,6 +321,15 @@ class TestValidation:
         with pytest.raises(ValueError, match="never-treated"):
             EfficientDiD(pt_assumption="post").fit(df, "y", "unit", "time", "first_treat")
 
+    def test_duplicate_unit_time_raises(self):
+        """Duplicate (unit, time) rows should be rejected."""
+        df = _make_simple_panel()
+        # Duplicate a row
+        dup_row = df.iloc[[0]].copy()
+        df = pd.concat([df, dup_row], ignore_index=True)
+        with pytest.raises(ValueError, match="duplicate"):
+            EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+
 
 class TestSklearnCompat:
     """Test get_params / set_params."""
@@ -650,6 +659,65 @@ class TestEdgeCases:
             if t >= g - 1  # effective treatment at g - anticipation
         ]
         assert len(post_effects) > 0
+
+
+class TestBalanceE:
+    """Test balance_e event study balancing."""
+
+    def test_balance_e_basic(self):
+        """balance_e restricts event study to cohorts present at anchor horizon."""
+        df = _make_staggered_panel(n_per_group=80, n_control=80, groups=(3, 5))
+        result = EfficientDiD().fit(
+            df,
+            "y",
+            "unit",
+            "time",
+            "first_treat",
+            aggregate="event_study",
+            balance_e=0,
+        )
+        assert result.event_study_effects is not None
+        for e, d in result.event_study_effects.items():
+            assert np.isfinite(d["effect"])
+
+    def test_balance_e_with_bootstrap(self, ci_params):
+        """Bootstrap balance_e should produce finite SEs."""
+        n_boot = ci_params.bootstrap(99)
+        df = _make_staggered_panel(n_per_group=80, n_control=80, groups=(3, 5))
+        result = EfficientDiD(n_bootstrap=n_boot, seed=42).fit(
+            df,
+            "y",
+            "unit",
+            "time",
+            "first_treat",
+            aggregate="event_study",
+            balance_e=0,
+        )
+        assert result.event_study_effects is not None
+        for e, d in result.event_study_effects.items():
+            if np.isfinite(d["effect"]):
+                assert np.isfinite(d["se"])
+
+    def test_balance_e_nan_anchor_filters_group(self):
+        """When a group has NaN at the anchor horizon, bootstrap should
+        exclude it from groups_at_e, matching the analytical path."""
+        edid = EfficientDiD()
+        edid.anticipation = 0
+
+        # Simulate: group 3 has finite effect at e=0, group 5 has NaN at e=0
+        gt_pairs = [(3.0, 3), (3.0, 4), (5.0, 5), (5.0, 6)]
+        original_atts = np.array([1.0, 1.5, np.nan, 0.8])
+        cohort_fractions = {3.0: 0.4, 5.0: 0.3}
+
+        result = edid._prepare_es_agg_boot(gt_pairs, original_atts, cohort_fractions, balance_e=0)
+        # Group 5 has NaN at e=0 (t=5, g=5), so it should be excluded
+        # Only group 3 effects should appear in the balanced set
+        for e, info in result.items():
+            gt_indices = info["gt_indices"]
+            groups_in_e = {gt_pairs[j][0] for j in gt_indices}
+            assert 5.0 not in groups_in_e, (
+                f"Group 5 (NaN at anchor) should be excluded at e={e}, " f"got groups {groups_in_e}"
+            )
 
 
 # =============================================================================

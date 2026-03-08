@@ -217,6 +217,15 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 "panel where every unit is observed in every time period."
             )
 
+        # Reject duplicate (unit, time) rows
+        dup_mask = df.duplicated(subset=[unit, time], keep=False)
+        if dup_mask.any():
+            n_dups = int(dup_mask.sum())
+            raise ValueError(
+                f"Found {n_dups} duplicate ({unit}, {time}) rows. "
+                "EfficientDiD requires exactly one observation per unit-period."
+            )
+
         # Validate absorbing treatment (vectorized)
         ft_nunique = df.groupby(unit)[first_treat].nunique()
         bad_units = ft_nunique[ft_nunique > 1]
@@ -259,7 +268,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         period_1_col = period_to_col[period_1]
 
         # Pivot outcome to wide matrix (n_units, n_periods)
-        pivot = df.pivot_table(index=unit, columns=time, values=outcome, aggfunc="first")
+        pivot = df.pivot(index=unit, columns=time, values=outcome)
         # Reindex to match all_units ordering and time_periods column order
         pivot = pivot.reindex(index=all_units, columns=time_periods)
         outcome_wide = pivot.values.astype(float)

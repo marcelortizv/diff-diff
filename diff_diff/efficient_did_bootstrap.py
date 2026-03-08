@@ -246,7 +246,9 @@ class EfficientDiDBootstrapMixin:
 
         if balance_e is not None:
             groups_at_e = {
-                gt_pairs[j][0] for j, (g, t) in enumerate(gt_pairs) if t - g == balance_e
+                gt_pairs[j][0]
+                for j, (g, t) in enumerate(gt_pairs)
+                if t - g == balance_e and np.isfinite(original_atts[j])
             }
             balanced: Dict[int, List[Tuple[int, float, float]]] = {}
             for j, (g, t) in enumerate(gt_pairs):

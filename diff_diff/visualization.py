@@ -58,6 +58,7 @@ def plot_event_study(
     shade_color: str = "#f0f0f0",
     ax: Optional[Any] = None,
     show: bool = True,
+    use_cband: bool = True,
 ) -> Any:
     """
     Create an event study plot showing treatment effects over time.
@@ -119,6 +120,10 @@ def plot_event_study(
         Axes to plot on. If None, creates new figure.
     show : bool, default=True
         Whether to call plt.show() at the end.
+    use_cband : bool, default=True
+        Whether to use simultaneous confidence band CIs when available
+        from CallawaySantAnna results. When False, pointwise CIs from
+        ``alpha`` are used regardless.
 
     Returns
     -------
@@ -192,6 +197,10 @@ def plot_event_study(
         # If reference was inferred from results, it was NOT explicitly provided
         if reference_inferred:
             reference_period_explicit = False
+        # Suppress simultaneous confidence band overrides when user opts out
+        if not use_cband:
+            ci_lower_override = None
+            ci_upper_override = None
     elif effects is None or se is None:
         raise ValueError("Must provide either 'results' or both 'effects' and 'se'")
 
@@ -348,17 +357,31 @@ def _extract_plot_data(
     pre_periods: Optional[List[Any]],
     post_periods: Optional[List[Any]],
     reference_period: Optional[Any],
-) -> Tuple[Dict, Dict, List, List, List, Any, bool]:
+) -> Tuple[Dict, Dict, List, List, List, Any, bool, Optional[Dict], Optional[Dict]]:
     """
     Extract plotting data from various result types.
 
     Returns
     -------
-    tuple
-        (effects, se, periods, pre_periods, post_periods, reference_period, reference_inferred)
-
-        reference_inferred is True if reference_period was auto-detected from results
+    effects : dict
+        Mapping of period to effect estimate.
+    se : dict
+        Mapping of period to standard error.
+    periods : list
+        Ordered list of periods to plot.
+    pre_periods : list
+        Pre-treatment periods.
+    post_periods : list
+        Post-treatment periods.
+    reference_period : any
+        The reference period (explicit or inferred).
+    reference_inferred : bool
+        True if reference_period was auto-detected from results
         rather than explicitly provided by the user.
+    ci_lower_override : dict or None
+        Simultaneous confidence band lower bounds, if available.
+    ci_upper_override : dict or None
+        Simultaneous confidence band upper bounds, if available.
     """
     # Handle DataFrame input
     if isinstance(results, pd.DataFrame):

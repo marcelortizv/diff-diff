@@ -334,9 +334,23 @@ class CallawaySantAnnaAggregationMixin:
             agg_inf_i = Σ_k w_k × inf_i_k + wif_i × ATT_k
             se = sqrt(mean(agg_inf^2) / n)
         """
+        # Extract global unit info for correct pg = n_g / N_total scaling.
+        # Without this, the local path builds the unit set from only units in
+        # the selected (g,t) pairs, causing pg overestimation at extreme event
+        # times where only early-adopter groups have data.
+        global_unit_to_idx = None
+        n_global_units = None
+        if precomputed is not None:
+            global_unit_to_idx = precomputed['unit_to_idx']
+            n_global_units = len(precomputed['all_units'])
+        elif df is not None and unit is not None:
+            n_global_units = df[unit].nunique()
+
         psi_total, _ = self._compute_combined_influence_function(
             gt_pairs, weights, effects, groups_for_gt,
-            influence_func_info, df, unit, precomputed
+            influence_func_info, df, unit, precomputed,
+            global_unit_to_idx=global_unit_to_idx,
+            n_global_units=n_global_units,
         )
 
         if len(psi_total) == 0:

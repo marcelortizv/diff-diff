@@ -215,6 +215,11 @@ class CallawaySantAnna(
         - "universal": Always use g-1-anticipation as base period.
         Both produce identical post-treatment effects. Matches R's
         did::att_gt() base_period parameter.
+    cband : bool, default=True
+        Whether to compute simultaneous confidence bands (sup-t) for
+        event study aggregation. Requires ``n_bootstrap > 0``.
+        When True, results include ``cband_crit_value`` and per-event-time
+        ``cband_conf_int`` entries controlling family-wise error rate.
 
     Attributes
     ----------

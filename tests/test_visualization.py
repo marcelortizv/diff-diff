@@ -574,6 +574,54 @@ class TestPlotEventStudy:
         plt.close()
 
 
+class TestPlotEventStudyCband:
+    """Tests for simultaneous confidence band (cband) support in plot_event_study."""
+
+    @pytest.fixture
+    def cs_cband_results(self):
+        """Fixture for CallawaySantAnna results with cband enabled."""
+        data = generate_staggered_data(n_units=50, n_periods=8, seed=42)
+        cs = CallawaySantAnna(n_bootstrap=199, seed=42, cband=True)
+        return cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="event_study",
+        )
+
+    def test_plot_uses_cband_cis_by_default(self, cs_cband_results):
+        """Test that cband CIs are used by default when available."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+        from diff_diff.visualization import _extract_plot_data
+
+        # Verify plot succeeds
+        ax = plot_event_study(cs_cband_results, show=False)
+        assert ax is not None
+
+        # Verify cband CIs are extracted
+        (_, _, _, _, _, _, _, ci_lower_override, ci_upper_override) = _extract_plot_data(
+            cs_cband_results, None, None, None, None
+        )
+        assert ci_lower_override is not None
+        assert ci_upper_override is not None
+
+        plt.close()
+
+    def test_plot_use_cband_false(self, cs_cband_results):
+        """Test that use_cband=False suppresses cband CIs."""
+        pytest.importorskip("matplotlib")
+        import matplotlib.pyplot as plt
+
+        # Should succeed and use pointwise CIs instead
+        ax = plot_event_study(cs_cband_results, use_cband=False, show=False)
+        assert ax is not None
+
+        plt.close()
+
+
 class TestPlotEventStudyIntegration:
     """Integration tests for event study plotting."""
 

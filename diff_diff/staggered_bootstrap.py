@@ -19,6 +19,9 @@ from diff_diff.bootstrap_utils import (
     compute_effect_bootstrap_stats as _compute_effect_bootstrap_stats_func,
 )
 from diff_diff.bootstrap_utils import (
+    compute_effect_bootstrap_stats_batch as _compute_effect_bootstrap_stats_batch_func,
+)
+from diff_diff.bootstrap_utils import (
     compute_percentile_ci as _compute_percentile_ci_func,
 )
 from diff_diff.bootstrap_utils import (
@@ -248,10 +251,8 @@ class CallawaySantAnnaBootstrapMixin:
 
         for j, gt in enumerate(gt_pairs):
             info = influence_func_info[gt]
-            treated_idx = np.array([unit_to_idx[u] for u in info['treated_units']])
-            control_idx = np.array([unit_to_idx[u] for u in info['control_units']])
-            gt_treated_indices.append(treated_idx)
-            gt_control_indices.append(control_idx)
+            gt_treated_indices.append(info['treated_idx'])
+            gt_control_indices.append(info['control_idx'])
             gt_treated_inf.append(np.asarray(info['treated_inf']))
             gt_control_inf.append(np.asarray(info['control_inf']))
 
@@ -335,19 +336,19 @@ class CallawaySantAnnaBootstrapMixin:
                 with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
                     bootstrap_group[g] = bootstrap_atts_gt[:, gt_indices] @ weights
 
-        # Compute bootstrap statistics for ATT(g,t)
+        # Batch compute bootstrap statistics for ATT(g,t)
+        batch_ses, batch_ci_lo, batch_ci_hi, batch_pv = (
+            _compute_effect_bootstrap_stats_batch_func(
+                original_atts, bootstrap_atts_gt, alpha=self.alpha
+            )
+        )
         gt_ses = {}
         gt_cis = {}
         gt_p_values = {}
-
         for j, gt in enumerate(gt_pairs):
-            se, ci, p_value = self._compute_effect_bootstrap_stats(
-                original_atts[j], bootstrap_atts_gt[:, j],
-                context=f"ATT(g={gt[0]}, t={gt[1]})"
-            )
-            gt_ses[gt] = se
-            gt_cis[gt] = ci
-            gt_p_values[gt] = p_value
+            gt_ses[gt] = float(batch_ses[j])
+            gt_cis[gt] = (float(batch_ci_lo[j]), float(batch_ci_hi[j]))
+            gt_p_values[gt] = float(batch_pv[j])
 
         # Compute bootstrap statistics for overall ATT
         if skip_overall_aggregation:
@@ -360,43 +361,39 @@ class CallawaySantAnnaBootstrapMixin:
                 context="overall ATT"
             )
 
-        # Compute bootstrap statistics for event study effects
+        # Batch compute bootstrap statistics for event study effects
         event_study_ses = None
         event_study_cis = None
         event_study_p_values = None
 
         if bootstrap_event_study is not None and event_study_info is not None:
-            event_study_ses = {}
-            event_study_cis = {}
-            event_study_p_values = {}
-
-            for e in rel_periods:
-                se, ci, p_value = self._compute_effect_bootstrap_stats(
-                    event_study_info[e]['effect'], bootstrap_event_study[e],
-                    context=f"event study (e={e})"
+            es_effects = np.array([event_study_info[e]['effect'] for e in rel_periods])
+            es_boot_matrix = np.column_stack([bootstrap_event_study[e] for e in rel_periods])
+            es_ses, es_ci_lo, es_ci_hi, es_pv = (
+                _compute_effect_bootstrap_stats_batch_func(
+                    es_effects, es_boot_matrix, alpha=self.alpha
                 )
-                event_study_ses[e] = se
-                event_study_cis[e] = ci
-                event_study_p_values[e] = p_value
+            )
+            event_study_ses = {e: float(es_ses[i]) for i, e in enumerate(rel_periods)}
+            event_study_cis = {e: (float(es_ci_lo[i]), float(es_ci_hi[i])) for i, e in enumerate(rel_periods)}
+            event_study_p_values = {e: float(es_pv[i]) for i, e in enumerate(rel_periods)}
 
-        # Compute bootstrap statistics for group effects
+        # Batch compute bootstrap statistics for group effects
         group_effect_ses = None
         group_effect_cis = None
         group_effect_p_values = None
 
         if bootstrap_group is not None and group_agg_info is not None:
-            group_effect_ses = {}
-            group_effect_cis = {}
-            group_effect_p_values = {}
-
-            for g in group_list:
-                se, ci, p_value = self._compute_effect_bootstrap_stats(
-                    group_agg_info[g]['effect'], bootstrap_group[g],
-                    context=f"group effect (g={g})"
+            grp_effects = np.array([group_agg_info[g]['effect'] for g in group_list])
+            grp_boot_matrix = np.column_stack([bootstrap_group[g] for g in group_list])
+            grp_ses, grp_ci_lo, grp_ci_hi, grp_pv = (
+                _compute_effect_bootstrap_stats_batch_func(
+                    grp_effects, grp_boot_matrix, alpha=self.alpha
                 )
-                group_effect_ses[g] = se
-                group_effect_cis[g] = ci
-                group_effect_p_values[g] = p_value
+            )
+            group_effect_ses = {g: float(grp_ses[i]) for i, g in enumerate(group_list)}
+            group_effect_cis = {g: (float(grp_ci_lo[i]), float(grp_ci_hi[i])) for i, g in enumerate(group_list)}
+            group_effect_p_values = {g: float(grp_pv[i]) for i, g in enumerate(group_list)}
 
         # Compute simultaneous confidence band critical value (sup-t)
         cband_crit_value = None

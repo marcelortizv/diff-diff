@@ -719,6 +719,22 @@ class TestBalanceE:
                 f"Group 5 (NaN at anchor) should be excluded at e={e}, " f"got groups {groups_in_e}"
             )
 
+    def test_balance_e_empty_warns(self):
+        """When no cohort survives the anchor horizon, warn the user."""
+        edid = EfficientDiD()
+        edid.anticipation = 0
+
+        # All effects are NaN at e=0
+        gt_pairs = [(3.0, 3), (3.0, 4), (5.0, 5), (5.0, 6)]
+        original_atts = np.array([np.nan, 1.5, np.nan, 0.8])
+        cohort_fractions = {3.0: 0.4, 5.0: 0.3}
+
+        with pytest.warns(UserWarning, match="no cohort has a finite effect"):
+            result = edid._prepare_es_agg_boot(
+                gt_pairs, original_atts, cohort_fractions, balance_e=0
+            )
+        assert result == {}
+
 
 # =============================================================================
 # Tier 3: Bootstrap

@@ -116,7 +116,12 @@ class EfficientDiDBootstrapMixin:
         )
         post_indices = np.where(post_mask)[0]
 
-        # Overall ATT aggregation weights (cohort-size)
+        # Overall ATT: fixed-weight re-aggregation of perturbed cell ATTs.
+        # This matches CallawaySantAnna._run_multiplier_bootstrap
+        # (staggered_bootstrap.py:281). The analytical path includes a WIF
+        # correction; bootstrap captures sampling variability through per-cell
+        # EIF perturbation without re-estimating weights — this is standard
+        # in both this library's CS implementation and the R did package.
         skip_overall = len(post_indices) == 0
         if skip_overall:
             bootstrap_overall = np.full(self.n_bootstrap, np.nan)
@@ -129,7 +134,8 @@ class EfficientDiDBootstrapMixin:
             with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
                 bootstrap_overall = bootstrap_atts[:, post_indices] @ agg_w
 
-        # Event study aggregation
+        # Event study: fixed-weight re-aggregation (same pattern as overall).
+        # See note above re: WIF — analytical WIF is not needed in bootstrap.
         bootstrap_event_study = None
         event_study_info = None
         if aggregate in ("event_study", "all"):
@@ -260,6 +266,14 @@ class EfficientDiDBootstrapMixin:
                         balanced[e] = []
                     balanced[e].append((j, original_atts[j], cohort_fractions.get(g, 0.0)))
             effects_by_e = balanced
+
+        if balance_e is not None and not effects_by_e:
+            warnings.warn(
+                f"balance_e={balance_e}: no cohort has a finite effect at the "
+                "anchor horizon. Event study will be empty.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         result = {}
         for e, elist in effects_by_e.items():

@@ -319,6 +319,11 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             else:
                 effective_p1_col = period_1_col
 
+            # Estimate all (g, t) cells including pre-treatment. Under PT-Post,
+            # pre-treatment cells serve as placebo/pre-trend diagnostics, matching
+            # the CallawaySantAnna implementation. Users filter to t >= g for
+            # post-treatment effects; pre-treatment cells are clearly labeled by
+            # their (g, t) coordinates in the results object.
             for t in time_periods:
                 # Skip period_1 — it's the universal reference baseline,
                 # not a target period
@@ -712,6 +717,14 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                         balanced[e] = []
                     balanced[e].append(((g, t), data["effect"], cohort_fractions.get(g, 0.0)))
             effects_by_e = balanced
+
+        if balance_e is not None and not effects_by_e:
+            warnings.warn(
+                f"balance_e={balance_e}: no cohort has a finite effect at the "
+                "anchor horizon. Event study will be empty.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         result: Dict[int, Dict[str, Any]] = {}
         for e, elist in sorted(effects_by_e.items()):

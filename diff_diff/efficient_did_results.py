@@ -31,7 +31,8 @@ class EfficientDiDResults:
         ``{(g, t): {'effect', 'se', 't_stat', 'p_value', 'conf_int',
         'n_treated', 'n_control'}}``
     overall_att : float
-        Overall ATT (cohort-size weighted average of post-treatment effects).
+        Overall ATT (cohort-size weighted average of post-treatment
+        group-time effects, matching CallawaySantAnna convention).
     overall_se : float
         Standard error of overall ATT.
     overall_t_stat : float

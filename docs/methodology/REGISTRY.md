@@ -564,6 +564,7 @@ Estimator simplifies to closed-form expressions using only within-group sample m
 - Bootstrap: Nonparametric clustered bootstrap (resampling clusters with replacement); 300 replications recommended (page 23, footnote 16)
 - **Small sample recommendation** (Section 5.1): Use cluster bootstrap SEs rather than analytical SEs when n is small (n <= 50). Analytical SEs are anticonservative with n=50 (coverage ~0.80) but perform well with n >= 200 (coverage ~0.94)
 - Simultaneous confidence bands: Multiplier bootstrap procedure for multiple `(g,t)` pairs (footnote 13, referencing Callaway and Sant'Anna 2021, Theorems 2-3, Algorithm 1)
+- **Implementation note**: Phase 1 uses multiplier bootstrap on EIF values (Rademacher/Mammen/Webb weights) rather than nonparametric clustered bootstrap. This is asymptotically equivalent and computationally cheaper, consistent with the CallawaySantAnna implementation pattern. Clustered resampling bootstrap may be added in a future version
 
 *Efficient influence function for ATT(g,t) (Theorem 3.2):*
 ```
@@ -586,6 +587,8 @@ where `q_{g,e} = pi_g / sum_{g' in G_{trt,e}} pi_{g'}`.
 - **Negative weights**: Explicitly stated as harmless for bias and beneficial for precision; arise from efficiency optimization under overidentification (Section 5.2)
 - **PT-Post regime (just-identified)**: Under PT-Post, EDiD automatically reduces to standard single-baseline estimator (Corollary 3.2). No downside to using EDiD -- it subsumes standard estimators
 - **PT-All index set**: Under PT-All, valid (g', t_pre) pairs require only t_pre < g' (pre-treatment for the comparison group), not t_pre < g. Same-group pairs (g'=g) are valid and contribute overidentifying moments. This follows from Equation 3.9: the target group g appears only in the first term (Y_t - Y_1), which is independent of t_pre
+- **Bootstrap aggregation**: Multiplier bootstrap uses fixed cohort-size weights for overall/event-study aggregation, matching the CallawaySantAnna bootstrap pattern (staggered_bootstrap.py). The analytical path includes a WIF correction; the bootstrap implicitly accounts for all sources of sampling variability through EIF perturbation, subsuming the WIF correction. This is consistent with the R `did` package approach
+- **Overall ATT convention**: The library's `overall_att` uses cohort-size-weighted averaging of post-treatment (g,t) cells, matching the CallawaySantAnna simple aggregation. This differs from the paper's ES_avg (Eq 2.3), which uniformly averages over event-time horizons. ES_avg can be computed from event study output as `mean(event_study_effects[e]["effect"] for e >= 0)`
 
 *Algorithm (two-step semiparametric estimation, Section 4):*
 

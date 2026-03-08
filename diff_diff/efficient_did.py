@@ -84,13 +84,6 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         seed: Optional[int] = None,
         anticipation: int = 0,
     ):
-        if pt_assumption not in ("all", "post"):
-            raise ValueError(f"pt_assumption must be 'all' or 'post', got '{pt_assumption}'")
-        valid_weights = ("rademacher", "mammen", "webb")
-        if bootstrap_weights not in valid_weights:
-            raise ValueError(
-                f"bootstrap_weights must be one of {valid_weights}, got '{bootstrap_weights}'"
-            )
         if cluster is not None:
             raise NotImplementedError(
                 "Cluster-robust SEs are not yet implemented for EfficientDiD. "
@@ -105,6 +98,18 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         self.anticipation = anticipation
         self.is_fitted_ = False
         self.results_: Optional[EfficientDiDResults] = None
+        self._validate_params()
+
+    def _validate_params(self) -> None:
+        """Validate constrained parameters."""
+        if self.pt_assumption not in ("all", "post"):
+            raise ValueError(f"pt_assumption must be 'all' or 'post', got '{self.pt_assumption}'")
+        valid_weights = ("rademacher", "mammen", "webb")
+        if self.bootstrap_weights not in valid_weights:
+            raise ValueError(
+                f"bootstrap_weights must be one of {valid_weights}, "
+                f"got '{self.bootstrap_weights}'"
+            )
 
     # -- sklearn compatibility ------------------------------------------------
 
@@ -127,6 +132,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 setattr(self, key, value)
             else:
                 raise ValueError(f"Unknown parameter: {key}")
+        self._validate_params()
         return self
 
     # -- Main estimation ------------------------------------------------------
@@ -177,6 +183,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         NotImplementedError
             If ``covariates`` is provided (Phase 2).
         """
+        self._validate_params()
+
         if covariates is not None:
             raise NotImplementedError(
                 "Covariates are not yet supported in EfficientDiD (Phase 1). "

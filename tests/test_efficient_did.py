@@ -341,6 +341,14 @@ class TestSklearnCompat:
         with pytest.raises(ValueError, match="Unknown parameter"):
             edid.set_params(nonexistent=True)
 
+    def test_set_params_validates(self):
+        edid = EfficientDiD()
+        with pytest.raises(ValueError, match="pt_assumption"):
+            edid.set_params(pt_assumption="POST")
+        edid2 = EfficientDiD()
+        with pytest.raises(ValueError, match="bootstrap_weights"):
+            edid2.set_params(bootstrap_weights="invalid")
+
     def test_alias(self):
         assert EDiD is EfficientDiD
 
@@ -848,23 +856,35 @@ class TestBridgingComparison:
 class TestWIFCorrection:
     """Fix 3: WIF correction for aggregated SEs."""
 
-    def test_wif_increases_se(self):
-        """WIF-corrected SE should be >= naive SE (without WIF)."""
+    def test_wif_contribution_nonzero(self):
+        """WIF correction should produce nonzero contribution for staggered design."""
         df = _make_staggered_panel(n_per_group=100, n_control=100, groups=(3, 5))
-        result = EfficientDiD(pt_assumption="all").fit(
-            df, "y", "unit", "time", "first_treat", aggregate="all"
-        )
-        wif_se = result.overall_se
-
-        # Compute naive SE without WIF for comparison
         edid = EfficientDiD(pt_assumption="all")
-        res_naive = edid.fit(df, "y", "unit", "time", "first_treat")
+        result = edid.fit(df, "y", "unit", "time", "first_treat")
 
-        # The overall SE with WIF should be at least as large as without
-        # (WIF adds non-negative variance). Allow small FP tolerance.
+        # Reconstruct WIF inputs from result
+        gt_effects = result.group_time_effects
+        keepers = [
+            (g, t) for (g, t) in gt_effects if t >= g and np.isfinite(gt_effects[(g, t)]["effect"])
+        ]
+        effects = np.array([gt_effects[gt]["effect"] for gt in keepers])
+
+        # Build unit_cohorts and cohort_fractions from data
+        unit_info = df.groupby("unit")["first_treat"].first()
+        unit_cohorts = unit_info.values.astype(float)
+        unit_cohorts[unit_cohorts == np.inf] = 0.0  # normalize never-treated
+        n_units = len(unit_cohorts)
+        cohort_fractions = {}
+        for g in [3.0, 5.0]:
+            cohort_fractions[g] = float(np.sum(unit_cohorts == g)) / n_units
+
+        wif = edid._compute_wif_contribution(
+            keepers, effects, unit_cohorts, cohort_fractions, n_units
+        )
+        # WIF should be nonzero for staggered design with 2+ groups
         assert (
-            wif_se >= res_naive.overall_se * 0.99
-        ), f"WIF SE ({wif_se:.6f}) should be >= naive SE ({res_naive.overall_se:.6f})"
+            np.linalg.norm(wif) > 1e-10
+        ), f"WIF contribution should be nonzero, got norm={np.linalg.norm(wif):.2e}"
 
     def test_wif_se_vs_bootstrap(self, ci_params):
         """WIF-corrected SE should roughly match bootstrap SE."""

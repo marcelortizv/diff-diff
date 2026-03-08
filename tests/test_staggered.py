@@ -1019,6 +1019,118 @@ class TestCallawaySantAnnaCovariates:
         assert results.overall_se > 0
 
 
+class TestCallawaySantAnnaRankDeficiencyPaths:
+    """Tests for rank-deficiency handling in DR and reg not_yet_treated paths."""
+
+    def test_dr_rank_deficient_action_warn_emits_warning(self):
+        """Test that DR path emits rank-deficiency warning with collinear covariates."""
+        import warnings as warn_mod
+
+        data = generate_staggered_data_with_covariates(seed=42)
+        # Near-collinear covariate: x1 + tiny noise
+        rng = np.random.default_rng(99)
+        data["x1_near"] = data["x1"] + rng.normal(scale=1e-9, size=len(data))
+
+        cs = CallawaySantAnna(
+            estimation_method="dr",
+            rank_deficient_action="warn",
+        )
+
+        with warn_mod.catch_warnings(record=True) as w:
+            warn_mod.simplefilter("always")
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x1_near"],
+            )
+
+            rank_warnings = [x for x in w if "rank-deficient" in str(x.message).lower()
+                           or "Rank-deficient" in str(x.message)]
+            assert len(rank_warnings) > 0, (
+                "Expected at least one rank-deficiency warning from DR path"
+            )
+
+        assert results is not None
+        assert results.overall_att is not None
+
+    def test_reg_nyt_rank_deficient_action_warn(self):
+        """Test that reg+not_yet_treated emits rank-deficiency warning with collinear covariates."""
+        import warnings as warn_mod
+
+        data = generate_staggered_data_with_covariates(seed=42)
+        data["x1_dup"] = data["x1"].copy()
+
+        cs = CallawaySantAnna(
+            estimation_method="reg",
+            control_group="not_yet_treated",
+            rank_deficient_action="warn",
+        )
+
+        with warn_mod.catch_warnings(record=True) as w:
+            warn_mod.simplefilter("always")
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x1_dup"],
+            )
+
+            rank_warnings = [x for x in w if "rank-deficient" in str(x.message).lower()
+                           or "Rank-deficient" in str(x.message)]
+            assert len(rank_warnings) > 0, (
+                "Expected at least one rank-deficiency warning from reg nyt path"
+            )
+
+        assert results is not None
+        assert results.overall_att is not None
+        assert results.overall_se > 0
+
+    def test_bootstrap_single_unit_cohort_handles_gracefully(self, ci_params):
+        """Test that bootstrap handles cohort with 1 treated unit without crashing."""
+        # Build small dataset where one cohort has exactly 1 unit
+        rng = np.random.default_rng(42)
+        n_periods = 6
+        # 15 never-treated, 14 in cohort 3, 1 in cohort 5
+        cohorts = ([0] * 15) + ([3] * 14) + ([5] * 1)
+        n_units = len(cohorts)
+
+        rows = []
+        for i in range(n_units):
+            g = cohorts[i]
+            for t in range(1, n_periods + 1):
+                treated = 1 if (g > 0 and t >= g) else 0
+                y = rng.normal(0, 1) + 2.0 * treated
+                rows.append((i, t, y, g))
+
+        data = pd.DataFrame(rows, columns=["unit", "time", "outcome", "first_treat"])
+
+        n_boot = ci_params.bootstrap(99)
+        cs = CallawaySantAnna(n_bootstrap=n_boot, seed=42)
+
+        results = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="all",
+        )
+
+        assert results is not None
+        assert results.overall_att is not None
+        # Single-unit cohort (g=5) effects should exist and have finite ATT
+        g5_effects = {(g, t): eff for (g, t), eff in results.group_time_effects.items()
+                      if g == 5}
+        assert len(g5_effects) > 0, "Expected group-time effects for cohort g=5"
+        for (g, t), eff in g5_effects.items():
+            assert np.isfinite(eff["effect"]), f"g={g},t={t}: ATT should be finite"
+
+
 class TestCallawaySantAnnaBootstrap:
     """Tests for Callaway-Sant'Anna multiplier bootstrap inference."""
 

@@ -103,6 +103,7 @@ SCENARIOS = [
     {"name": "reg_10cov", "method": "reg", "n_cov": 10},
     {"name": "dr_2cov", "method": "dr", "n_cov": 2},
     {"name": "ipw_2cov", "method": "ipw", "n_cov": 2},
+    {"name": "ipw_2cov_nyt", "method": "ipw", "n_cov": 2, "control_group": "not_yet_treated"},
     {"name": "dr_2cov_nyt", "method": "dr", "n_cov": 2, "control_group": "not_yet_treated"},
     {"name": "reg_2cov_nyt", "method": "reg", "n_cov": 2, "control_group": "not_yet_treated"},
 ]

@@ -862,6 +862,7 @@ class CallawaySantAnna(
 
             X_ctrl = None
             cho = None
+            kept_cols = None
             if not ctrl_has_nan:
                 X_ctrl = np.column_stack([np.ones(n_c_base), X_ctrl_raw])
 
@@ -880,7 +881,10 @@ class CallawaySantAnna(
                             UserWarning, stacklevel=2,
                         )
                     cho = None  # Force lstsq path for ALL rank-deficient cases
+                    kept_cols = np.array([i for i in range(X_ctrl.shape[1])
+                                         if i not in dropped_cols])
                 else:
+                    kept_cols = None  # Full rank — use all columns
                     with np.errstate(all='ignore'):
                         XtX = X_ctrl.T @ X_ctrl
                     try:
@@ -960,19 +964,34 @@ class CallawaySantAnna(
                             Xty = pair_X_ctrl.T @ control_change
                             beta = scipy_linalg.cho_solve(cho, Xty)
                         else:
-                            # Compute Cholesky for this specific pair, or lstsq fallback
-                            pair_XtX = pair_X_ctrl.T @ pair_X_ctrl
-                            try:
-                                pair_cho = scipy_linalg.cho_factor(pair_XtX)
-                                Xty = pair_X_ctrl.T @ control_change
-                                beta = scipy_linalg.cho_solve(pair_cho, Xty)
-                            except np.linalg.LinAlgError:
+                            # Compute per-pair Cholesky or lstsq fallback
+                            if kept_cols is not None:
+                                # Rank-deficient: skip Cholesky, use reduced lstsq
                                 pass
+                            else:
+                                pair_XtX = pair_X_ctrl.T @ pair_X_ctrl
+                                try:
+                                    pair_cho = scipy_linalg.cho_factor(pair_XtX)
+                                    Xty = pair_X_ctrl.T @ control_change
+                                    beta = scipy_linalg.cho_solve(pair_cho, Xty)
+                                except np.linalg.LinAlgError:
+                                    pass
 
                         if beta is None or np.any(~np.isfinite(beta)):
-                            # Fall back to lstsq
-                            result = scipy_linalg.lstsq(pair_X_ctrl, control_change)
-                            beta = result[0]
+                            if kept_cols is not None:
+                                # Reduced solve for rank-deficient design
+                                result = scipy_linalg.lstsq(
+                                    pair_X_ctrl[:, kept_cols], control_change,
+                                    cond=1e-07,
+                                )
+                                beta = np.zeros(pair_X_ctrl.shape[1])
+                                beta[kept_cols] = result[0]
+                            else:
+                                # Full-rank lstsq fallback (Cholesky numerical failure)
+                                result = scipy_linalg.lstsq(
+                                    pair_X_ctrl, control_change, cond=1e-07,
+                                )
+                                beta = result[0]
 
                     if beta is None or np.any(~np.isfinite(beta)):
                         n_dropped_cells += 1
@@ -1565,29 +1584,42 @@ class CallawaySantAnna(
             X_control_with_intercept = np.column_stack([np.ones(n_c), X_control])
             if cho_cache is not None and cho_key is not None:
                 cached_cho = cho_cache.get(cho_key)
-                if cached_cho is not None:
+
+                if cached_cho is False:
+                    # Rank-deficient sentinel: skip Cholesky, fall through
+                    pass
+                elif cached_cho is not None:
                     Xty = X_control_with_intercept.T @ control_change
                     beta = scipy_linalg.cho_solve(cached_cho, Xty)
                     if np.any(~np.isfinite(beta)):
                         beta = None
                 else:
-                    # Try to compute and cache Cholesky
-                    XtX = X_control_with_intercept.T @ X_control_with_intercept
-                    try:
-                        cho_factor = scipy_linalg.cho_factor(XtX)
-                        cho_cache[cho_key] = cho_factor
-                        Xty = X_control_with_intercept.T @ control_change
-                        beta = scipy_linalg.cho_solve(cho_factor, Xty)
-                        if np.any(~np.isfinite(beta)):
-                            beta = None
-                    except np.linalg.LinAlgError:
-                        pass
+                    # First time for this cho_key: check rank before Cholesky
+                    rank_info = _detect_rank_deficiency(X_control_with_intercept)
+                    if len(rank_info[1]) > 0:
+                        cho_cache[cho_key] = False  # Sentinel
+                    else:
+                        XtX = X_control_with_intercept.T @ X_control_with_intercept
+                        try:
+                            cho_factor = scipy_linalg.cho_factor(XtX)
+                            cho_cache[cho_key] = cho_factor
+                            Xty = X_control_with_intercept.T @ control_change
+                            beta = scipy_linalg.cho_solve(cho_factor, Xty)
+                            if np.any(~np.isfinite(beta)):
+                                beta = None
+                        except np.linalg.LinAlgError:
+                            pass
 
             if beta is None:
                 beta, _ = _linear_regression(
                     X_control, control_change,
                     rank_deficient_action=self.rank_deficient_action,
                 )
+                # Zero NaN coefficients for prediction only — dropped columns
+                # contribute 0 to the column space projection. Note: solve_ols
+                # deliberately uses NaN (R's lm() convention) for inference, but
+                # here we only need beta for prediction (m_treated, m_control).
+                beta = np.where(np.isfinite(beta), beta, 0.0)
 
             # Predict counterfactual for both treated and control
             X_treated_with_intercept = np.column_stack([np.ones(n_t), X_treated])

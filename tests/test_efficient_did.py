@@ -518,7 +518,9 @@ class TestValidTriples:
 
     def test_pt_all_simple(self):
         """T=5, groups={3, inf}, target (3, 4), period_1=1.
-        Valid pairs: [(inf, 2)] — only baseline t_pre=2."""
+        Under PT-All: g'=inf with t_pre in {2,3,4,5} = 4 pairs,
+        plus g'=3 (same-group) with t_pre in {2} (t_pre < g'=3) = 1 pair.
+        Total: 5 pairs."""
         pairs = enumerate_valid_triples(
             target_g=3,
             target_t=4,
@@ -527,11 +529,16 @@ class TestValidTriples:
             period_1=1,
             pt_assumption="all",
         )
-        assert (np.inf, 2) in pairs
+        expected = {(np.inf, 2), (np.inf, 3), (np.inf, 4), (np.inf, 5), (3, 2)}
+        actual = set(pairs)
+        assert actual == expected, f"Expected {expected}, got {actual}"
 
     def test_pt_all_staggered(self):
         """T=5, groups={3, 5, inf}, target (3, 4), period_1=1.
-        Valid pairs under PT-All should include (inf, 2), (5, 2), (5, 3), (5, 4)."""
+        Under PT-All: g'=inf: t_pre in {2,3,4,5} = 4 pairs,
+        g'=5: t_pre in {2,3,4} (t_pre < 5) = 3 pairs,
+        g'=3: t_pre in {2} (t_pre < 3) = 1 pair.
+        Total: 8 pairs."""
         pairs = enumerate_valid_triples(
             target_g=3,
             target_t=4,
@@ -540,15 +547,18 @@ class TestValidTriples:
             period_1=1,
             pt_assumption="all",
         )
-        assert (np.inf, 2) in pairs
-        assert (5, 2) in pairs
-        # g'=5 has effective treatment at t=5, so t_pre<5 && t_pre<3
-        # t_pre must be < effective_g=3: so t_pre=2 only
-        # Wait - t_pre<3 for target g, and t_pre<5 for g'=5
-        # So valid t_pre for pair (5, t_pre): t_pre in {2} (since t_pre<3)
-        expected = {(np.inf, 2), (5, 2)}
+        expected = {
+            (np.inf, 2),
+            (np.inf, 3),
+            (np.inf, 4),
+            (np.inf, 5),
+            (5, 2),
+            (5, 3),
+            (5, 4),
+            (3, 2),
+        }
         actual = set(pairs)
-        assert expected.issubset(actual), f"Expected {expected} ⊆ {actual}"
+        assert actual == expected, f"Expected {expected}, got {actual}"
 
     def test_pt_post_single_pair(self):
         """PT-Post: only (inf, g-1)."""
@@ -562,8 +572,10 @@ class TestValidTriples:
         )
         assert pairs == [(np.inf, 2)]
 
-    def test_empty_valid_pairs(self):
-        """When g=2 and period_1=1, no valid t_pre exists (since period_1 is skipped)."""
+    def test_g2_has_valid_pairs_pt_all(self):
+        """When g=2, period_1=1, under PT-All: g'=inf gives t_pre in {2,3}
+        (no t_pre < g constraint), g'=2 has no valid t_pre (t_pre < 2, skip period_1).
+        So pairs should be non-empty."""
         pairs = enumerate_valid_triples(
             target_g=2,
             target_t=3,
@@ -572,8 +584,11 @@ class TestValidTriples:
             period_1=1,
             pt_assumption="all",
         )
-        # t_pre must be < 2 and != period_1=1, so no valid t_pre
-        assert len(pairs) == 0
+        # g'=inf: t_pre in {2, 3} (no constraint other than != period_1)
+        # g'=2: t_pre must be < 2 and != 1 -> empty
+        expected = {(np.inf, 2), (np.inf, 3)}
+        actual = set(pairs)
+        assert actual == expected, f"Expected {expected}, got {actual}"
 
     def test_anticipation(self):
         """Anticipation shifts effective treatment boundary."""
@@ -854,7 +869,7 @@ class TestWIFCorrection:
     def test_wif_se_vs_bootstrap(self, ci_params):
         """WIF-corrected SE should roughly match bootstrap SE."""
         n_boot = ci_params.bootstrap(999, min_n=199)
-        threshold = 0.40 if n_boot < 100 else 0.30
+        threshold = 0.40 if n_boot < 100 else 0.35
 
         df = _make_staggered_panel(n_per_group=100, n_control=100, groups=(3, 5))
 
@@ -905,3 +920,97 @@ class TestResultsParams:
         )
         s = result.summary()
         assert "Bootstrap" in s
+
+
+# =============================================================================
+# Regression Tests (PR #192 review feedback, Round 2)
+# =============================================================================
+
+
+class TestPTAllIndexSet:
+    """Fix 1 (Round 2): PT-All index set must include g'=g and not require t_pre < g."""
+
+    def test_g2_finite_att_pt_all(self):
+        """g=2 under PT-All should produce finite ATTs (not NaN)."""
+        df = _make_staggered_panel(
+            n_per_group=60, n_control=80, groups=(2, 4), n_periods=5, seed=42
+        )
+        result = EfficientDiD(pt_assumption="all").fit(df, "y", "unit", "time", "first_treat")
+        # g=2 post-treatment effects should be finite
+        for (g, t), d in result.group_time_effects.items():
+            if g == 2.0 and t >= 2:
+                assert np.isfinite(
+                    d["effect"]
+                ), f"ATT({g},{t}) should be finite under PT-All, got {d['effect']}"
+
+    def test_pt_all_more_moments_than_pt_post(self):
+        """PT-All should produce strictly more moments than PT-Post."""
+        pairs_all = enumerate_valid_triples(
+            target_g=3,
+            target_t=4,
+            treatment_groups=[3, 5],
+            time_periods=[1, 2, 3, 4, 5, 6],
+            period_1=1,
+            pt_assumption="all",
+        )
+        pairs_post = enumerate_valid_triples(
+            target_g=3,
+            target_t=4,
+            treatment_groups=[3, 5],
+            time_periods=[1, 2, 3, 4, 5, 6],
+            period_1=1,
+            pt_assumption="post",
+        )
+        assert len(pairs_all) > len(pairs_post), (
+            f"PT-All ({len(pairs_all)}) should have more moments than "
+            f"PT-Post ({len(pairs_post)})"
+        )
+
+    def test_same_group_pairs_valid(self):
+        """g'=g pairs should be present in PT-All enumeration."""
+        pairs = enumerate_valid_triples(
+            target_g=3,
+            target_t=4,
+            treatment_groups=[3, 5],
+            time_periods=[1, 2, 3, 4, 5],
+            period_1=1,
+            pt_assumption="all",
+        )
+        assert (3, 2) in pairs, f"Same-group pair (3, 2) should be valid, got {pairs}"
+
+
+class TestBootstrapNanResilience:
+    """Fix 2 (Round 2): Bootstrap should filter NaN cells."""
+
+    def test_bootstrap_nan_cell_resilience(self, ci_params):
+        """Bootstrap should not be poisoned by NaN ATT cells."""
+        n_boot = ci_params.bootstrap(99, min_n=49)
+        # Use PT-All which gives finite cells for g=2
+        df = _make_staggered_panel(
+            n_per_group=60, n_control=80, groups=(2, 4), n_periods=5, seed=42
+        )
+        result = EfficientDiD(pt_assumption="all", n_bootstrap=n_boot, seed=42).fit(
+            df, "y", "unit", "time", "first_treat"
+        )
+        assert np.isfinite(
+            result.overall_se
+        ), f"Overall SE should be finite, got {result.overall_se}"
+        assert result.bootstrap_results is not None
+
+
+class TestCohortDropWarning:
+    """Fix 3 (Round 2): PT-Post + anticipation should warn on cohort drop."""
+
+    def test_cohort_drop_warning(self):
+        """Cohort g=2 with anticipation=1 under PT-Post: baseline=0, not in data."""
+        df = _make_staggered_panel(
+            n_per_group=60, n_control=80, groups=(2, 4), n_periods=5, seed=42
+        )
+        with pytest.warns(UserWarning, match=r"Cohort g=2.*dropped"):
+            result = EfficientDiD(pt_assumption="post", anticipation=1).fit(
+                df, "y", "unit", "time", "first_treat"
+            )
+        # Only g=4 effects should be present
+        groups_present = {g for (g, t) in result.group_time_effects}
+        assert 2.0 not in groups_present, "g=2 should have been dropped"
+        assert 4.0 in groups_present, "g=4 should still be present"

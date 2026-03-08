@@ -27,10 +27,13 @@ def enumerate_valid_triples(
 ) -> List[Tuple[float, float]]:
     """Enumerate valid (g', t_pre) pairs for target (g, t).
 
-    Under PT-All, any not-yet-treated cohort g' (including never-treated) paired
-    with any pre-treatment baseline t_pre that is pre-treatment for *both* g and
-    g' forms a valid comparison.  Under PT-Post, only the never-treated group
-    with baseline g - 1 - anticipation is valid (just-identified).
+    Under PT-All, any not-yet-treated cohort g' (including never-treated and
+    g'=g itself) paired with any baseline t_pre that is pre-treatment for the
+    *comparison* group g' forms a valid comparison.  The target group g appears
+    only in the first term (Y_t - Y_1), which is independent of t_pre, so
+    t_pre need not be pre-treatment for g.  Under PT-Post, only the
+    never-treated group with baseline g - 1 - anticipation is valid
+    (just-identified).
 
     Parameters
     ----------
@@ -56,8 +59,6 @@ def enumerate_valid_triples(
     list of (g', t_pre) tuples
         Valid comparison pairs.  Empty if none exist.
     """
-    effective_g = target_g - anticipation  # effective treatment start
-
     if pt_assumption == "post":
         # Just-identified: only (never-treated, g - 1 - anticipation)
         baseline = target_g - 1 - anticipation
@@ -68,16 +69,12 @@ def enumerate_valid_triples(
     # PT-All: overidentified
     pairs: List[Tuple[float, float]] = []
 
-    # Candidate comparison groups: never-treated + not-yet-treated cohorts
-    # Note: We intentionally do NOT filter by effective_gp > target_t.
-    # Under PT-All, comparison group g' is only used at pre-treatment periods
-    # (Y_{t_pre} - Y_1), never at time t. The Y_t trend comes from the
-    # never-treated group. Bridging comparisons (g' treated at t) are valid
-    # per Section 3.2 of Chen et al. (2025).
+    # Candidate comparison groups: never-treated + all treatment cohorts
+    # (including g'=g — same-cohort pairs are valid under PT-All and
+    # contribute overidentifying moments; see Eq 3.9).
     candidate_groups: List[float] = [never_treated_val]
     for gp in treatment_groups:
-        if gp != target_g:
-            candidate_groups.append(gp)
+        candidate_groups.append(gp)
 
     for gp in candidate_groups:
         # Determine effective treatment start for comparison group
@@ -91,10 +88,9 @@ def enumerate_valid_triples(
                 # period_1 is the universal reference — used as Y_1 in
                 # differencing, not as a selectable baseline t_pre
                 continue
-            # t_pre must be pre-treatment for target group
-            if t_pre >= effective_g:
-                continue
-            # t_pre must be pre-treatment for comparison group
+            # Only require t_pre < g' (pre-treatment for comparison group).
+            # No constraint on t_pre vs g: the target group appears only in
+            # the first term (Y_t - Y_1), which is independent of t_pre.
             if not np.isinf(effective_gp) and t_pre >= effective_gp:
                 continue
             pairs.append((gp, t_pre))
@@ -208,7 +204,7 @@ def compute_omega_star_nocov(
     # Comparison cohort submatrices: cache outcome_wide[cohort_masks[gp]]
     gp_outcomes: Dict[float, np.ndarray] = {}
     for gp, _ in valid_pairs:
-        if not np.isinf(gp) and gp != target_g and gp not in gp_outcomes:
+        if not np.isinf(gp) and gp not in gp_outcomes:
             if gp in cohort_masks:
                 gp_outcomes[gp] = outcome_wide[cohort_masks[gp]]
 

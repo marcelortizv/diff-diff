@@ -291,7 +291,13 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             if self.pt_assumption == "post":
                 effective_base = g - 1 - self.anticipation
                 if effective_base not in period_to_col:
-                    continue  # skip this group — no valid baseline
+                    warnings.warn(
+                        f"Cohort g={g} dropped: baseline period {effective_base} "
+                        f"(g-1-anticipation) is not in the data.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    continue
                 effective_p1_col = period_to_col[effective_base]
             else:
                 effective_p1_col = period_1_col

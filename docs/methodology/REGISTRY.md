@@ -585,6 +585,7 @@ where `q_{g,e} = pi_g / sum_{g' in G_{trt,e}} pi_{g'}`.
 - **All units eventually treated**: Last cohort serves as "never-treated" by dropping last time period (Phase 1: raises ValueError; last-cohort-as-control fallback planned for Phase 2)
 - **Negative weights**: Explicitly stated as harmless for bias and beneficial for precision; arise from efficiency optimization under overidentification (Section 5.2)
 - **PT-Post regime (just-identified)**: Under PT-Post, EDiD automatically reduces to standard single-baseline estimator (Corollary 3.2). No downside to using EDiD -- it subsumes standard estimators
+- **PT-All index set**: Under PT-All, valid (g', t_pre) pairs require only t_pre < g' (pre-treatment for the comparison group), not t_pre < g. Same-group pairs (g'=g) are valid and contribute overidentifying moments. This follows from Equation 3.9: the target group g appears only in the first term (Y_t - Y_1), which is independent of t_pre
 
 *Algorithm (two-step semiparametric estimation, Section 4):*
 

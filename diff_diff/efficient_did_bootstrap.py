@@ -71,6 +71,12 @@ class EfficientDiDBootstrapMixin:
 
         Aggregations (overall, event study, group) are recomputed from
         the perturbed ATT(g,t) values.
+
+        Note: Bootstrap aggregation uses fixed cohort-size weights, consistent
+        with the Callaway-Sant'Anna bootstrap pattern (staggered_bootstrap.py).
+        The analytical path includes a WIF correction for aggregated SEs, but
+        the bootstrap captures weight uncertainty through EIF perturbation.
+        This matches the R ``did`` package approach.
         """
         if self.n_bootstrap < 50:
             warnings.warn(
@@ -101,8 +107,13 @@ class EfficientDiDBootstrapMixin:
                 perturbation = (all_weights @ eif_gt) / n_units
             bootstrap_atts[:, j] = original_atts[j] + perturbation
 
-        # Post-treatment mask
-        post_mask = np.array([t >= g - self.anticipation for (g, t) in gt_pairs])
+        # Post-treatment mask — also exclude NaN effects
+        post_mask = np.array(
+            [
+                t >= g - self.anticipation and np.isfinite(original_atts[j])
+                for j, (g, t) in enumerate(gt_pairs)
+            ]
+        )
         post_indices = np.where(post_mask)[0]
 
         # Overall ATT aggregation weights (cohort-size)
@@ -226,6 +237,8 @@ class EfficientDiDBootstrapMixin:
         """Prepare event-study aggregation info for bootstrap."""
         effects_by_e: Dict[int, List[Tuple[int, float, float]]] = {}
         for j, (g, t) in enumerate(gt_pairs):
+            if not np.isfinite(original_atts[j]):
+                continue  # Skip NaN cells
             e = t - g
             if e not in effects_by_e:
                 effects_by_e[e] = []
@@ -238,6 +251,8 @@ class EfficientDiDBootstrapMixin:
             balanced: Dict[int, List[Tuple[int, float, float]]] = {}
             for j, (g, t) in enumerate(gt_pairs):
                 if g in groups_at_e:
+                    if not np.isfinite(original_atts[j]):
+                        continue  # Skip NaN cells even in balanced set
                     e = t - g
                     if e not in balanced:
                         balanced[e] = []
@@ -269,7 +284,7 @@ class EfficientDiDBootstrapMixin:
             group_data = [
                 (j, original_atts[j])
                 for j, (gg, t) in enumerate(gt_pairs)
-                if gg == g and t >= g - self.anticipation
+                if gg == g and t >= g - self.anticipation and np.isfinite(original_atts[j])
             ]
             if not group_data:
                 continue

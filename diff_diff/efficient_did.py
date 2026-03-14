@@ -333,7 +333,6 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 # Enumerate valid comparison pairs
                 pairs = enumerate_valid_triples(
                     target_g=g,
-                    target_t=t,
                     treatment_groups=treatment_groups,
                     time_periods=time_periods,
                     period_1=period_1,
@@ -398,7 +397,6 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 eif_vals = compute_eif_nocov(
                     target_g=g,
                     target_t=t,
-                    att_gt=att_gt,
                     weights=weights,
                     valid_pairs=pairs,
                     outcome_wide=outcome_wide,

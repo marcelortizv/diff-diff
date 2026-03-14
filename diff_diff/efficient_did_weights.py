@@ -17,7 +17,6 @@ import numpy as np
 
 def enumerate_valid_triples(
     target_g: float,
-    target_t: float,
     treatment_groups: List[float],
     time_periods: List[float],
     period_1: float,
@@ -39,8 +38,6 @@ def enumerate_valid_triples(
     ----------
     target_g : float
         Treatment cohort of the target group.
-    target_t : float
-        Time period of the target parameter.
     treatment_groups : list of float
         All treatment cohort identifiers (finite values only).
     time_periods : list of float
@@ -69,9 +66,13 @@ def enumerate_valid_triples(
     # PT-All: overidentified
     pairs: List[Tuple[float, float]] = []
 
-    # Candidate comparison groups: never-treated + all treatment cohorts
-    # (including g'=g — same-cohort pairs are valid under PT-All and
-    # contribute overidentifying moments; see Eq 3.9).
+    # Candidate comparison groups: never-treated + all treatment cohorts.
+    # Including g'=g (same-cohort) is valid under PT-All (Eq 3.9).
+    # Including g'=∞ (never-treated) produces moments where the second
+    # and third terms telescope: y_hat = E[Y_t-Y_1|G=g] - E[Y_t-Y_1|G=∞]
+    # regardless of t_pre. These redundant moments add no information
+    # beyond the basic 2x2 DiD; Omega*'s pseudoinverse assigns them
+    # zero effective weight. Retained for implementation simplicity.
     candidate_groups: List[float] = [never_treated_val]
     for gp in treatment_groups:
         candidate_groups.append(gp)
@@ -85,8 +86,10 @@ def enumerate_valid_triples(
 
         for t_pre in time_periods:
             if t_pre == period_1:
-                # period_1 is the universal reference — used as Y_1 in
-                # differencing, not as a selectable baseline t_pre
+                # period_1 is the universal reference — used as Y_1 in the
+                # differencing (Eq 3.9 first term). Including t_pre = period_1
+                # would make the third term Y_1 - Y_1 = 0 (degenerate), so it
+                # adds no information to Omega* regardless of which g' is used.
                 continue
             # Only require t_pre < g' (pre-treatment for comparison group).
             # No constraint on t_pre vs g: the target group appears only in
@@ -419,7 +422,6 @@ def compute_generated_outcomes_nocov(
 def compute_eif_nocov(
     target_g: float,
     target_t: float,
-    att_gt: float,
     weights: np.ndarray,
     valid_pairs: List[Tuple[float, float]],
     outcome_wide: np.ndarray,
@@ -454,8 +456,6 @@ def compute_eif_nocov(
     ----------
     target_g, target_t : float
         Target group-time.
-    att_gt : float
-        Estimated ATT(g, t).
     weights : ndarray, shape (H,)
         Efficient weights.
     valid_pairs : list of (g', t_pre)

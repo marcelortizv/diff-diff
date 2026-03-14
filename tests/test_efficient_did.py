@@ -540,7 +540,6 @@ class TestValidTriples:
         Total: 5 pairs."""
         pairs = enumerate_valid_triples(
             target_g=3,
-            target_t=4,
             treatment_groups=[3],
             time_periods=[1, 2, 3, 4, 5],
             period_1=1,
@@ -558,7 +557,6 @@ class TestValidTriples:
         Total: 8 pairs."""
         pairs = enumerate_valid_triples(
             target_g=3,
-            target_t=4,
             treatment_groups=[3, 5],
             time_periods=[1, 2, 3, 4, 5],
             period_1=1,
@@ -581,7 +579,6 @@ class TestValidTriples:
         """PT-Post: only (inf, g-1)."""
         pairs = enumerate_valid_triples(
             target_g=3,
-            target_t=4,
             treatment_groups=[3, 5],
             time_periods=[1, 2, 3, 4, 5],
             period_1=1,
@@ -595,7 +592,6 @@ class TestValidTriples:
         So pairs should be non-empty."""
         pairs = enumerate_valid_triples(
             target_g=2,
-            target_t=3,
             treatment_groups=[2],
             time_periods=[1, 2, 3],
             period_1=1,
@@ -611,7 +607,6 @@ class TestValidTriples:
         """Anticipation shifts effective treatment boundary."""
         pairs_no_ant = enumerate_valid_triples(
             target_g=4,
-            target_t=5,
             treatment_groups=[4],
             time_periods=[1, 2, 3, 4, 5],
             period_1=1,
@@ -620,7 +615,6 @@ class TestValidTriples:
         )
         pairs_ant1 = enumerate_valid_triples(
             target_g=4,
-            target_t=5,
             treatment_groups=[4],
             time_periods=[1, 2, 3, 4, 5],
             period_1=1,
@@ -1051,7 +1045,6 @@ class TestPTAllIndexSet:
         """PT-All should produce strictly more moments than PT-Post."""
         pairs_all = enumerate_valid_triples(
             target_g=3,
-            target_t=4,
             treatment_groups=[3, 5],
             time_periods=[1, 2, 3, 4, 5, 6],
             period_1=1,
@@ -1059,7 +1052,6 @@ class TestPTAllIndexSet:
         )
         pairs_post = enumerate_valid_triples(
             target_g=3,
-            target_t=4,
             treatment_groups=[3, 5],
             time_periods=[1, 2, 3, 4, 5, 6],
             period_1=1,
@@ -1074,7 +1066,6 @@ class TestPTAllIndexSet:
         """g'=g pairs should be present in PT-All enumeration."""
         pairs = enumerate_valid_triples(
             target_g=3,
-            target_t=4,
             treatment_groups=[3, 5],
             time_periods=[1, 2, 3, 4, 5],
             period_1=1,

@@ -3583,6 +3583,7 @@ class TestTROPBootstrapNaNSE:
     def test_global_bootstrap_zero_draws_returns_nan_se(self):
         """Global bootstrap with 0 successful draws returns NaN SE, not 0.0."""
         from unittest.mock import patch
+        import sys
 
         df = TestTROPNValidTreated._make_panel()
 
@@ -3595,8 +3596,12 @@ class TestTROPBootstrapNaNSE:
             seed=42,
         )
 
-        # Patch _fit_joint_with_fixed_lambda to always raise (all bootstrap iters fail)
-        with patch.object(TROP, '_fit_joint_with_fixed_lambda',
+        # Disable Rust backend so Python fallback path is tested,
+        # then patch _fit_joint_with_fixed_lambda to always raise
+        trop_module = sys.modules['diff_diff.trop']
+        with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
+             patch.object(trop_module, '_rust_bootstrap_trop_variance_joint', None), \
+             patch.object(TROP, '_fit_joint_with_fixed_lambda',
                           side_effect=ValueError("forced failure")):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")

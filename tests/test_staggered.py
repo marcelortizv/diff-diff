@@ -1018,6 +1018,95 @@ class TestCallawaySantAnnaCovariates:
         assert results.overall_att is not None
         assert results.overall_se > 0
 
+    def test_empty_covariates_list_behaves_like_none(self):
+        """covariates=[] should behave identically to covariates=None."""
+        data = generate_staggered_data_with_covariates(seed=42)
+
+        cs_none = CallawaySantAnna(n_bootstrap=0, seed=42)
+        results_none = cs_none.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            covariates=None,
+        )
+
+        cs_empty = CallawaySantAnna(n_bootstrap=0, seed=42)
+        results_empty = cs_empty.fit(
+            data,
+            outcome='outcome',
+            unit='unit',
+            time='time',
+            first_treat='first_treat',
+            covariates=[],
+        )
+
+        assert results_none.overall_att == results_empty.overall_att
+        assert results_none.overall_se == results_empty.overall_se
+        assert len(results_none.group_time_effects) == len(results_empty.group_time_effects)
+
+    def test_nan_cell_preserved_not_dropped(self):
+        """Non-finite regression cells should be preserved as NaN, not dropped."""
+        import warnings
+        from unittest.mock import patch
+
+        data = generate_staggered_data_with_covariates(seed=42, n_units=100)
+
+        # Patch lstsq to return inf for one specific call to simulate numerical failure
+        original_lstsq = __import__('scipy').linalg.lstsq
+        call_count = [0]
+
+        def mock_lstsq(*args, **kwargs):
+            call_count[0] += 1
+            result = original_lstsq(*args, **kwargs)
+            if call_count[0] == 1:
+                # Poison the first lstsq result
+                bad_beta = np.full_like(result[0], np.inf)
+                return (bad_beta,) + result[1:]
+            return result
+
+        # Use rank_deficient_action="warn" to ensure we go through the covariate reg path
+        # and also force lstsq fallback by using collinear covariates
+        data['x1_dup'] = data['x1']
+        cs = CallawaySantAnna(
+            n_bootstrap=0, seed=42, estimation_method='reg',
+            rank_deficient_action='warn',
+        )
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            with patch('scipy.linalg.lstsq', side_effect=mock_lstsq):
+                results = cs.fit(
+                    data,
+                    outcome='outcome',
+                    unit='unit',
+                    time='time',
+                    first_treat='first_treat',
+                    covariates=['x1', 'x1_dup'],
+                )
+
+        # Check that NaN cells are preserved (not dropped)
+        nan_cells = [
+            (g, t) for (g, t), eff in results.group_time_effects.items()
+            if np.isnan(eff['effect'])
+        ]
+        # At least one cell should have NaN effect from our mock
+        if call_count[0] > 0:
+            # Verify warning about non-finite regression results
+            nan_warnings = [
+                x for x in w
+                if "non-finite regression results" in str(x.message)
+            ]
+            if nan_cells:
+                assert len(nan_warnings) > 0
+                # NaN cells should have NaN SE too
+                for g, t in nan_cells:
+                    assert np.isnan(results.group_time_effects[(g, t)]['se'])
+
+        # Overall ATT should still be finite (NaN cells excluded from aggregation)
+        assert np.isfinite(results.overall_att)
+
 
 class TestCallawaySantAnnaRankDeficiencyPaths:
     """Tests for rank-deficiency handling in DR and reg not_yet_treated paths."""

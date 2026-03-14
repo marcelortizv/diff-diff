@@ -81,6 +81,9 @@ def run_estimator(df, estimation_method="reg", covariates=None, control_group="n
         gt_effects[key] = {
             "effect": float(data["effect"]),
             "se": float(data["se"]),
+            "t_stat": float(data["t_stat"]),
+            "p_value": float(data["p_value"]),
+            "conf_int": [float(data["conf_int"][0]), float(data["conf_int"][1])],
         }
     out["group_time_effects"] = gt_effects
 
@@ -91,8 +94,21 @@ def run_estimator(df, estimation_method="reg", covariates=None, control_group="n
             es[str(e)] = {
                 "effect": float(data["effect"]),
                 "se": float(data["se"]),
+                "t_stat": float(data["t_stat"]),
+                "p_value": float(data["p_value"]),
+                "conf_int": [float(data["conf_int"][0]), float(data["conf_int"][1])],
             }
         out["event_study"] = es
+
+    # Group effects
+    if results.group_effects:
+        ge = {}
+        for g_key, data in sorted(results.group_effects.items()):
+            ge[str(g_key)] = {
+                "effect": float(data["effect"]),
+                "se": float(data["se"]),
+            }
+        out["group_effects"] = ge
 
     return out
 
@@ -183,6 +199,13 @@ def check_results(path="benchmarks/speed_review/baseline_results.json", tol=1e-1
                 continue
             compare(f"{name}/gt[{key}].effect", b["effect"], c["effect"], scenario_tol)
             compare(f"{name}/gt[{key}].se", b["se"], c["se"], gt_se_tol)
+            if "t_stat" in b and "t_stat" in c:
+                compare(f"{name}/gt[{key}].t_stat", b["t_stat"], c["t_stat"], gt_se_tol)
+            if "p_value" in b and "p_value" in c:
+                compare(f"{name}/gt[{key}].p_value", b["p_value"], c["p_value"], 0.02)
+            if "conf_int" in b and "conf_int" in c:
+                for i, label in enumerate(["lower", "upper"]):
+                    compare(f"{name}/gt[{key}].ci.{label}", b["conf_int"][i], c["conf_int"][i], gt_se_tol)
 
         # Compare event study effects/SEs if present
         if "event_study" in baseline and "event_study" in current:
@@ -194,6 +217,24 @@ def check_results(path="benchmarks/speed_review/baseline_results.json", tol=1e-1
                     continue
                 compare(f"{name}/es[{e_key}].effect", b_es["effect"], c_es["effect"], scenario_tol)
                 compare(f"{name}/es[{e_key}].se", b_es["se"], c_es["se"], gt_se_tol)
+                if "t_stat" in b_es and "t_stat" in c_es:
+                    compare(f"{name}/es[{e_key}].t_stat", b_es["t_stat"], c_es["t_stat"], gt_se_tol)
+                if "p_value" in b_es and "p_value" in c_es:
+                    compare(f"{name}/es[{e_key}].p_value", b_es["p_value"], c_es["p_value"], 0.02)
+                if "conf_int" in b_es and "conf_int" in c_es:
+                    for i, label in enumerate(["lower", "upper"]):
+                        compare(f"{name}/es[{e_key}].ci.{label}", b_es["conf_int"][i], c_es["conf_int"][i], gt_se_tol)
+
+        # Compare group effects if present
+        if "group_effects" in baseline and "group_effects" in current:
+            for g_key in baseline["group_effects"]:
+                b_ge = baseline["group_effects"][g_key]
+                c_ge = current["group_effects"].get(g_key, {})
+                if not c_ge:
+                    failures.append(f"  {name}/Missing group effect: g={g_key}")
+                    continue
+                compare(f"{name}/ge[{g_key}].effect", b_ge["effect"], c_ge["effect"], scenario_tol)
+                compare(f"{name}/ge[{g_key}].se", b_ge["se"], c_ge["se"], gt_se_tol)
 
         if failures:
             all_failures.extend(failures)

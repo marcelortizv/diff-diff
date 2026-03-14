@@ -785,7 +785,7 @@ class CallawaySantAnna(
         atts = []
         ses = []
         task_keys = []
-        n_dropped_cells = 0
+        n_nan_cells = 0
 
         # Collect all valid (g, t) tasks with their base periods
         tasks_by_group = {}  # control_key -> list of (g, t, base_period_val, base_col, post_col)
@@ -993,34 +993,40 @@ class CallawaySantAnna(
                                 )
                                 beta = result[0]
 
+                    nan_cell = False
+
                     if beta is None or np.any(~np.isfinite(beta)):
-                        n_dropped_cells += 1
-                        continue
+                        nan_cell = True
+                        n_nan_cells += 1
 
-                    # Predict counterfactual for treated
-                    X_treated_w_intercept = np.column_stack([np.ones(n_t), X_treated_pair])
-                    with np.errstate(all='ignore'):
-                        predicted_control = X_treated_w_intercept @ beta
-                    treated_residuals = treated_change - predicted_control
-                    if np.any(~np.isfinite(predicted_control)):
-                        n_dropped_cells += 1
-                        continue
-                    att = float(np.mean(treated_residuals))
+                    if not nan_cell:
+                        X_treated_w_intercept = np.column_stack([np.ones(n_t), X_treated_pair])
+                        with np.errstate(all='ignore'):
+                            predicted_control = X_treated_w_intercept @ beta
+                        treated_residuals = treated_change - predicted_control
+                        if np.any(~np.isfinite(predicted_control)):
+                            nan_cell = True
+                            n_nan_cells += 1
 
-                    # Residuals for control
-                    with np.errstate(all='ignore'):
-                        residuals = control_change - pair_X_ctrl @ beta
-                    if np.any(~np.isfinite(residuals)):
-                        n_dropped_cells += 1
-                        continue
+                    if not nan_cell:
+                        att = float(np.mean(treated_residuals))
+                        with np.errstate(all='ignore'):
+                            residuals = control_change - pair_X_ctrl @ beta
+                        if np.any(~np.isfinite(residuals)):
+                            nan_cell = True
+                            n_nan_cells += 1
 
-                    var_t = float(np.var(treated_residuals, ddof=1)) if n_t > 1 else 0.0
-                    var_c = float(np.var(residuals, ddof=1)) if pair_n_c > 1 else 0.0
-                    se = float(np.sqrt(var_t / n_t + var_c / pair_n_c))
-
-                    # Influence function
-                    inf_treated = (treated_residuals - np.mean(treated_residuals)) / n_t
-                    inf_control = -residuals / pair_n_c
+                    if nan_cell:
+                        att = np.nan
+                        se = np.nan
+                        inf_treated = np.zeros(n_t)
+                        inf_control = np.zeros(n_c)
+                    else:
+                        var_t = float(np.var(treated_residuals, ddof=1)) if n_t > 1 else 0.0
+                        var_c = float(np.var(residuals, ddof=1)) if pair_n_c > 1 else 0.0
+                        se = float(np.sqrt(var_t / n_t + var_c / pair_n_c))
+                        inf_treated = (treated_residuals - np.mean(treated_residuals)) / n_t
+                        inf_control = -residuals / pair_n_c
 
                 group_time_effects[(g, t)] = {
                     'effect': att,
@@ -1048,10 +1054,10 @@ class CallawaySantAnna(
                 ses.append(se)
                 task_keys.append((g, t))
 
-        if n_dropped_cells > 0:
+        if n_nan_cells > 0:
             warnings.warn(
-                f"{n_dropped_cells} group-time cell(s) dropped due to non-finite "
-                "regression results (near-singular covariates).",
+                f"{n_nan_cells} group-time cell(s) have non-finite regression results "
+                "(near-singular covariates). These cells are preserved with NaN inference.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -1120,6 +1126,10 @@ class CallawaySantAnna(
         ValueError
             If required columns are missing or data validation fails.
         """
+        # Normalize empty covariates list to None
+        if covariates is not None and len(covariates) == 0:
+            covariates = None
+
         # Validate inputs
         required_cols = [outcome, unit, time, first_treat]
         if covariates:

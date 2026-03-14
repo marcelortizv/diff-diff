@@ -87,6 +87,31 @@ class CallawaySantAnnaAggregationMixin:
         weights = np.array(weights_list, dtype=float)
         groups_for_gt = np.array(groups_for_gt)
 
+        # Exclude NaN effects from aggregation (R's aggte() convention)
+        finite_mask = np.isfinite(effects)
+        n_nan = int(np.sum(~finite_mask))
+        if n_nan > 0:
+            import warnings
+            warnings.warn(
+                f"{n_nan} group-time effect(s) are NaN and excluded from overall ATT "
+                "aggregation. Inspect group_time_effects for details.",
+                UserWarning,
+                stacklevel=2,
+            )
+            effects = effects[finite_mask]
+            weights = weights[finite_mask]
+            gt_pairs = [gt for gt, m in zip(gt_pairs, finite_mask) if m]
+            groups_for_gt = groups_for_gt[finite_mask]
+
+        if len(effects) == 0:
+            import warnings
+            warnings.warn(
+                "All post-treatment effects are NaN. Cannot compute overall ATT.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return np.nan, np.nan
+
         # Normalize weights
         total_weight = np.sum(weights)
         weights_norm = weights / total_weight
@@ -436,6 +461,18 @@ class CallawaySantAnnaAggregationMixin:
             effs = np.array([x[1] for x in effect_list])
             ns = np.array([x[2] for x in effect_list], dtype=float)
 
+            # Exclude NaN effects from this period's aggregation
+            finite_mask = np.isfinite(effs)
+            if not np.all(finite_mask):
+                effs = effs[finite_mask]
+                ns = ns[finite_mask]
+                gt_pairs = [gt for gt, m in zip(gt_pairs, finite_mask) if m]
+                if len(effs) == 0:
+                    agg_effects_list.append(np.nan)
+                    agg_ses_list.append(np.nan)
+                    agg_n_groups.append(0)
+                    continue
+
             weights = ns / np.sum(ns)
             agg_effect = np.sum(weights * effs)
 
@@ -514,6 +551,15 @@ class CallawaySantAnnaAggregationMixin:
 
             gt_pairs = [x[0] for x in g_effects]
             effs = np.array([x[1] for x in g_effects])
+
+            # Exclude NaN effects from this group's aggregation
+            finite_mask = np.isfinite(effs)
+            if not np.all(finite_mask):
+                effs = effs[finite_mask]
+                gt_pairs = [gt for gt, m in zip(gt_pairs, finite_mask) if m]
+                if len(effs) == 0:
+                    continue
+
             weights = np.ones(len(effs)) / len(effs)
             agg_effect = np.sum(weights * effs)
 

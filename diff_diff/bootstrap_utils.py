@@ -327,7 +327,25 @@ def compute_effect_bootstrap_stats_batch(
     enough_valid = (n_valid >= n_bootstrap * 0.5) & valid_effects
 
     if not np.any(enough_valid):
+        n_insufficient = int(np.sum(valid_effects))
+        if n_insufficient > 0:
+            warnings.warn(
+                f"{n_insufficient} effect(s) had too few valid bootstrap samples (<50%). "
+                "Returning NaN for SE/CI/p-value.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         return ses, ci_lowers, ci_uppers, p_values
+
+    # Warn about subset with insufficient samples
+    n_insufficient = int(np.sum(valid_effects & ~enough_valid))
+    if n_insufficient > 0:
+        warnings.warn(
+            f"{n_insufficient} effect(s) had too few valid bootstrap samples (<50%). "
+            "Returning NaN for SE/CI/p-value.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     # For effects with all-finite bootstraps (common case), use vectorized ops
     all_finite = (n_valid == n_bootstrap) & enough_valid
@@ -356,6 +374,14 @@ def compute_effect_bootstrap_stats_batch(
 
         # Guard: SE must be positive and finite
         se_valid = np.isfinite(batch_ses) & (batch_ses > 0)
+        n_bad_se = int(np.sum(~se_valid))
+        if n_bad_se > 0:
+            warnings.warn(
+                f"{n_bad_se} effect(s) had non-finite or zero bootstrap SE. "
+                "Returning NaN for SE/CI/p-value.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         ses[idx[se_valid]] = batch_ses[se_valid]
         ci_lowers[idx[se_valid]] = batch_ci[0][se_valid]
         ci_uppers[idx[se_valid]] = batch_ci[1][se_valid]

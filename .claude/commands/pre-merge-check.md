@@ -115,7 +115,7 @@ modified in the changed file set (from Section 1).
 If methodology files changed but REGISTRY.md was NOT modified, flag:
 "Methodology files changed but `docs/methodology/REGISTRY.md` was not updated. If your
 changes deviate from reference implementations, document them using a reviewer-recognized
-label (`**Note**:`, `**Deviation from R**:`, or `**Note (deviation from R):**`) —
+label (`**Note:**`, `**Deviation from R:**`, or `**Note (deviation from R):**`) —
 undocumented deviations are flagged as P1 by the AI reviewer and cannot be mitigated
 by TODO.md."
 
@@ -151,7 +151,7 @@ Based on your changes to: <list of changed files>
 
 ### Methodology Deviation Documentation
 - [ ] If deviating from reference implementation: added a reviewer-recognized label
-      (`**Note**:`, `**Deviation from R**:`, or `**Note (deviation from R):**`) in REGISTRY.md
+      (`**Note:**`, `**Deviation from R:**`, or `**Note (deviation from R):**`) in REGISTRY.md
 - [ ] No undocumented methodology deviations (AI reviewer flags these as P1)
 ```
 

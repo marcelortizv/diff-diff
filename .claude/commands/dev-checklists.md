@@ -47,7 +47,7 @@ When implementing or modifying code that affects statistical methodology (estima
 
 3. **When deviating from reference implementations**:
    - [ ] Add entry in `docs/methodology/REGISTRY.md` using a reviewer-recognized label:
-         `**Note**:`, `**Deviation from R**:`, or `**Note (deviation from R):**`
+         `**Note:**`, `**Deviation from R:**`, or `**Note (deviation from R):**`
          (see CLAUDE.md "Documenting Deviations" for full format reference)
    - [ ] Include rationale (e.g., "defensive enhancement", "R errors here")
    - [ ] Ensure the deviation is an improvement, not a bug

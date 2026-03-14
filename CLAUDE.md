@@ -101,8 +101,8 @@ wording will cause a P1 finding ("undocumented methodology deviation").
 
 | Label | When to use | Example |
 |-------|------------|---------|
-| `- **Note**: <text>` | Defensive enhancements, implementation choices | `- **Note**: Defensive enhancement matching CallawaySantAnna NaN convention` |
-| `- **Deviation from R**: <text>` | Intentional differences from R packages | `- **Deviation from R**: R's fixest uses t-distribution at all levels` |
+| `- **Note:** <text>` | Defensive enhancements, implementation choices | `- **Note:** Defensive enhancement matching CallawaySantAnna NaN convention` |
+| `- **Deviation from R:** <text>` | Intentional differences from R packages | `- **Deviation from R:** R's fixest uses t-distribution at all levels` |
 | `**Note (deviation from R):** <text>` | Combined form, inline within edge case bullets | See SyntheticDiD section in REGISTRY.md |
 
 **TODO.md format** — for deferring P2/P3 items only (P0/P1 cannot be deferred):

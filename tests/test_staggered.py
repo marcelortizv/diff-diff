@@ -1275,6 +1275,46 @@ class TestCallawaySantAnnaRankDeficiencyPaths:
         assert results.overall_att is not None
         assert results.overall_se > 0
 
+    def test_ipw_rank_deficient_action_error_raises(self):
+        """IPW path raises ValueError with rank_deficient_action='error' and collinear covariates."""
+        data = generate_staggered_data_with_covariates(seed=42)
+        data["x1_dup"] = data["x1"].copy()
+
+        cs = CallawaySantAnna(
+            estimation_method="ipw",
+            rank_deficient_action="error",
+        )
+
+        with pytest.raises(ValueError, match="[Rr]ank"):
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x1_dup"],
+            )
+
+    def test_dr_rank_deficient_action_error_raises(self):
+        """DR path raises ValueError with rank_deficient_action='error' and collinear covariates."""
+        data = generate_staggered_data_with_covariates(seed=42)
+        data["x1_dup"] = data["x1"].copy()
+
+        cs = CallawaySantAnna(
+            estimation_method="dr",
+            rank_deficient_action="error",
+        )
+
+        with pytest.raises(ValueError, match="[Rr]ank"):
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x1_dup"],
+            )
+
     def test_bootstrap_single_unit_cohort_handles_gracefully(self, ci_params):
         """Test that bootstrap handles cohort with 1 treated unit without crashing."""
         # Build small dataset where one cohort has exactly 1 unit

@@ -772,6 +772,8 @@ class TripleDifference:
                             rank_deficient_action=self.rank_deficient_action,
                         )
                     except Exception:
+                        if self.rank_deficient_action == "error":
+                            raise
                         pscore_sub = np.full(n_sub, np.mean(PA4))
                         ps_estimated = False
                         warnings.warn(

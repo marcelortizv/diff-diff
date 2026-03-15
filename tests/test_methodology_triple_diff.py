@@ -1556,3 +1556,24 @@ class TestParameterFunctionality:
         # Both should produce finite results regardless
         assert np.isfinite(result_silent.att)
         assert np.isfinite(result_warn.att)
+
+    @pytest.mark.parametrize("method", ["ipw", "dr"])
+    def test_rank_deficient_action_error_raises_in_ps_path(self, method):
+        """rank_deficient_action='error' raises ValueError in PS-based paths with collinear covariates."""
+        data = generate_ddd_data(n_per_cell=50, seed=42, add_covariates=True)
+        data["age_dup"] = data["age"].copy()
+
+        ddd = TripleDifference(
+            estimation_method=method,
+            rank_deficient_action="error",
+        )
+
+        with pytest.raises((ValueError, RuntimeError)):
+            ddd.fit(
+                data,
+                outcome="outcome",
+                group="group",
+                partition="partition",
+                time="time",
+                covariates=["age", "age_dup"],
+            )

@@ -1489,6 +1489,8 @@ class CallawaySantAnna(
                     if pscore_cache is not None and pscore_key is not None:
                         pscore_cache[pscore_key] = beta_logistic
                 except (np.linalg.LinAlgError, ValueError):
+                    if self.rank_deficient_action == "error":
+                        raise
                     # Fallback to unconditional if logistic regression fails
                     warnings.warn(
                         "Propensity score estimation failed. "
@@ -1662,6 +1664,8 @@ class CallawaySantAnna(
                     if pscore_cache is not None and pscore_key is not None:
                         pscore_cache[pscore_key] = beta_logistic
                 except (np.linalg.LinAlgError, ValueError):
+                    if self.rank_deficient_action == "error":
+                        raise
                     # Fallback to unconditional if logistic regression fails
                     warnings.warn(
                         "Propensity score estimation failed. "

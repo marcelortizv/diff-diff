@@ -1181,6 +1181,74 @@ class TestCallawaySantAnnaCovariates:
                     assert np.isfinite(data_ge['p_value']), f"Group {g} p_value should be finite"
 
 
+    def test_balance_e_excludes_nan_anchor_cohort(self, ci_params):
+        """balance_e must exclude cohorts whose anchor-horizon effect is NaN."""
+        import warnings
+        from unittest.mock import patch
+
+        data = generate_staggered_data_with_covariates(seed=42, n_units=100)
+
+        original_lstsq = __import__('scipy').linalg.lstsq
+        call_count = [0]
+
+        def mock_lstsq(*args, **kwargs):
+            call_count[0] += 1
+            result = original_lstsq(*args, **kwargs)
+            # Poison call #7: (g=3, t=3), the anchor for cohort g=3 at e=0
+            if call_count[0] == 7:
+                bad_beta = np.full_like(result[0], np.inf)
+                return (bad_beta,) + result[1:]
+            return result
+
+        data['x1_dup'] = data['x1']
+        n_boot = ci_params.bootstrap(199)
+        cs = CallawaySantAnna(
+            n_bootstrap=n_boot, seed=42, estimation_method='reg',
+            rank_deficient_action='warn',
+        )
+
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            with patch('scipy.linalg.lstsq', side_effect=mock_lstsq):
+                results = cs.fit(
+                    data,
+                    outcome='outcome',
+                    unit='unit',
+                    time='time',
+                    first_treat='first_treat',
+                    covariates=['x1', 'x1_dup'],
+                    aggregate='event_study',
+                    balance_e=0,
+                )
+
+        # Confirm the anchor cell is NaN and is specifically the anchor (t - g == 0)
+        assert np.isnan(results.group_time_effects[(3, 3)]['effect']), \
+            "Mock should have poisoned (g=3, t=3)"
+        assert 3 - 3 == 0, "Poisoned cell must be the anchor at balance_e=0"
+
+        # Cohort g=3 should be excluded from ALL event-study horizons
+        # Only g=5 and g=8 should contribute (<=2 because not all balanced
+        # cohorts have cells at extreme horizons)
+        for e, es_data in results.event_study_effects.items():
+            assert es_data['n_groups'] <= 2, (
+                f"Event time e={e} has n_groups={es_data['n_groups']}, "
+                "expected <=2 (cohort g=3 should be excluded due to NaN anchor)"
+            )
+
+        # Analytical effects and SEs should be finite for all horizons
+        for e, es_data in results.event_study_effects.items():
+            assert np.isfinite(es_data['effect']), \
+                f"e={e}: analytical effect should be finite"
+            assert np.isfinite(es_data['se']), \
+                f"e={e}: analytical SE should be finite"
+
+        # Bootstrap SEs should also be finite
+        if results.bootstrap_results and results.bootstrap_results.event_study_ses:
+            for e, se in results.bootstrap_results.event_study_ses.items():
+                assert np.isfinite(se), \
+                    f"e={e}: bootstrap SE should be finite"
+
+
 class TestCallawaySantAnnaRankDeficiencyPaths:
     """Tests for rank-deficiency handling in DR and reg not_yet_treated paths."""
 

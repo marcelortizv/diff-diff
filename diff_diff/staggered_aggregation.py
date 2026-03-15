@@ -434,7 +434,7 @@ class CallawaySantAnnaAggregationMixin:
             # Keep only groups that have effects at relative time balance_e
             groups_at_e = set()
             for (g, t), data in group_time_effects.items():
-                if t - g == balance_e:
+                if t - g == balance_e and np.isfinite(data['effect']):
                     groups_at_e.add(g)
 
             # Filter effects to only include balanced groups

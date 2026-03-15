@@ -489,7 +489,7 @@ class CallawaySantAnnaBootstrapMixin:
         if balance_e is not None:
             groups_at_e = set()
             for j, (g, t) in enumerate(gt_pairs):
-                if t - g == balance_e:
+                if t - g == balance_e and np.isfinite(group_time_effects[(g, t)]['effect']):
                     groups_at_e.add(g)
 
             balanced_effects: Dict[int, List[Tuple[int, float, float]]] = {}

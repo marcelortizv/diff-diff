@@ -3220,6 +3220,32 @@ class TestPscoreTrimParameter:
         cs.set_params(pscore_trim=0.1)
         assert cs.pscore_trim == 0.1
 
+    def test_set_params_invalid_pscore_trim_rejected_at_fit(self):
+        """Invalid pscore_trim via set_params() raises ValueError at fit()."""
+        np.random.seed(42)
+        n_units, n_periods = 50, 6
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(n_periods), n_units)
+        first_treat = np.zeros(n_units)
+        first_treat[n_units // 2 :] = 3
+        first_treat_expanded = np.repeat(first_treat, n_periods)
+        post = (times >= first_treat_expanded) & (first_treat_expanded > 0)
+        outcomes = 1.0 + 2.0 * post + np.random.randn(len(units)) * 0.5
+        data = pd.DataFrame(
+            {
+                "unit": units,
+                "time": times,
+                "outcome": outcomes,
+                "first_treat": first_treat_expanded.astype(int),
+            }
+        )
+
+        for bad_val in [0.0, -0.1, 0.5]:
+            cs = CallawaySantAnna(estimation_method="ipw")
+            cs.set_params(pscore_trim=bad_val)
+            with pytest.raises(ValueError, match="pscore_trim must be in"):
+                cs.fit(data, outcome="outcome", unit="unit", time="time", first_treat="first_treat")
+
     def test_default_pscore_trim(self):
         """Default pscore_trim is 0.01."""
         cs = CallawaySantAnna()

@@ -1191,7 +1191,8 @@ has no additional effect.
 - Cluster IDs: must not contain NaN (raises `ValueError`)
 - Overlap warning: emitted when >5% of observations are trimmed at pscore bounds (IPW/DR only)
 - Propensity score estimation failure: falls back to unconditional probability P(subgroup=4),
-  sets hessian=None (skipping PS correction in influence function), emits UserWarning
+  sets hessian=None (skipping PS correction in influence function), emits UserWarning.
+  Exception: when `rank_deficient_action="error"`, the error is re-raised instead of falling back.
 - Collinear covariates: detected via pivoted QR in `solve_ols()`, action controlled by
   `rank_deficient_action` ("warn", "error", "silent")
 - Non-finite influence function values (e.g., from extreme propensity scores in IPW/DR

@@ -1082,6 +1082,10 @@ class CallawaySantAnna(
         ValueError
             If required columns are missing or data validation fails.
         """
+        # Validate pscore_trim (may have been changed via set_params)
+        if not (0 < self.pscore_trim < 0.5):
+            raise ValueError(f"pscore_trim must be in (0, 0.5), got {self.pscore_trim}")
+
         # Normalize empty covariates list to None
         if covariates is not None and len(covariates) == 0:
             covariates = None

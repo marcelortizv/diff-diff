@@ -1615,6 +1615,40 @@ class TestSolveLogit:
         assert beta.shape == (3,)  # intercept + 2 features
         assert probs.shape == (n,)
 
+    def test_rank_deficient_action_silent(self):
+        """rank_deficient_action='silent' suppresses warning on rank-deficient X."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        n = 100
+        x1 = rng.standard_normal(n)
+        X = np.column_stack([x1, x1])  # rank deficient
+        y = (rng.random(n) < 0.5).astype(float)
+
+        import warnings
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            beta, probs = solve_logit(X, y, rank_deficient_action="silent")
+
+        rank_warns = [x for x in w if "Rank-deficient" in str(x.message)]
+        assert len(rank_warns) == 0
+        assert beta.shape == (3,)
+        assert probs.shape == (n,)
+
+    def test_rank_deficient_action_error(self):
+        """rank_deficient_action='error' raises ValueError on rank-deficient X."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        n = 100
+        x1 = rng.standard_normal(n)
+        X = np.column_stack([x1, x1])  # rank deficient
+        y = (rng.random(n) < 0.5).astype(float)
+
+        with pytest.raises(ValueError, match="Rank-deficient"):
+            solve_logit(X, y, rank_deficient_action="error")
+
 
 class TestCheckPropensityDiagnostics:
     """Tests for propensity score diagnostic warnings."""

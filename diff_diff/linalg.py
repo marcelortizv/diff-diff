@@ -887,6 +887,7 @@ def solve_logit(
     max_iter: int = 25,
     tol: float = 1e-8,
     check_separation: bool = True,
+    rank_deficient_action: str = "warn",
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Fit logistic regression via IRLS (Fisher scoring).
@@ -907,6 +908,11 @@ def solve_logit(
         Convergence tolerance on coefficient change (R's ``glm`` default).
     check_separation : bool, default True
         Whether to check for near-separation and emit warnings.
+    rank_deficient_action : str, default "warn"
+        How to handle rank-deficient design matrices:
+        - "warn": Emit warning and drop columns (default)
+        - "error": Raise ValueError
+        - "silent": Drop columns silently
 
     Returns
     -------
@@ -919,17 +925,31 @@ def solve_logit(
     X_with_intercept = np.column_stack([np.ones(n), X])
     k = p + 1  # number of parameters including intercept
 
+    # Validate rank_deficient_action
+    valid_actions = {"warn", "error", "silent"}
+    if rank_deficient_action not in valid_actions:
+        raise ValueError(
+            f"rank_deficient_action must be one of {valid_actions}, "
+            f"got '{rank_deficient_action}'"
+        )
+
     # Check rank deficiency once before iterating
     rank_info = _detect_rank_deficiency(X_with_intercept)
     rank, dropped_cols, _ = rank_info
     if len(dropped_cols) > 0:
         col_desc = _format_dropped_columns(dropped_cols)
-        warnings.warn(
-            f"Rank-deficient design matrix in logistic regression: "
-            f"dropping {col_desc}. Propensity score estimates may be unreliable.",
-            UserWarning,
-            stacklevel=2,
-        )
+        if rank_deficient_action == "error":
+            raise ValueError(
+                f"Rank-deficient design matrix in logistic regression: "
+                f"dropping {col_desc}. Propensity score estimates may be unreliable."
+            )
+        elif rank_deficient_action == "warn":
+            warnings.warn(
+                f"Rank-deficient design matrix in logistic regression: "
+                f"dropping {col_desc}. Propensity score estimates may be unreliable.",
+                UserWarning,
+                stacklevel=2,
+            )
         kept_cols = np.array([i for i in range(k) if i not in dropped_cols])
         X_solve = X_with_intercept[:, kept_cols]
     else:

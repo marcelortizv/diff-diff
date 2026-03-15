@@ -766,7 +766,11 @@ class TripleDifference:
                     # Logistic regression: P(subgroup=4 | X) within {j, 4}
                     ps_estimated = True
                     try:
-                        _, pscore_sub = solve_logit(covX_sub[:, 1:], PA4)
+                        _, pscore_sub = solve_logit(
+                            covX_sub[:, 1:],
+                            PA4,
+                            rank_deficient_action=self.rank_deficient_action,
+                        )
                     except Exception:
                         pscore_sub = np.full(n_sub, np.mean(PA4))
                         ps_estimated = False

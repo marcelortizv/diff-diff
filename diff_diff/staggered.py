@@ -265,6 +265,8 @@ class CallawaySantAnna(
             raise ValueError(
                 f"estimation_method must be 'dr', 'ipw', or 'reg', " f"got '{estimation_method}'"
             )
+        if not (0 <= pscore_trim < 0.5):
+            raise ValueError(f"pscore_trim must be in [0, 0.5), got {pscore_trim}")
 
         # Handle bootstrap_weight_type deprecation
         if bootstrap_weight_type is not None:
@@ -1355,6 +1357,7 @@ class CallawaySantAnna(
             group_effects=group_effects,
             bootstrap_results=bootstrap_results,
             cband_crit_value=cband_crit_value,
+            pscore_trim=self.pscore_trim,
         )
 
         self.is_fitted_ = True
@@ -1476,7 +1479,11 @@ class CallawaySantAnna(
 
                 # Estimate propensity scores using IRLS logistic regression
                 try:
-                    beta_logistic, pscore = solve_logit(X_all, D)
+                    beta_logistic, pscore = solve_logit(
+                        X_all,
+                        D,
+                        rank_deficient_action=self.rank_deficient_action,
+                    )
                     _check_propensity_diagnostics(pscore, self.pscore_trim)
                     # Cache the fitted coefficients
                     if pscore_cache is not None and pscore_key is not None:
@@ -1646,7 +1653,11 @@ class CallawaySantAnna(
                 D = np.concatenate([np.ones(n_t), np.zeros(n_c)])
 
                 try:
-                    beta_logistic, pscore = solve_logit(X_all, D)
+                    beta_logistic, pscore = solve_logit(
+                        X_all,
+                        D,
+                        rank_deficient_action=self.rank_deficient_action,
+                    )
                     _check_propensity_diagnostics(pscore, self.pscore_trim)
                     if pscore_cache is not None and pscore_key is not None:
                         pscore_cache[pscore_key] = beta_logistic

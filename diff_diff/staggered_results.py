@@ -37,6 +37,7 @@ class GroupTimeEffect:
     n_control : int
         Number of control observations.
     """
+
     group: Any
     time: Any
     effect: float
@@ -93,6 +94,7 @@ class CallawaySantAnnaResults:
     group_effects : dict, optional
         Effects aggregated by treatment cohort.
     """
+
     group_time_effects: Dict[Tuple[Any, Any], Dict[str, Any]]
     overall_att: float
     overall_se: float
@@ -112,6 +114,7 @@ class CallawaySantAnnaResults:
     influence_functions: Optional["np.ndarray"] = field(default=None, repr=False)
     bootstrap_results: Optional["CSBootstrapResults"] = field(default=None, repr=False)
     cband_crit_value: Optional[float] = None
+    pscore_trim: float = 0.01
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -156,35 +159,39 @@ class CallawaySantAnnaResults:
         ]
 
         # Overall ATT
-        lines.extend([
-            "-" * 85,
-            "Overall Average Treatment Effect on the Treated".center(85),
-            "-" * 85,
-            f"{'Parameter':<15} {'Estimate':>12} {'Std. Err.':>12} {'t-stat':>10} {'P>|t|':>10} {'Sig.':>6}",
-            "-" * 85,
-            f"{'ATT':<15} {self.overall_att:>12.4f} {self.overall_se:>12.4f} "
-            f"{self.overall_t_stat:>10.3f} {self.overall_p_value:>10.4f} "
-            f"{_get_significance_stars(self.overall_p_value):>6}",
-            "-" * 85,
-            "",
-            f"{conf_level}% Confidence Interval: [{self.overall_conf_int[0]:.4f}, {self.overall_conf_int[1]:.4f}]",
-            "",
-        ])
+        lines.extend(
+            [
+                "-" * 85,
+                "Overall Average Treatment Effect on the Treated".center(85),
+                "-" * 85,
+                f"{'Parameter':<15} {'Estimate':>12} {'Std. Err.':>12} {'t-stat':>10} {'P>|t|':>10} {'Sig.':>6}",
+                "-" * 85,
+                f"{'ATT':<15} {self.overall_att:>12.4f} {self.overall_se:>12.4f} "
+                f"{self.overall_t_stat:>10.3f} {self.overall_p_value:>10.4f} "
+                f"{_get_significance_stars(self.overall_p_value):>6}",
+                "-" * 85,
+                "",
+                f"{conf_level}% Confidence Interval: [{self.overall_conf_int[0]:.4f}, {self.overall_conf_int[1]:.4f}]",
+                "",
+            ]
+        )
 
         # Event study effects if available
         if self.event_study_effects:
             ci_label = "Simult. CI" if self.cband_crit_value is not None else "Pointwise CI"
-            lines.extend([
-                "-" * 85,
-                "Event Study (Dynamic) Effects".center(85),
-                "-" * 85,
-                f"{'Rel. Period':<15} {'Estimate':>12} {'Std. Err.':>12} {'t-stat':>10} {'P>|t|':>10} {'Sig.':>6}",
-                "-" * 85,
-            ])
+            lines.extend(
+                [
+                    "-" * 85,
+                    "Event Study (Dynamic) Effects".center(85),
+                    "-" * 85,
+                    f"{'Rel. Period':<15} {'Estimate':>12} {'Std. Err.':>12} {'t-stat':>10} {'P>|t|':>10} {'Sig.':>6}",
+                    "-" * 85,
+                ]
+            )
 
             for rel_t in sorted(self.event_study_effects.keys()):
                 eff = self.event_study_effects[rel_t]
-                sig = _get_significance_stars(eff['p_value'])
+                sig = _get_significance_stars(eff["p_value"])
                 lines.append(
                     f"{rel_t:<15} {eff['effect']:>12.4f} {eff['se']:>12.4f} "
                     f"{eff['t_stat']:>10.3f} {eff['p_value']:>10.4f} {sig:>6}"
@@ -200,17 +207,19 @@ class CallawaySantAnnaResults:
 
         # Group effects if available
         if self.group_effects:
-            lines.extend([
-                "-" * 85,
-                "Effects by Treatment Cohort".center(85),
-                "-" * 85,
-                f"{'Cohort':<15} {'Estimate':>12} {'Std. Err.':>12} {'t-stat':>10} {'P>|t|':>10} {'Sig.':>6}",
-                "-" * 85,
-            ])
+            lines.extend(
+                [
+                    "-" * 85,
+                    "Effects by Treatment Cohort".center(85),
+                    "-" * 85,
+                    f"{'Cohort':<15} {'Estimate':>12} {'Std. Err.':>12} {'t-stat':>10} {'P>|t|':>10} {'Sig.':>6}",
+                    "-" * 85,
+                ]
+            )
 
             for group in sorted(self.group_effects.keys()):
                 eff = self.group_effects[group]
-                sig = _get_significance_stars(eff['p_value'])
+                sig = _get_significance_stars(eff["p_value"])
                 lines.append(
                     f"{group:<15} {eff['effect']:>12.4f} {eff['se']:>12.4f} "
                     f"{eff['t_stat']:>10.3f} {eff['p_value']:>10.4f} {sig:>6}"
@@ -218,10 +227,12 @@ class CallawaySantAnnaResults:
 
             lines.extend(["-" * 85, ""])
 
-        lines.extend([
-            "Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1",
-            "=" * 85,
-        ])
+        lines.extend(
+            [
+                "Signif. codes: '***' 0.001, '**' 0.01, '*' 0.05, '.' 0.1",
+                "=" * 85,
+            ]
+        )
 
         return "\n".join(lines)
 
@@ -246,16 +257,18 @@ class CallawaySantAnnaResults:
         if level == "group_time":
             rows = []
             for (g, t), data in self.group_time_effects.items():
-                rows.append({
-                    'group': g,
-                    'time': t,
-                    'effect': data['effect'],
-                    'se': data['se'],
-                    't_stat': data['t_stat'],
-                    'p_value': data['p_value'],
-                    'conf_int_lower': data['conf_int'][0],
-                    'conf_int_upper': data['conf_int'][1],
-                })
+                rows.append(
+                    {
+                        "group": g,
+                        "time": t,
+                        "effect": data["effect"],
+                        "se": data["se"],
+                        "t_stat": data["t_stat"],
+                        "p_value": data["p_value"],
+                        "conf_int_lower": data["conf_int"][0],
+                        "conf_int_upper": data["conf_int"][1],
+                    }
+                )
             return pd.DataFrame(rows)
 
         elif level == "event_study":
@@ -263,18 +276,20 @@ class CallawaySantAnnaResults:
                 raise ValueError("Event study effects not computed. Use aggregate='event_study'.")
             rows = []
             for rel_t, data in sorted(self.event_study_effects.items()):
-                cband_ci = data.get('cband_conf_int', (np.nan, np.nan))
-                rows.append({
-                    'relative_period': rel_t,
-                    'effect': data['effect'],
-                    'se': data['se'],
-                    't_stat': data['t_stat'],
-                    'p_value': data['p_value'],
-                    'conf_int_lower': data['conf_int'][0],
-                    'conf_int_upper': data['conf_int'][1],
-                    'cband_lower': cband_ci[0],
-                    'cband_upper': cband_ci[1],
-                })
+                cband_ci = data.get("cband_conf_int", (np.nan, np.nan))
+                rows.append(
+                    {
+                        "relative_period": rel_t,
+                        "effect": data["effect"],
+                        "se": data["se"],
+                        "t_stat": data["t_stat"],
+                        "p_value": data["p_value"],
+                        "conf_int_lower": data["conf_int"][0],
+                        "conf_int_upper": data["conf_int"][1],
+                        "cband_lower": cband_ci[0],
+                        "cband_upper": cband_ci[1],
+                    }
+                )
             return pd.DataFrame(rows)
 
         elif level == "group":
@@ -282,19 +297,23 @@ class CallawaySantAnnaResults:
                 raise ValueError("Group effects not computed. Use aggregate='group'.")
             rows = []
             for group, data in sorted(self.group_effects.items()):
-                rows.append({
-                    'group': group,
-                    'effect': data['effect'],
-                    'se': data['se'],
-                    't_stat': data['t_stat'],
-                    'p_value': data['p_value'],
-                    'conf_int_lower': data['conf_int'][0],
-                    'conf_int_upper': data['conf_int'][1],
-                })
+                rows.append(
+                    {
+                        "group": group,
+                        "effect": data["effect"],
+                        "se": data["se"],
+                        "t_stat": data["t_stat"],
+                        "p_value": data["p_value"],
+                        "conf_int_lower": data["conf_int"][0],
+                        "conf_int_upper": data["conf_int"][1],
+                    }
+                )
             return pd.DataFrame(rows)
 
         else:
-            raise ValueError(f"Unknown level: {level}. Use 'group_time', 'event_study', or 'group'.")
+            raise ValueError(
+                f"Unknown level: {level}. Use 'group_time', 'event_study', or 'group'."
+            )
 
     @property
     def is_significant(self) -> bool:

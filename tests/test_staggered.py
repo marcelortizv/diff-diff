@@ -3185,6 +3185,119 @@ class TestPscoreTrimParameter:
         cs = CallawaySantAnna()
         assert cs.pscore_trim == 0.01
 
+    def test_pscore_trim_negative_raises(self):
+        """pscore_trim < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="pscore_trim must be in"):
+            CallawaySantAnna(pscore_trim=-0.1)
+
+    def test_pscore_trim_at_half_raises(self):
+        """pscore_trim == 0.5 raises ValueError."""
+        with pytest.raises(ValueError, match="pscore_trim must be in"):
+            CallawaySantAnna(pscore_trim=0.5)
+
+    def test_pscore_trim_above_half_raises(self):
+        """pscore_trim > 0.5 raises ValueError."""
+        with pytest.raises(ValueError, match="pscore_trim must be in"):
+            CallawaySantAnna(pscore_trim=0.6)
+
+    def test_pscore_trim_zero_succeeds(self):
+        """pscore_trim=0.0 is valid (no trimming)."""
+        cs = CallawaySantAnna(pscore_trim=0.0)
+        assert cs.pscore_trim == 0.0
+
+    def test_pscore_trim_in_results(self):
+        """results.pscore_trim matches the estimator's setting after fit()."""
+        np.random.seed(42)
+        n_units, n_periods = 50, 6
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(n_periods), n_units)
+        first_treat = np.zeros(n_units)
+        first_treat[n_units // 2 :] = 3
+        first_treat_expanded = np.repeat(first_treat, n_periods)
+        post = (times >= first_treat_expanded) & (first_treat_expanded > 0)
+        outcomes = 1.0 + 2.0 * post + np.random.randn(len(units)) * 0.5
+        data = pd.DataFrame(
+            {
+                "unit": units,
+                "time": times,
+                "outcome": outcomes,
+                "first_treat": first_treat_expanded.astype(int),
+            }
+        )
+        cs = CallawaySantAnna(pscore_trim=0.05, estimation_method="reg")
+        results = cs.fit(
+            data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
+        )
+        assert results.pscore_trim == 0.05
+
+    def test_nondefault_pscore_trim_ipw(self):
+        """IPW with pscore_trim=0.1 produces finite results."""
+        np.random.seed(42)
+        n_units, n_periods = 80, 6
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(n_periods), n_units)
+        x = np.random.randn(n_units)
+        x_expanded = np.repeat(x, n_periods)
+        first_treat = np.zeros(n_units)
+        first_treat[n_units // 2 :] = 3
+        first_treat_expanded = np.repeat(first_treat, n_periods)
+        post = (times >= first_treat_expanded) & (first_treat_expanded > 0)
+        outcomes = 1.0 + 0.5 * x_expanded + 2.0 * post + np.random.randn(len(units)) * 0.5
+        data = pd.DataFrame(
+            {
+                "unit": units,
+                "time": times,
+                "outcome": outcomes,
+                "first_treat": first_treat_expanded.astype(int),
+                "x": x_expanded,
+            }
+        )
+        cs = CallawaySantAnna(estimation_method="ipw", pscore_trim=0.1)
+        results = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            covariates=["x"],
+        )
+        assert np.isfinite(results.overall_att)
+        assert results.pscore_trim == 0.1
+
+    def test_nondefault_pscore_trim_dr(self):
+        """DR with pscore_trim=0.1 produces finite results."""
+        np.random.seed(42)
+        n_units, n_periods = 80, 6
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(n_periods), n_units)
+        x = np.random.randn(n_units)
+        x_expanded = np.repeat(x, n_periods)
+        first_treat = np.zeros(n_units)
+        first_treat[n_units // 2 :] = 3
+        first_treat_expanded = np.repeat(first_treat, n_periods)
+        post = (times >= first_treat_expanded) & (first_treat_expanded > 0)
+        outcomes = 1.0 + 0.5 * x_expanded + 2.0 * post + np.random.randn(len(units)) * 0.5
+        data = pd.DataFrame(
+            {
+                "unit": units,
+                "time": times,
+                "outcome": outcomes,
+                "first_treat": first_treat_expanded.astype(int),
+                "x": x_expanded,
+            }
+        )
+        cs = CallawaySantAnna(estimation_method="dr", pscore_trim=0.1)
+        results = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            covariates=["x"],
+        )
+        assert np.isfinite(results.overall_att)
+        assert results.pscore_trim == 0.1
+
 
 class TestIRLSPropensityScore:
     """Tests for IRLS-based propensity score estimation in CS estimator."""

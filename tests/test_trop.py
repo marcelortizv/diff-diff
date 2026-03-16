@@ -6,8 +6,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-pytestmark = pytest.mark.slow
-
 from diff_diff import SyntheticDiD
 from diff_diff.trop import TROP, TROPResults, trop
 from diff_diff.prep import generate_factor_data
@@ -465,6 +463,7 @@ class TestTROPResults:
         assert results.att == 1.0, "ATT should still be valid"
 
 
+@pytest.mark.slow
 class TestTROPvsSDID:
     """Tests comparing TROP to SDID under different DGPs."""
 
@@ -543,6 +542,7 @@ class TestConvenienceFunction:
         assert isinstance(results, TROPResults)
 
 
+@pytest.mark.slow
 class TestMethodologyVerification:
     """Tests verifying TROP methodology matches paper specifications.
 
@@ -1260,6 +1260,7 @@ class TestDMatrixValidation:
         assert "D[t, i] = 1 for all t >= first treatment" in error_msg
 
 
+@pytest.mark.slow
 class TestCyclingSearch:
     """Tests for LOOCV cycling (coordinate descent) search."""
 
@@ -1348,6 +1349,7 @@ class TestCyclingSearch:
         assert results.lambda_nn == 0.1
 
 
+@pytest.mark.slow
 class TestPaperConformanceFixes:
     """Tests verifying fixes for paper conformance issues.
 
@@ -2716,6 +2718,7 @@ class TestTROPNuclearNormSolver:
         assert result.shape == (6, 4), f"Expected (6, 4), got {result.shape}"
 
 
+@pytest.mark.slow
 class TestTROPJointMethod:
     """Tests for TROP method='joint'.
 

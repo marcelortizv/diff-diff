@@ -177,4 +177,4 @@ jobs:
           PYTHONPATH=. python -c "from diff_diff import HAS_RUST_BACKEND; print(f'HAS_RUST_BACKEND: {HAS_RUST_BACKEND}'); assert not HAS_RUST_BACKEND"
 
       - name: Run tests in pure Python mode
-        run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/ -q --ignore=tests/test_rust_backend.py -n auto --dist worksteal -m ''
+        run: PYTHONPATH=. DIFF_DIFF_BACKEND=python pytest tests/ -q --ignore=tests/test_rust_backend.py -n auto --dist worksteal

@@ -25,8 +25,8 @@ Example
                        time='period', unit='unit_id', reference_period=2)
 
    # Create plot
-   fig = plot_event_study(results)
-   fig.savefig('event_study.png', dpi=300, bbox_inches='tight')
+   ax = plot_event_study(results)
+   ax.figure.savefig('event_study.png', dpi=300, bbox_inches='tight')
 
 plot_group_effects
 ------------------

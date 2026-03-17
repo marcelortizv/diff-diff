@@ -493,7 +493,7 @@ differences helps interpret results and choose appropriate inference.
      - Same as basic DiD. Cluster-robust available via ``cluster_col``. Wild bootstrap not yet supported for multi-coefficient inference.
    * - ``CallawaySantAnna``
      - Analytical (influence function)
-     - Uses influence-function SEs with WIF adjustment by default. Set ``n_bootstrap=999`` with ``bootstrap_weights='bayes'`` for multiplier bootstrap inference.
+     - Uses influence-function SEs with WIF adjustment by default. Set ``n_bootstrap=999`` for multiplier bootstrap inference (weight types: ``rademacher``, ``mammen``, ``webb``).
    * - ``SyntheticDiD``
      - Bootstrap or placebo-based
      - Default uses bootstrap resampling. Set ``n_bootstrap=0`` for placebo-based inference using pre-treatment residuals.

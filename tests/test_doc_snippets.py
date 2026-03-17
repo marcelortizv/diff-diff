@@ -32,6 +32,8 @@ RST_FILES = [
     "api/two_stage.rst",
     "api/bacon.rst",
     "api/visualization.rst",
+    "api/honest_did.rst",
+    "api/pretrends.rst",
 ]
 
 # ---------------------------------------------------------------------------
@@ -101,16 +103,6 @@ def _collect_cases() -> List[Tuple[str, str, Optional[str]]]:
 
 
 _CASES = _collect_cases()
-
-# Snippets that call plotting functions which require matplotlib (optional dep).
-_KNOWN_FAILURES = {
-    "choosing_estimator:block2",   # plot_event_study
-    "choosing_estimator:block12",  # plot_bacon
-    "quickstart:block6",           # plot_event_study
-    "api_visualization:block0",    # plot_event_study + savefig
-    "api_visualization:block1",    # plot_group_effects
-}
-
 
 # ---------------------------------------------------------------------------
 # Shared namespace builder
@@ -301,8 +293,6 @@ def test_doc_snippet(test_id: str, code: str, skip_reason: Optional[str]):
     """Execute a documentation code snippet and assert no API/runtime errors."""
     if skip_reason:
         pytest.skip(skip_reason)
-    if test_id in _KNOWN_FAILURES:
-        pytest.xfail(f"Pre-existing doc bug: {test_id}")
 
     ns = _build_namespace()
     try:

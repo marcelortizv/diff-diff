@@ -405,7 +405,7 @@ exponential unit distance weights, and time decay weights with LOOCV tuning.
 .. note::
 
    TROP is computationally intensive. Use ``method='global'`` for faster
-   estimation at the cost of some flexibility vs. ``method='twostep'``.
+   estimation at the cost of some flexibility vs. ``method='local'``.
 
 Bacon Decomposition
 ~~~~~~~~~~~~~~~~~~~

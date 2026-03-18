@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Rename TROP `method="twostep"` to `method="local"`; `"twostep"` deprecated, removal in v3.0
+- Rename internal TROP `_joint_*` methods to `_global_*` for consistency
+
 ## [2.7.1] - 2026-03-15
 
 ### Changed

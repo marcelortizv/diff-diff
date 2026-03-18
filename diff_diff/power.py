@@ -237,6 +237,79 @@ def _extract_staggered(
     )
 
 
+# -- Staggered DGP compatibility check ----------------------------------------
+
+_STAGGERED_ESTIMATORS = frozenset(
+    {
+        "CallawaySantAnna",
+        "SunAbraham",
+        "ImputationDiD",
+        "TwoStageDiD",
+        "StackedDiD",
+        "EfficientDiD",
+    }
+)
+
+
+def _check_staggered_dgp_compat(
+    estimator: Any,
+    data_generator_kwargs: Optional[Dict[str, Any]],
+) -> None:
+    """Warn if a staggered estimator's settings don't match the default DGP."""
+    name = type(estimator).__name__
+    if name not in _STAGGERED_ESTIMATORS:
+        return
+
+    dgp_overrides = data_generator_kwargs or {}
+    issues: List[str] = []
+
+    # Check control_group="not_yet_treated" (CS, SA)
+    cg = getattr(estimator, "control_group", "never_treated")
+    if cg == "not_yet_treated" and "cohort_periods" not in dgp_overrides:
+        issues.append(
+            f'  - {name} has control_group="not_yet_treated" but the default '
+            f"DGP generates a single treatment cohort with never-treated "
+            f"controls. Power may not reflect the intended not-yet-treated "
+            f"design.\n"
+            f"    Fix: pass data_generator_kwargs="
+            f'{{"cohort_periods": [2, 4], "never_treated_frac": 0.0}} '
+            f"(or a custom data_generator)."
+        )
+
+    # Check anticipation > 0 (all staggered)
+    antic = getattr(estimator, "anticipation", 0)
+    if antic > 0:
+        issues.append(
+            f"  - {name} has anticipation={antic} but the default DGP does "
+            f"not model anticipatory effects. The estimator will look for "
+            f"treatment effects {antic} period(s) before the DGP generates "
+            f"them, biasing power estimates.\n"
+            f"    Fix: supply a custom data_generator that shifts the "
+            f"effect onset."
+        )
+
+    # Check clean_control on StackedDiD
+    if name == "StackedDiD":
+        cc = getattr(estimator, "clean_control", "not_yet_treated")
+        if cc == "strict" and "cohort_periods" not in dgp_overrides:
+            issues.append(
+                '  - StackedDiD has clean_control="strict" but the default '
+                "single-cohort DGP makes strict controls equivalent to "
+                "never-treated controls.\n"
+                "    Fix: pass data_generator_kwargs="
+                '{"cohort_periods": [2, 4]} '
+                "to test true strict clean-control behavior."
+            )
+
+    if issues:
+        msg = (
+            f"Staggered power DGP mismatch for {name}. The default "
+            f"single-cohort DGP may not match the estimator "
+            f"configuration:\n" + "\n".join(issues)
+        )
+        warnings.warn(msg, UserWarning, stacklevel=2)
+
+
 # -- Registry construction (deferred to avoid import-time cost) ---------------
 
 _ESTIMATOR_REGISTRY: Optional[Dict[str, _EstimatorProfile]] = None
@@ -1350,6 +1423,10 @@ def simulate_power(
 
     data_gen_kwargs = data_generator_kwargs or {}
     est_kwargs = estimator_kwargs or {}
+
+    # Warn if staggered estimator settings don't match auto DGP
+    if profile is not None and not use_custom_dgp:
+        _check_staggered_dgp_compat(estimator, data_generator_kwargs)
 
     # Determine effect sizes to test
     if effect_sizes is None:

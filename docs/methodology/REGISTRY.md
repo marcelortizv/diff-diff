@@ -1712,6 +1712,7 @@ n = 2(t_{α/2} + t_{1-κ})² σ² / MDE²
 - Very small effects: may require infeasibly large samples
 - High ICC: dramatically reduces effective sample size
 - Unequal allocation: optimal is often 50-50 but depends on costs
+- **Note:** The simulation-based power registry (`simulate_power`, `simulate_mde`, `simulate_sample_size`) uses a single-cohort staggered DGP by default. Estimators configured with `control_group="not_yet_treated"`, `clean_control="strict"`, or `anticipation>0` will receive a `UserWarning` because the default DGP does not match their identification strategy. Users must supply `data_generator_kwargs` (e.g., `cohort_periods=[2, 4]`, `never_treated_frac=0.0`) or a custom `data_generator` to match the estimator design.
 
 **Reference implementation(s):**
 - R: `pwr` package (general), `DeclareDesign` (simulation-based)

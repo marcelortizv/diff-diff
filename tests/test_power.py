@@ -1,5 +1,7 @@
 """Tests for power analysis module."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -1189,6 +1191,119 @@ class TestEstimatorCoverage:
         )
         assert isinstance(result, SimulationMDEResults)
         assert result.mde > 0
+
+    # -- Staggered DGP compatibility warnings --
+
+    def test_staggered_dgp_warns_not_yet_treated(self):
+        """Auto DGP warns when CS has control_group='not_yet_treated'."""
+        with pytest.warns(UserWarning, match="not_yet_treated"):
+            simulate_power(
+                CallawaySantAnna(control_group="not_yet_treated"),
+                n_simulations=3,
+                seed=42,
+                progress=False,
+            )
+
+    def test_staggered_dgp_warns_anticipation(self):
+        """Auto DGP warns when staggered estimator has anticipation > 0."""
+        with pytest.warns(UserWarning, match="anticipation=1"):
+            simulate_power(
+                CallawaySantAnna(anticipation=1),
+                n_simulations=3,
+                seed=42,
+                progress=False,
+            )
+
+    def test_staggered_dgp_warns_strict_clean_control(self):
+        """Auto DGP warns when StackedDiD has clean_control='strict'."""
+        with pytest.warns(UserWarning, match="strict"):
+            simulate_power(
+                StackedDiD(clean_control="strict"),
+                n_simulations=3,
+                seed=42,
+                progress=False,
+            )
+
+    def test_staggered_dgp_no_warn_custom_dgp_bypasses_check(self):
+        """Custom data_generator bypasses DGP compat check entirely."""
+        from diff_diff.prep import generate_staggered_data
+
+        def _custom_staggered(**kwargs):
+            # Adapt simulate_power's standard kwargs to generate_staggered_data
+            return generate_staggered_data(
+                n_units=kwargs["n_units"],
+                n_periods=kwargs["n_periods"],
+                treatment_effect=kwargs["treatment_effect"],
+                cohort_periods=[2, 4],
+                never_treated_frac=0.0,
+                noise_sd=kwargs["noise_sd"],
+                seed=kwargs["seed"],
+            )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            simulate_power(
+                CallawaySantAnna(control_group="not_yet_treated"),
+                data_generator=_custom_staggered,
+                n_periods=6,
+                treatment_period=3,
+                estimator_kwargs=dict(
+                    outcome="outcome",
+                    unit="unit",
+                    time="period",
+                    first_treat="first_treat",
+                ),
+                n_simulations=3,
+                seed=42,
+                progress=False,
+            )
+
+    def test_staggered_dgp_no_warn_with_dgp_kwargs_override(self):
+        """data_generator_kwargs with cohort_periods suppresses warning."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            result = simulate_power(
+                CallawaySantAnna(control_group="not_yet_treated"),
+                n_periods=6,
+                treatment_period=3,
+                data_generator_kwargs=dict(cohort_periods=[2, 4], never_treated_frac=0.0),
+                n_simulations=3,
+                seed=42,
+                progress=False,
+            )
+        assert 0 <= result.power <= 1
+
+    @pytest.mark.slow
+    def test_cs_not_yet_treated_with_matching_dgp(self):
+        """CS with control_group='not_yet_treated' and multi-cohort DGP."""
+        result = simulate_power(
+            CallawaySantAnna(control_group="not_yet_treated"),
+            n_units=60,
+            n_periods=6,
+            treatment_period=3,
+            data_generator_kwargs=dict(cohort_periods=[2, 4], never_treated_frac=0.0),
+            n_simulations=10,
+            seed=42,
+            progress=False,
+        )
+        assert 0 <= result.power <= 1
+        assert result.n_simulations > 0
+
+    @pytest.mark.slow
+    def test_stacked_did_strict_with_matching_dgp(self):
+        """StackedDiD with clean_control='strict' and multi-cohort DGP."""
+        result = simulate_power(
+            StackedDiD(clean_control="strict", kappa_pre=1, kappa_post=1),
+            n_units=80,
+            n_periods=8,
+            treatment_period=4,
+            data_generator_kwargs=dict(cohort_periods=[3, 5]),
+            n_simulations=10,
+            seed=42,
+            progress=False,
+        )
+        assert 0 <= result.power <= 1
+        assert result.n_simulations > 0
 
 
 # ---------------------------------------------------------------------------

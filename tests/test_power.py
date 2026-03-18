@@ -1021,13 +1021,28 @@ class TestEstimatorCoverage:
             )
 
     def test_ddd_no_warn_n_per_cell_override(self):
-        """data_generator_kwargs with n_per_cell suppresses DDD param warnings."""
+        """n_per_cell override suppresses rounding warning but not ignored-param warnings."""
+        with pytest.warns(UserWarning, match="n_periods=6 is ignored"):
+            simulate_power(
+                TripleDifference(),
+                n_units=80,
+                n_periods=6,
+                treatment_period=1,
+                data_generator_kwargs=dict(n_per_cell=10),
+                n_simulations=2,
+                seed=42,
+                progress=False,
+            )
+
+    def test_ddd_n_per_cell_suppresses_rounding(self):
+        """n_per_cell override suppresses effective-N rounding warning."""
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             simulate_power(
                 TripleDifference(),
                 n_units=80,
-                n_periods=6,
+                n_periods=2,
+                treatment_period=1,
                 data_generator_kwargs=dict(n_per_cell=10),
                 n_simulations=2,
                 seed=42,
@@ -1745,15 +1760,16 @@ class TestSimulateSampleSize:
         assert result.power_at_n >= 0.80
 
     def test_lo_already_sufficient_auto(self):
-        """Auto-bracket returns min_n when effect overwhelmingly large."""
-        result = simulate_sample_size(
-            DifferenceInDifferences(),
-            treatment_effect=50.0,
-            sigma=0.1,
-            n_simulations=50,
-            seed=42,
-            progress=False,
-        )
+        """Auto-bracket warns and returns min_n when effect overwhelmingly large."""
+        with pytest.warns(UserWarning, match="registry floor"):
+            result = simulate_sample_size(
+                DifferenceInDifferences(),
+                treatment_effect=50.0,
+                sigma=0.1,
+                n_simulations=50,
+                seed=42,
+                progress=False,
+            )
         # min_n for DifferenceInDifferences is 20
         assert result.required_n == 20
         assert result.power_at_n >= 0.80

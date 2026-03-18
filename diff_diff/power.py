@@ -322,18 +322,18 @@ def _check_ddd_dgp_compat(
     issues: List[str] = []
 
     # DDD is a fixed 2-period factorial; n_periods and treatment_period are ignored
-    if n_periods != 2 and "n_per_cell" not in overrides:
+    if n_periods != 2:
         issues.append(
             f"n_periods={n_periods} is ignored (DDD uses a fixed " f"2-period design: pre/post)"
         )
-    if treatment_period != 1 and "n_per_cell" not in overrides:
+    if treatment_period != 1:
         issues.append(
             f"treatment_period={treatment_period} is ignored (DDD "
             f"always treats in the second period)"
         )
 
     # DDD's 2×2×2 factorial has inherent 50% treatment fraction
-    if treatment_fraction != 0.5 and "n_per_cell" not in overrides:
+    if treatment_fraction != 0.5:
         issues.append(
             f"treatment_fraction={treatment_fraction} is ignored "
             f"(DDD uses a balanced 2×2×2 factorial where 50% of "
@@ -2191,6 +2191,12 @@ def simulate_sample_size(
         lo = min_n
         power_lo = _power_at_n(lo)
         if power_lo >= power:
+            warnings.warn(
+                f"Power at registry floor n={lo} is {power_lo:.2f} >= "
+                f"target {power}. No smaller sample sizes were evaluated. "
+                f"Pass n_range=(lo, hi) to search below this floor.",
+                UserWarning,
+            )
             return SimulationSampleSizeResults(
                 required_n=lo,
                 power_at_n=power_lo,

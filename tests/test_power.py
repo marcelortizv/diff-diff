@@ -7,7 +7,6 @@ import pytest
 from diff_diff import (
     TROP,
     CallawaySantAnna,
-    ContinuousDiD,
     DifferenceInDifferences,
     EfficientDiD,
     ImputationDiD,
@@ -34,11 +33,8 @@ from diff_diff.power import (
     MAX_SAMPLE_SIZE,
     _basic_dgp_kwargs,
     _basic_fit_kwargs,
-    _continuous_dgp_kwargs,
-    _continuous_fit_kwargs,
     _ddd_dgp_kwargs,
     _ddd_fit_kwargs,
-    _extract_continuous,
     _extract_multiperiod,
     _extract_simple,
     _extract_staggered,
@@ -686,7 +682,6 @@ class TestEstimatorRegistry:
         "TROP",
         "SyntheticDiD",
         "TripleDifference",
-        "ContinuousDiD",
     ]
 
     def test_all_estimators_registered(self):
@@ -715,7 +710,6 @@ class TestEstimatorRegistry:
             _staggered_dgp_kwargs,
             _factor_dgp_kwargs,
             _ddd_dgp_kwargs,
-            _continuous_dgp_kwargs,
         ]:
             result = builder(**params)
             assert isinstance(result, dict)
@@ -730,7 +724,6 @@ class TestEstimatorRegistry:
             _staggered_fit_kwargs,
             _ddd_fit_kwargs,
             _trop_fit_kwargs,
-            _continuous_fit_kwargs,
         ]:
             result = builder(dummy_df, 50, 4, 2)
             assert isinstance(result, dict)
@@ -796,20 +789,19 @@ class TestEstimatorRegistry:
         assert p == 0.03
         assert ci == (1.2, 2.8)
 
-    def test_extract_continuous(self):
-        """_extract_continuous extracts from overall_att_* attributes."""
+    def test_continuous_did_not_in_registry(self):
+        """ContinuousDiD is not in registry and raises without custom data_generator."""
+        from diff_diff import ContinuousDiD
 
-        class MockResult:
-            overall_att = 1.5
-            overall_att_se = 0.2
-            overall_att_p_value = 0.005
-            overall_att_conf_int = (1.1, 1.9)
+        registry = _get_registry()
+        assert "ContinuousDiD" not in registry
 
-        att, se, p, ci = _extract_continuous(MockResult())
-        assert att == 1.5
-        assert se == 0.2
-        assert p == 0.005
-        assert ci == (1.1, 1.9)
+        with pytest.raises(ValueError, match="not in registry"):
+            simulate_power(
+                ContinuousDiD(),
+                n_simulations=5,
+                progress=False,
+            )
 
     def test_unknown_estimator_raises_without_data_generator(self):
         """Unknown estimator without data_generator raises ValueError."""
@@ -977,18 +969,6 @@ class TestEstimatorCoverage:
         )
         self._assert_valid_result(result, "SyntheticDiD")
 
-    def test_continuous_did(self):
-        result = simulate_power(
-            ContinuousDiD(),
-            n_units=100,
-            n_periods=6,
-            treatment_period=3,
-            n_simulations=10,
-            seed=42,
-            progress=False,
-        )
-        self._assert_valid_result(result, "ContinuousDiD")
-
 
 # ---------------------------------------------------------------------------
 # simulate_mde tests
@@ -1094,6 +1074,34 @@ class TestSimulateMDE:
         )
         assert result.mde > 1.0
 
+    def test_explicit_effect_range(self):
+        """Explicit effect_range evaluates endpoints and populates search_path."""
+        result = simulate_mde(
+            DifferenceInDifferences(),
+            n_units=100,
+            sigma=1.0,
+            n_simulations=30,
+            effect_range=(0.5, 5.0),
+            seed=42,
+            progress=False,
+        )
+        assert result.mde > 0
+        assert result.power_at_mde > 0
+        assert len(result.search_path) > 0
+
+    def test_unbracketed_effect_range_warns(self):
+        """Tiny effect_range that cannot bracket target power warns."""
+        with pytest.warns(UserWarning, match="not bracketed"):
+            simulate_mde(
+                DifferenceInDifferences(),
+                n_units=50,
+                sigma=10.0,
+                n_simulations=30,
+                effect_range=(0.0, 0.001),
+                seed=42,
+                progress=False,
+            )
+
 
 # ---------------------------------------------------------------------------
 # simulate_sample_size tests
@@ -1189,3 +1197,31 @@ class TestSimulateSampleSize:
             progress=False,
         )
         assert result.required_n >= 50
+
+    def test_explicit_n_range(self):
+        """Explicit n_range evaluates endpoints and populates search_path."""
+        result = simulate_sample_size(
+            DifferenceInDifferences(),
+            treatment_effect=5.0,
+            sigma=1.0,
+            n_simulations=30,
+            n_range=(20, 200),
+            seed=42,
+            progress=False,
+        )
+        assert result.required_n > 0
+        assert result.power_at_n > 0
+        assert len(result.search_path) > 0
+
+    def test_unbracketed_n_range_warns(self):
+        """Tiny n_range that cannot bracket target power warns."""
+        with pytest.warns(UserWarning, match="not bracketed"):
+            simulate_sample_size(
+                DifferenceInDifferences(),
+                treatment_effect=0.01,
+                sigma=10.0,
+                n_simulations=30,
+                n_range=(20, 22),
+                seed=42,
+                progress=False,
+            )

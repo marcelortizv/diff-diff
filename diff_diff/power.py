@@ -124,24 +124,6 @@ def _ddd_dgp_kwargs(
     )
 
 
-def _continuous_dgp_kwargs(
-    n_units: int,
-    n_periods: int,
-    treatment_effect: float,
-    treatment_fraction: float,
-    treatment_period: int,
-    sigma: float,
-) -> Dict[str, Any]:
-    return dict(
-        n_units=n_units,
-        n_periods=n_periods,
-        att_slope=treatment_effect,
-        never_treated_frac=1 - treatment_fraction,
-        cohort_periods=[treatment_period],
-        noise_sd=sigma,
-    )
-
-
 # -- Fit kwargs builders ------------------------------------------------------
 
 
@@ -221,21 +203,6 @@ def _sdid_fit_kwargs(
     )
 
 
-def _continuous_fit_kwargs(
-    data: pd.DataFrame,
-    n_units: int,
-    n_periods: int,
-    treatment_period: int,
-) -> Dict[str, Any]:
-    return dict(
-        outcome="outcome",
-        unit="unit",
-        time="period",
-        first_treat="first_treat",
-        dose="dose",
-    )
-
-
 # -- Result extractors --------------------------------------------------------
 
 
@@ -270,17 +237,6 @@ def _extract_staggered(
     )
 
 
-def _extract_continuous(
-    result: Any,
-) -> Tuple[float, float, float, Tuple[float, float]]:
-    return (
-        result.overall_att,
-        result.overall_att_se,
-        result.overall_att_p_value,
-        result.overall_att_conf_int,
-    )
-
-
 # -- Registry construction (deferred to avoid import-time cost) ---------------
 
 _ESTIMATOR_REGISTRY: Optional[Dict[str, _EstimatorProfile]] = None
@@ -293,7 +249,6 @@ def _get_registry() -> Dict[str, _EstimatorProfile]:
         return _ESTIMATOR_REGISTRY
 
     from diff_diff.prep import (
-        generate_continuous_did_data,
         generate_ddd_data,
         generate_did_data,
         generate_factor_data,
@@ -388,14 +343,6 @@ def _get_registry() -> Dict[str, _EstimatorProfile]:
             fit_kwargs_builder=_ddd_fit_kwargs,
             result_extractor=_extract_simple,
             min_n=64,
-        ),
-        # --- Continuous DiD ---
-        "ContinuousDiD": _EstimatorProfile(
-            default_dgp=generate_continuous_did_data,
-            dgp_kwargs_builder=_continuous_dgp_kwargs,
-            fit_kwargs_builder=_continuous_fit_kwargs,
-            result_extractor=_extract_continuous,
-            min_n=40,
         ),
     }
     return _ESTIMATOR_REGISTRY
@@ -1841,6 +1788,31 @@ def simulate_mde(
     # --- Bracket ---
     if effect_range is not None:
         lo, hi = effect_range
+        power_lo = _power_at(lo)
+        power_hi = _power_at(hi)
+        if power_lo >= power:
+            warnings.warn(
+                f"Power at effect={lo} is {power_lo:.2f} >= target {power}. "
+                f"Lower bound already exceeds target power. Returning lo as MDE.",
+                UserWarning,
+            )
+            return SimulationMDEResults(
+                mde=lo,
+                power_at_mde=power_lo,
+                target_power=power,
+                alpha=alpha,
+                n_units=n_units,
+                n_simulations_per_step=n_simulations,
+                n_steps=len(search_path),
+                search_path=search_path,
+                estimator_name=estimator_name,
+            )
+        if power_hi < power:
+            warnings.warn(
+                f"Target power {power} not bracketed: power at effect={hi} "
+                f"is {power_hi:.2f}. Upper bound may be too low.",
+                UserWarning,
+            )
     else:
         lo = 0.0
         # Check that power at zero is below target (no inflated Type I error)
@@ -2015,6 +1987,14 @@ def simulate_sample_size(
     # --- Bracket ---
     if n_range is not None:
         lo, hi = n_range
+        _power_at_n(lo)  # evaluate lo to populate search_path
+        power_hi = _power_at_n(hi)
+        if power_hi < power:
+            warnings.warn(
+                f"Target power {power} not bracketed: power at n={hi} "
+                f"is {power_hi:.2f}. Upper bound may be too low.",
+                UserWarning,
+            )
     else:
         lo = min_n
         hi = max(100, 2 * min_n)

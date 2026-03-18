@@ -472,8 +472,10 @@ Imputation / Two-Stage DiD Issues
 "Non-constant first_treat values"
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**Problem:** ``ImputationDiD`` or ``TwoStageDiD`` raises an error because
-``first_treat`` varies within units.
+**Problem:** ``ImputationDiD`` or ``TwoStageDiD`` issues a warning because
+``first_treat`` varies within units. The estimator coerces to a single value
+per unit (using the first observed value) and proceeds, but results may be
+unreliable.
 
 **Causes:**
 
@@ -549,8 +551,9 @@ Bacon Decomposition Issues
 "Unbalanced panel detected"
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**Problem:** ``BaconDecomposition`` raises an error because the panel is
-unbalanced. Bacon decomposition requires a balanced panel.
+**Problem:** ``BaconDecomposition`` issues a warning because the panel is
+unbalanced. Bacon decomposition assumes balanced panels and results may be
+inaccurate with missing observations.
 
 **Causes:**
 

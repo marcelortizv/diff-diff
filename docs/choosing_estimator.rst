@@ -495,8 +495,8 @@ differences helps interpret results and choose appropriate inference.
      - Analytical (influence function)
      - Uses influence-function SEs with WIF adjustment by default. Set ``n_bootstrap=999`` for multiplier bootstrap inference (weight types: ``rademacher``, ``mammen``, ``webb``).
    * - ``SyntheticDiD``
-     - Bootstrap or placebo-based
-     - Default uses bootstrap resampling. Set ``n_bootstrap=0`` for placebo-based inference using pre-treatment residuals.
+     - Placebo or bootstrap
+     - Default uses placebo-based variance (``variance_method="placebo"``). Set ``variance_method="bootstrap"`` for bootstrap inference. Both methods use ``n_bootstrap`` replications (default 200).
    * - ``ContinuousDiD``
      - Analytical (influence function)
      - Uses influence-function-based SEs by default. Use ``n_bootstrap=199`` (or higher) for multiplier bootstrap inference with proper CIs.

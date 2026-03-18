@@ -88,4 +88,4 @@ Example
    honest = HonestDiD(method='relative_magnitude', M=1.0)
    bounds = honest.fit(event_study_results)
 
-   fig = plot_honest_event_study(event_study_results, bounds)
+   ax = plot_honest_event_study(bounds)

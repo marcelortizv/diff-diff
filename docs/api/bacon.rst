@@ -101,8 +101,8 @@ Visualizing with ``plot_bacon``::
     from diff_diff import plot_bacon
 
     # Scatter plot of 2x2 estimates vs weights, colored by comparison type
-    fig = plot_bacon(results)
-    fig.show()
+    ax = plot_bacon(results)
+    ax.figure.show()
 
 Interpreting the decomposition::
 

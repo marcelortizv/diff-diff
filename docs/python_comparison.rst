@@ -410,7 +410,7 @@ Staggered DiD (Callaway-Sant'Anna)
        first_treat='first_treat',
        covariates=['x1', 'x2']
    )
-   event_study = results.aggregate('event_time')
+   event_study = results.event_study_effects
 
 .. code-block:: python
 
@@ -433,9 +433,9 @@ Sensitivity Analysis
 .. code-block:: python
 
    # diff-diff (only Python option)
-   from diff_diff import HonestDiD, DeltaRM, plot_sensitivity
+   from diff_diff import HonestDiD, plot_sensitivity
 
-   honest = HonestDiD(delta=DeltaRM(M_bar=1.0))
+   honest = HonestDiD(method='relative_magnitude', M=1.0)
    results = honest.fit(event_study_results)
 
    # Sensitivity over M grid

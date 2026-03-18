@@ -128,19 +128,17 @@ Standard Error Issues
 .. code-block:: python
 
    # For panel data, always cluster at unit level
-   results = did.fit(data, outcome='y', treatment='treated',
-                     time='post', cluster_col='unit_id')
+   did = DifferenceInDifferences(cluster='unit_id')
+   results = did.fit(data, outcome='y', treatment='treated', time='post')
 
    # Compare SE methods
    did_robust = DifferenceInDifferences()
-   did_cluster = DifferenceInDifferences()
-   did_wild = DifferenceInDifferences(inference='wild_bootstrap')
+   did_cluster = DifferenceInDifferences(cluster='unit_id')
+   did_wild = DifferenceInDifferences(inference='wild_bootstrap', cluster='unit_id')
 
    r1 = did_robust.fit(data, outcome='y', treatment='treated', time='post')
-   r2 = did_cluster.fit(data, outcome='y', treatment='treated',
-                        time='post', cluster_col='unit_id')
-   r3 = did_wild.fit(data, outcome='y', treatment='treated',
-                     time='post', cluster_col='unit_id')
+   r2 = did_cluster.fit(data, outcome='y', treatment='treated', time='post')
+   r3 = did_wild.fit(data, outcome='y', treatment='treated', time='post')
 
    print(f"Robust SE: {r1.se:.4f}")
    print(f"Cluster SE: {r2.se:.4f}")

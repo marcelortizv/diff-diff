@@ -34,6 +34,8 @@ RST_FILES = [
     "api/visualization.rst",
     "api/honest_did.rst",
     "api/pretrends.rst",
+    "python_comparison.rst",
+    "r_comparison.rst",
 ]
 
 # ---------------------------------------------------------------------------
@@ -47,14 +49,41 @@ _CODE_BLOCK_RE = re.compile(
     re.MULTILINE,
 )
 
+# RST ``::`` shorthand code blocks (paragraph ending with ``::``, blank line,
+# indented body).  Only matches paragraph-ending ``::`` — excludes RST
+# directives (lines starting with ``..``).
+_SHORTHAND_BLOCK_RE = re.compile(
+    r"^(?!\s*\.\.).*\S::\s*$\n"  # non-directive line ending with ::
+    r"\n"  # blank separator
+    r"((?:[ \t]+\S.*\n|[ \t]*\n)+)",  # indented body
+    re.MULTILINE,
+)
+
+# Heuristic: skip ``::`` blocks that look like shell or prose, not Python.
+_SHELL_HINTS_RE = re.compile(
+    r"^\s*(\$\s|#!|pip\s+install|maturin\s)", re.MULTILINE
+)
+_PROSE_HINT_RE = re.compile(
+    r"^[A-Z][a-z]+ [a-z]+ [a-z]+", re.MULTILINE  # English prose sentence
+)
+
 
 def _extract_snippets(rst_path: Path) -> List[Tuple[int, str]]:
     """Return list of (block_index, dedented_code) from an RST file."""
     text = rst_path.read_text()
     snippets = []
-    for i, m in enumerate(_CODE_BLOCK_RE.finditer(text)):
+    idx = 0
+    for m in _CODE_BLOCK_RE.finditer(text):
         code = textwrap.dedent(m.group(1))
-        snippets.append((i, code))
+        snippets.append((idx, code))
+        idx += 1
+    for m in _SHORTHAND_BLOCK_RE.finditer(text):
+        code = textwrap.dedent(m.group(1))
+        # Skip blocks that look like shell commands or prose, not Python
+        if _SHELL_HINTS_RE.search(code) or _PROSE_HINT_RE.search(code):
+            continue
+        snippets.append((idx, code))
+        idx += 1
     return snippets
 
 
@@ -135,9 +164,9 @@ def _build_namespace() -> dict:
         n_units=60, n_periods=8, seed=42
     )
     # Add alias columns that doc snippets expect
-    staggered["post"] = (
-        staggered["period"] >= staggered["first_treat"].replace(0, 9999)
-    ).astype(int)
+    # Use a simple time split (not unit-specific) so basic 2x2 DID works
+    mid = staggered["period"].median()
+    staggered["post"] = (staggered["period"] >= mid).astype(int)
     staggered["treatment"] = staggered["treated"]
     staggered["y"] = staggered["outcome"]
     staggered["unit_id"] = staggered["unit"]
@@ -145,6 +174,13 @@ def _build_namespace() -> dict:
     staggered["x2"] = rng.normal(size=len(staggered))
     staggered["x3"] = rng.normal(size=len(staggered))
     staggered["state"] = staggered["unit_id"]
+    staggered["time"] = staggered["period"]
+    # Uppercase aliases for comparison page snippets (R naming conventions)
+    staggered["Y"] = staggered["outcome"]
+    staggered["id"] = staggered["unit"]
+    staggered["G"] = staggered["first_treat"]
+    staggered["X1"] = staggered["x1"]
+    staggered["X2"] = staggered["x2"]
     staggered["ever_treated"] = staggered["treated"]
     staggered["group"] = np.where(staggered["treated"] == 1, "treatment", "control")
     staggered["exposure"] = rng.uniform(0, 1, size=len(staggered))
@@ -301,6 +337,10 @@ def test_doc_snippet(test_id: str, code: str, skip_reason: Optional[str]):
         # NameError means the snippet references a variable from a prior
         # context block (e.g. ``results`` from an earlier fit).  This is
         # expected for isolated execution — not an API mismatch.
+        pass
+    except ModuleNotFoundError:
+        # Comparison pages import third-party packages (pyfixest,
+        # linearmodels, differences) that are not installed.
         pass
     except Exception as exc:
         pytest.fail(

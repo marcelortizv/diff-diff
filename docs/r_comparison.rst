@@ -115,9 +115,9 @@ staggered DiD. Here's how to translate common operations:
 .. code-block:: python
 
    # Python
-   overall_att = results.att  # Simple aggregation
-   event_study = results.aggregate('event_time')  # Dynamic
-   by_group = results.aggregate('group')  # By cohort
+   overall_att = results.overall_att  # Simple aggregation
+   event_study = results.event_study_effects  # Dynamic
+   by_group = results.group_effects  # By cohort
 
 R ``HonestDiD`` Package → diff-diff
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -141,9 +141,9 @@ The HonestDiD package implements Rambachan & Roth (2023) sensitivity analysis:
 .. code-block:: python
 
    # Python
-   from diff_diff import HonestDiD, DeltaRM
+   from diff_diff import HonestDiD
 
-   honest = HonestDiD(delta=DeltaRM(M_bar=1.0))
+   honest = HonestDiD(method='relative_magnitude', M=1.0)
    results = honest.fit(event_study_results)
 
    # Sensitivity analysis over M grid
@@ -168,9 +168,9 @@ The HonestDiD package implements Rambachan & Roth (2023) sensitivity analysis:
 .. code-block:: python
 
    # Python
-   from diff_diff import HonestDiD, DeltaSD
+   from diff_diff import HonestDiD
 
-   honest = HonestDiD(delta=DeltaSD(M=0.05))
+   honest = HonestDiD(method='smoothness', M=0.05)
    results = honest.fit(event_study_results)
 
 R ``synthdid`` Package → diff-diff
@@ -198,7 +198,7 @@ The synthdid package implements Arkhangelsky et al. (2021):
        unit='unit',
        time='time',
        treatment='treatment',
-       treatment_start=T0
+       post_periods=[T0, T0+1, T0+2]
    )
 
 Key Differences

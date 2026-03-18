@@ -467,7 +467,7 @@ Common Pitfalls
    Standard errors should typically be clustered at the level of treatment
    assignment (often the unit level).
 
-   *Solution*: Always specify ``cluster_col`` for panel data.
+   *Solution*: Always specify ``cluster`` for panel data.
 
 Standard Error Methods
 ----------------------
@@ -484,13 +484,13 @@ differences helps interpret results and choose appropriate inference.
      - Details
    * - ``DifferenceInDifferences``
      - HC1 (heteroskedasticity-robust)
-     - Uses White's robust SEs by default. Specify ``cluster_col`` for cluster-robust SEs. Use ``inference='wild_bootstrap'`` for few clusters (<30).
+     - Uses White's robust SEs by default. Specify ``cluster`` for cluster-robust SEs. Use ``inference='wild_bootstrap'`` for few clusters (<30).
    * - ``TwoWayFixedEffects``
      - Cluster-robust (unit level)
-     - Always clusters at unit level after within-transformation. Specify ``cluster_col`` to override. Use ``inference='wild_bootstrap'`` for few clusters.
+     - Always clusters at unit level after within-transformation. Specify ``cluster`` to override. Use ``inference='wild_bootstrap'`` for few clusters.
    * - ``MultiPeriodDiD``
      - HC1 (heteroskedasticity-robust)
-     - Same as basic DiD. Cluster-robust available via ``cluster_col``. Wild bootstrap not yet supported for multi-coefficient inference.
+     - Same as basic DiD. Cluster-robust available via ``cluster``. Wild bootstrap not yet supported for multi-coefficient inference.
    * - ``CallawaySantAnna``
      - Analytical (influence function)
      - Uses influence-function SEs with WIF adjustment by default. Set ``n_bootstrap=999`` for multiplier bootstrap inference (weight types: ``rademacher``, ``mammen``, ``webb``).

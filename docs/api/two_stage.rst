@@ -161,5 +161,5 @@ Estimator Comparison
      - Supported
    * - Bootstrap
      - Multiplier bootstrap on GMM influence function
-     - Wild bootstrap
+     - Multiplier bootstrap (IF/WIF)
      - Multiplier bootstrap

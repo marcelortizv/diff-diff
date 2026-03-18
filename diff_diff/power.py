@@ -310,6 +310,57 @@ def _check_staggered_dgp_compat(
         warnings.warn(msg, UserWarning, stacklevel=2)
 
 
+def _check_ddd_dgp_compat(
+    n_units: int,
+    n_periods: int,
+    treatment_fraction: float,
+    treatment_period: int,
+    data_generator_kwargs: Optional[Dict[str, Any]],
+) -> None:
+    """Warn when simulation inputs don't match DDD's fixed 2×2×2 design."""
+    overrides = data_generator_kwargs or {}
+    issues: List[str] = []
+
+    # DDD is a fixed 2-period factorial; n_periods and treatment_period are ignored
+    if n_periods != 2 and "n_per_cell" not in overrides:
+        issues.append(
+            f"n_periods={n_periods} is ignored (DDD uses a fixed " f"2-period design: pre/post)"
+        )
+    if treatment_period != 1 and "n_per_cell" not in overrides:
+        issues.append(
+            f"treatment_period={treatment_period} is ignored (DDD "
+            f"always treats in the second period)"
+        )
+
+    # DDD's 2×2×2 factorial has inherent 50% treatment fraction
+    if treatment_fraction != 0.5 and "n_per_cell" not in overrides:
+        issues.append(
+            f"treatment_fraction={treatment_fraction} is ignored "
+            f"(DDD uses a balanced 2×2×2 factorial where 50% of "
+            f"groups are treated)"
+        )
+
+    # n_units rounding: n_per_cell = max(2, n_units // 8)
+    effective_n_per_cell = overrides.get("n_per_cell", max(2, n_units // 8))
+    effective_n = effective_n_per_cell * 8
+    if effective_n != n_units:
+        issues.append(
+            f"effective sample size is {effective_n} "
+            f"(n_per_cell={effective_n_per_cell} × 8 cells), "
+            f"not the requested n_units={n_units}"
+        )
+
+    if issues:
+        warnings.warn(
+            "TripleDifference uses a fixed 2×2×2 factorial DGP "
+            "(group × partition × time). "
+            + "; ".join(issues)
+            + ". Pass a custom data_generator for non-standard DDD designs.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+
 # -- Registry construction (deferred to avoid import-time cost) ---------------
 
 _ESTIMATOR_REGISTRY: Optional[Dict[str, _EstimatorProfile]] = None
@@ -1430,6 +1481,16 @@ def simulate_power(
     # Warn if staggered estimator settings don't match auto DGP
     if profile is not None and not use_custom_dgp:
         _check_staggered_dgp_compat(estimator, data_generator_kwargs)
+
+    # Warn if DDD design inputs are silently ignored
+    if estimator_name == "TripleDifference" and not use_custom_dgp:
+        _check_ddd_dgp_compat(
+            n_units,
+            n_periods,
+            treatment_fraction,
+            treatment_period,
+            data_generator_kwargs,
+        )
 
     # Determine effect sizes to test
     if effect_sizes is None:

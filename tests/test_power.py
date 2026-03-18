@@ -931,11 +931,139 @@ class TestEstimatorCoverage:
         result = simulate_power(
             TripleDifference(),
             n_units=80,
+            n_periods=2,
+            treatment_period=1,
             n_simulations=10,
             seed=42,
             progress=False,
         )
         self._assert_valid_result(result, "TripleDifference")
+
+    def test_ddd_warns_ignored_params(self):
+        """TripleDifference warns when simulation params don't match DDD design."""
+        with pytest.warns(UserWarning, match="n_periods=6 is ignored"):
+            simulate_power(
+                TripleDifference(),
+                n_units=80,
+                n_periods=6,
+                treatment_period=3,
+                treatment_fraction=0.3,
+                n_simulations=2,
+                seed=42,
+                progress=False,
+            )
+
+    def test_ddd_warns_nonaligned_n_units(self):
+        """TripleDifference warns when n_units doesn't map cleanly to 8 cells."""
+        with pytest.warns(UserWarning, match="effective sample size is 64"):
+            simulate_power(
+                TripleDifference(),
+                n_units=65,
+                n_periods=2,
+                treatment_period=1,
+                n_simulations=2,
+                seed=42,
+                progress=False,
+            )
+
+    def test_ddd_small_n_units_warns(self):
+        """TripleDifference warns when n_units < 16 (clamped to 16)."""
+        with pytest.warns(UserWarning, match="effective sample size is 16"):
+            simulate_power(
+                TripleDifference(),
+                n_units=10,
+                n_periods=2,
+                treatment_period=1,
+                n_simulations=2,
+                seed=42,
+                progress=False,
+            )
+
+    def test_ddd_no_warn_aligned(self):
+        """No warning when n_units is a multiple of 8 and defaults match DDD."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            simulate_power(
+                TripleDifference(),
+                n_units=80,
+                n_periods=2,
+                treatment_period=1,
+                treatment_fraction=0.5,
+                n_simulations=2,
+                seed=42,
+                progress=False,
+            )
+
+    def test_ddd_no_warn_custom_dgp(self):
+        """Custom data_generator bypasses the DDD compat check."""
+
+        def custom_dgp(**kwargs):
+            from diff_diff.prep_dgp import generate_ddd_data
+
+            return generate_ddd_data(n_per_cell=10, seed=kwargs.get("seed"))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            simulate_power(
+                TripleDifference(),
+                n_units=65,
+                n_periods=6,
+                data_generator=custom_dgp,
+                estimator_kwargs=dict(
+                    outcome="outcome",
+                    group="group",
+                    partition="partition",
+                    time="time",
+                ),
+                n_simulations=2,
+                seed=42,
+                progress=False,
+            )
+
+    def test_ddd_no_warn_n_per_cell_override(self):
+        """data_generator_kwargs with n_per_cell suppresses DDD param warnings."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            simulate_power(
+                TripleDifference(),
+                n_units=80,
+                n_periods=6,
+                data_generator_kwargs=dict(n_per_cell=10),
+                n_simulations=2,
+                seed=42,
+                progress=False,
+            )
+
+    @pytest.mark.slow
+    def test_ddd_mde(self):
+        """simulate_mde works for TripleDifference."""
+        result = simulate_mde(
+            TripleDifference(),
+            n_units=80,
+            n_periods=2,
+            treatment_period=1,
+            n_simulations=5,
+            effect_range=(0.5, 5.0),
+            seed=42,
+            progress=False,
+        )
+        assert isinstance(result, SimulationMDEResults)
+        assert result.mde > 0
+
+    @pytest.mark.slow
+    def test_ddd_sample_size(self):
+        """simulate_sample_size works for TripleDifference."""
+        result = simulate_sample_size(
+            TripleDifference(),
+            n_periods=2,
+            treatment_period=1,
+            n_simulations=5,
+            n_range=(64, 200),
+            seed=42,
+            progress=False,
+        )
+        assert isinstance(result, SimulationSampleSizeResults)
+        assert result.required_n > 0
 
     @pytest.mark.slow
     def test_trop(self):

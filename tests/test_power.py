@@ -1137,6 +1137,59 @@ class TestEstimatorCoverage:
                 progress=False,
             )
 
+    @pytest.mark.slow
+    def test_custom_result_extractor(self):
+        """Custom result_extractor works for unregistered estimator."""
+
+        class _UnregisteredEstimator:
+            def __init__(self):
+                self._inner = DifferenceInDifferences()
+
+            def fit(self, data, **kwargs):
+                return self._inner.fit(data, **kwargs)
+
+        def _custom_extractor(result):
+            return (result.att, result.se, result.p_value, result.conf_int)
+
+        result = simulate_power(
+            _UnregisteredEstimator(),
+            data_generator=generate_did_data,
+            estimator_kwargs=dict(outcome="outcome", treatment="treated", time="post"),
+            result_extractor=_custom_extractor,
+            n_simulations=5,
+            seed=42,
+            progress=False,
+        )
+        assert 0 <= result.power <= 1
+        assert result.n_simulations > 0
+
+    @pytest.mark.slow
+    def test_custom_result_extractor_mde_forwarding(self):
+        """result_extractor forwards correctly through simulate_mde."""
+
+        class _UnregisteredEstimator:
+            def __init__(self):
+                self._inner = DifferenceInDifferences()
+
+            def fit(self, data, **kwargs):
+                return self._inner.fit(data, **kwargs)
+
+        def _custom_extractor(result):
+            return (result.att, result.se, result.p_value, result.conf_int)
+
+        result = simulate_mde(
+            _UnregisteredEstimator(),
+            data_generator=generate_did_data,
+            estimator_kwargs=dict(outcome="outcome", treatment="treated", time="post"),
+            result_extractor=_custom_extractor,
+            n_simulations=5,
+            effect_range=(0.5, 5.0),
+            seed=42,
+            progress=False,
+        )
+        assert isinstance(result, SimulationMDEResults)
+        assert result.mde > 0
+
 
 # ---------------------------------------------------------------------------
 # simulate_mde tests

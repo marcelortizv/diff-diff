@@ -1214,6 +1214,7 @@ def simulate_power(
     data_generator: Optional[Callable] = None,
     data_generator_kwargs: Optional[Dict[str, Any]] = None,
     estimator_kwargs: Optional[Dict[str, Any]] = None,
+    result_extractor: Optional[Callable] = None,
     progress: bool = True,
 ) -> SimulationPowerResults:
     """
@@ -1257,6 +1258,11 @@ def simulate_power(
         Additional keyword arguments for data generator.
     estimator_kwargs : dict, optional
         Additional keyword arguments for estimator.fit().
+    result_extractor : callable, optional
+        Custom function to extract results from the estimator output.
+        Takes the estimator result object and returns a tuple of
+        ``(att, se, p_value, conf_int)``. Useful for unregistered
+        estimators with non-standard result schemas.
     progress : bool, default=True
         Whether to print progress updates.
 
@@ -1439,6 +1445,8 @@ def simulate_power(
                 # --- Extract results ---
                 if profile is not None:
                     att, se, p_val, ci = profile.result_extractor(result)
+                elif result_extractor is not None:
+                    att, se, p_val, ci = result_extractor(result)
                 else:
                     att = result.att if hasattr(result, "att") else result.avg_att
                     se = result.se if hasattr(result, "se") else result.avg_se
@@ -1717,6 +1725,7 @@ def simulate_mde(
     data_generator: Optional[Callable] = None,
     data_generator_kwargs: Optional[Dict[str, Any]] = None,
     estimator_kwargs: Optional[Dict[str, Any]] = None,
+    result_extractor: Optional[Callable] = None,
     progress: bool = True,
 ) -> SimulationMDEResults:
     """
@@ -1759,6 +1768,9 @@ def simulate_mde(
         Additional keyword arguments for data generator.
     estimator_kwargs : dict, optional
         Additional keyword arguments for estimator.fit().
+    result_extractor : callable, optional
+        Custom function to extract results from the estimator output.
+        Forwarded to ``simulate_power()``.
     progress : bool, default=True
         Whether to print progress updates.
 
@@ -1789,6 +1801,7 @@ def simulate_mde(
         data_generator=data_generator,
         data_generator_kwargs=data_generator_kwargs,
         estimator_kwargs=estimator_kwargs,
+        result_extractor=result_extractor,
         progress=False,
     )
 
@@ -1911,6 +1924,7 @@ def simulate_sample_size(
     data_generator: Optional[Callable] = None,
     data_generator_kwargs: Optional[Dict[str, Any]] = None,
     estimator_kwargs: Optional[Dict[str, Any]] = None,
+    result_extractor: Optional[Callable] = None,
     progress: bool = True,
 ) -> SimulationSampleSizeResults:
     """
@@ -1951,6 +1965,9 @@ def simulate_sample_size(
         Additional keyword arguments for data generator.
     estimator_kwargs : dict, optional
         Additional keyword arguments for estimator.fit().
+    result_extractor : callable, optional
+        Custom function to extract results from the estimator output.
+        Forwarded to ``simulate_power()``.
     progress : bool, default=True
         Whether to print progress updates.
 
@@ -1988,6 +2005,7 @@ def simulate_sample_size(
         data_generator=data_generator,
         data_generator_kwargs=data_generator_kwargs,
         estimator_kwargs=estimator_kwargs,
+        result_extractor=result_extractor,
         progress=False,
     )
 

@@ -3275,7 +3275,7 @@ class TestTROPGlobalMethod:
             trop.fit(df, 'outcome', 'treated', 'unit', 'time')
 
     def test_global_method_alias(self, simple_panel_data):
-        """method='global' works and produces same results as deprecated 'joint'."""
+        """method='global' runs and produces a valid positive ATT."""
         trop_est = TROP(
             method="global",
             lambda_time_grid=[0.0, 1.0],

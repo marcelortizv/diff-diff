@@ -1082,6 +1082,10 @@ pub fn bootstrap_trop_variance<'py>(
 
 // ============================================================================
 // Global method implementation
+//
+// Note: Only the #[pyfunction] exports were renamed (joint → global) to match
+// the Python public API. The private Rust helpers below retain their original
+// `*_joint*` names to keep the Rust-only rename scope minimal.
 // ============================================================================
 
 /// Compute global weights for global method estimation.

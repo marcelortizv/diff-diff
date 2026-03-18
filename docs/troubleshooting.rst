@@ -205,12 +205,14 @@ Staggered Adoption Issues
    print(data.groupby('first_treat')['unit_id'].nunique())
 
    # Use bootstrap for better inference
-   results = cs.fit(data, ...)
-   bootstrap_results = results.bootstrap(n_bootstrap=999)
+   cs = CallawaySantAnna(n_bootstrap=999)
+   results = cs.fit(data, outcome='y', unit='unit_id',
+                    time='period', first_treat='first_treat',
+                    aggregate='event_study')
 
-   # Aggregate to get more precise estimates
-   event_study = results.aggregate('event_time')
-   overall_att = results.att  # Aggregated ATT
+   # Access aggregated results
+   print(results.overall_att)  # Overall ATT
+   print(results.event_study_effects)  # Event study effects
 
 Visualization Issues
 --------------------
@@ -232,9 +234,11 @@ Visualization Issues
    # Specify reference period explicitly
    plot_event_study(results, reference_period=-1)
 
-   # For CallawaySantAnna, aggregate first
-   event_study = results.aggregate('event_time')
-   plot_event_study(event_study)
+   # For CallawaySantAnna, fit with aggregate='event_study'
+   results = cs.fit(data, outcome='y', unit='unit_id',
+                    time='period', first_treat='first_treat',
+                    aggregate='event_study')
+   plot_event_study(results)
 
 "Plot doesn't show in Jupyter"
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -510,15 +514,15 @@ pre-treatment outcomes exist to construct counterfactuals.
 
 .. code-block:: python
 
-   # Identify always-treated units
-   always_treated = data.groupby('unit_id').apply(
-       lambda g: (g['period'] >= g['first_treat']).all()
-   )
-   print(f"Always-treated units: {always_treated.sum()}")
+   # Identify always-treated units (treated at or before first observed period)
+   # Exclude never-treated (first_treat == 0) which are the control group
+   unit_ft = data.groupby('unit_id')['first_treat'].first()
+   min_period = data['period'].min()
+   always_treated = unit_ft[(unit_ft > 0) & (unit_ft <= min_period)]
+   print(f"Always-treated units: {len(always_treated)}")
 
-   # Drop always-treated units
-   keep_units = always_treated[~always_treated].index
-   data = data[data['unit_id'].isin(keep_units)]
+   # Drop always-treated units (keep never-treated controls)
+   data = data[~data['unit_id'].isin(always_treated.index)]
 
 "Horizons not identified without never-treated units"
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

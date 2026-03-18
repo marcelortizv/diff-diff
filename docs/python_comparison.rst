@@ -408,7 +408,8 @@ Staggered DiD (Callaway-Sant'Anna)
        unit='unit',
        time='time',
        first_treat='first_treat',
-       covariates=['x1', 'x2']
+       covariates=['x1', 'x2'],
+       aggregate='event_study'
    )
    event_study = results.event_study_effects
 

@@ -114,7 +114,9 @@ staggered DiD. Here's how to translate common operations:
 
 .. code-block:: python
 
-   # Python
+   # Python (unlike R's aggte(), aggregation is requested at fit time)
+   results = cs.fit(data, outcome='Y', time='period', unit='id',
+                    first_treat='G', aggregate='all')
    overall_att = results.overall_att  # Simple aggregation
    event_study = results.event_study_effects  # Dynamic
    by_group = results.group_effects  # By cohort
@@ -191,14 +193,20 @@ The synthdid package implements Arkhangelsky et al. (2021):
    # Python
    from diff_diff import SyntheticDiD
 
+   # SyntheticDiD requires a time-invariant ever-treated indicator
+   data['ever_treated'] = data.groupby('unit')['treatment'].transform('max')
+
+   # Derive post-treatment periods from treatment timing
+   post_periods = sorted(data.loc[data['treatment'] == 1, 'time'].unique())
+
    sdid = SyntheticDiD()
    results = sdid.fit(
        data,
        outcome='Y',
        unit='unit',
        time='time',
-       treatment='treatment',
-       post_periods=[T0, T0+1, T0+2]
+       treatment='ever_treated',
+       post_periods=post_periods
    )
 
 Key Differences

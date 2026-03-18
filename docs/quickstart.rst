@@ -131,7 +131,7 @@ Examine treatment effects over time:
        outcome='outcome',
        treatment='treated',
        time='period',
-       post_periods=[5, 6, 7],
+       post_periods=[5, 6, 7, 8, 9],
        reference_period=4
    )
 

@@ -161,7 +161,7 @@ def _build_namespace() -> dict:
     # Synthetic datasets that doc snippets commonly reference
     rng = np.random.default_rng(42)
     staggered = diff_diff.generate_staggered_data(
-        n_units=60, n_periods=8, seed=42
+        n_units=60, n_periods=10, seed=42
     )
     # Add alias columns that doc snippets expect
     # Use a simple time split (not unit-specific) so basic 2x2 DID works
@@ -354,9 +354,10 @@ def test_doc_snippet(test_id: str, code: str, skip_reason: Optional[str]):
         # context block (e.g. ``results`` from an earlier fit).  This is
         # expected for isolated execution — not an API mismatch.
         pass
-    except ModuleNotFoundError:
-        # Comparison pages import third-party packages (pyfixest,
-        # linearmodels, differences) that are not installed.
+    except ImportError:
+        # ImportError covers both ModuleNotFoundError (comparison pages
+        # importing pyfixest, linearmodels, etc.) and optional-dependency
+        # guards (e.g. matplotlib required for plotting functions).
         pass
     except Exception as exc:
         pytest.fail(

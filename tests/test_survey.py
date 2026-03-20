@@ -447,10 +447,11 @@ class TestConsistencyInvariance:
         np.testing.assert_allclose(ratio, 1.0, atol=0.3)
 
     def test_no_strata_degeneracy(self):
-        """No strata + multiple PSUs gives cluster-robust SEs."""
+        """No strata + multiple PSUs: survey vcov matches hand-computed cluster-robust sandwich."""
         np.random.seed(80)
         n = 100
-        psu = np.repeat(np.arange(20), 5)
+        n_psu = 20
+        psu = np.repeat(np.arange(n_psu), 5)
         X = np.column_stack([np.ones(n), np.random.randn(n)])
         y = 1.0 + X[:, 1] + np.random.randn(n) * 0.5
         weights = np.ones(n)
@@ -464,23 +465,63 @@ class TestConsistencyInvariance:
             psu=psu,
             fpc=None,
             n_strata=0,
-            n_psu=20,
+            n_psu=n_psu,
             lonely_psu="remove",
         )
-        tsl_vcov = compute_survey_vcov(X, resid, resolved)
+        survey_vcov = compute_survey_vcov(X, resid, resolved)
 
-        # Should produce valid, finite SEs
-        tsl_se = np.sqrt(np.diag(tsl_vcov))
-        assert np.all(tsl_se > 0)
-        assert np.all(np.isfinite(tsl_se))
+        # Hand-compute cluster-robust sandwich at PSU level with weights
+        # Bread: (X'WX)^{-1}
+        XtWX = X.T @ (X * weights[:, np.newaxis])
+        XtWX_inv = np.linalg.inv(XtWX)
+        # Weighted scores: w_i * X_i * e_i
+        scores = X * (weights * resid)[:, np.newaxis]
+        # Aggregate to PSU level
+        psu_scores = np.zeros((n_psu, X.shape[1]))
+        for g in range(n_psu):
+            psu_scores[g] = scores[psu == g].sum(axis=0)
+        # Center and compute meat with HC1-like adjustment
+        psu_mean = psu_scores.mean(axis=0, keepdims=True)
+        centered = psu_scores - psu_mean
+        adjustment = n_psu / (n_psu - 1)
+        meat = adjustment * (centered.T @ centered)
+        oracle_vcov = XtWX_inv @ meat @ XtWX_inv
 
-        # Compare with cluster-robust from solve_ols
-        _, _, cr_vcov = solve_ols(X, y, weights=weights, weight_type="pweight", cluster_ids=psu)
-        cr_se = np.sqrt(np.diag(cr_vcov))
+        np.testing.assert_allclose(survey_vcov, oracle_vcov, atol=1e-12)
 
-        # Should be in the same ballpark (both are cluster-level)
-        ratio = tsl_se / cr_se
-        assert np.all(ratio > 0.2) and np.all(ratio < 5.0)
+    def test_weights_only_oracle(self):
+        """Weights-only design: survey vcov matches hand-computed weighted HC1."""
+        np.random.seed(81)
+        n = 60
+        raw_weights = np.random.uniform(0.5, 3.0, n)
+        weights = raw_weights * (n / np.sum(raw_weights))
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = 2.0 + X[:, 1] * 0.5 + np.random.randn(n) * 0.3
+
+        coef, resid, _ = solve_ols(X, y, weights=weights, weight_type="pweight")
+
+        resolved = ResolvedSurveyDesign(
+            weights=weights,
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
+        )
+        survey_vcov = compute_survey_vcov(X, resid, resolved)
+
+        # Hand-compute weighted HC1: (X'WX)^{-1} * (sum w_i^2 X_i X_i' e_i^2) * n/(n-k) * (X'WX)^{-1}
+        k = X.shape[1]
+        XtWX = X.T @ (X * weights[:, np.newaxis])
+        XtWX_inv = np.linalg.inv(XtWX)
+        scores = X * (weights * resid)[:, np.newaxis]
+        meat = scores.T @ scores
+        meat *= n / (n - k)
+        oracle_vcov = XtWX_inv @ meat @ XtWX_inv
+
+        np.testing.assert_allclose(survey_vcov, oracle_vcov, atol=1e-12)
 
     def test_fweight_expansion_equivalence(self):
         """fweight=k gives same coefficients as duplicating each row k times."""
@@ -778,6 +819,23 @@ class TestIntegration:
         )
         sd = SurveyDesign(weights="w", strata="s", psu="psu", fpc="fpc")
         with pytest.raises(ValueError, match="FPC"):
+            sd.resolve(df)
+
+    def test_unstratified_fpc_must_be_constant(self):
+        """Row-varying FPC without strata raises ValueError."""
+        n = 20
+        psu = np.repeat(np.arange(4), 5)
+        df = pd.DataFrame(
+            {
+                "y": np.ones(n),
+                "w": np.ones(n),
+                "psu": psu,
+                # FPC varies across rows (some 100, some 200)
+                "fpc": np.where(psu < 2, 100.0, 200.0),
+            }
+        )
+        sd = SurveyDesign(weights="w", psu="psu", fpc="fpc")
+        with pytest.raises(ValueError, match="constant"):
             sd.resolve(df)
 
     def test_survey_design_type_error(self, survey_2x2_data):

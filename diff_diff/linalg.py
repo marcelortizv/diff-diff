@@ -1515,7 +1515,7 @@ class LinearRegression:
             from diff_diff.survey import ResolvedSurveyDesign
 
             if isinstance(self.survey_design, ResolvedSurveyDesign):
-                _use_survey_vcov = self.survey_design.needs_tsl_vcov
+                _use_survey_vcov = self.survey_design.needs_survey_vcov
 
         if self.robust or effective_cluster_ids is not None:
             # Use solve_ols with robust/cluster SEs

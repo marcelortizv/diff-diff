@@ -1036,7 +1036,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
         )
 
         # Determine if survey vcov should be used
-        _use_survey_vcov = resolved_survey is not None and resolved_survey.needs_tsl_vcov
+        _use_survey_vcov = resolved_survey is not None and resolved_survey.needs_survey_vcov
 
         # Note: Wild bootstrap for multi-period effects is complex (multiple coefficients)
         # For now, we use analytical inference even if inference="wild_bootstrap"
@@ -1067,7 +1067,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
 
         # For non-robust, non-clustered case, we need homoskedastic vcov
         # solve_ols returns HC1 by default, so compute homoskedastic if needed
-        if not self.robust and self.cluster is None:
+        if not self.robust and self.cluster is None and survey_weights is None:
             n = len(y)
             mse = np.sum(residuals**2) / (n - k_effective)
             # Use solve() instead of inv() for numerical stability

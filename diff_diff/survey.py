@@ -195,7 +195,12 @@ class SurveyDesign:
                                 f"({n_h}) in stratum {h}. FPC must be >= n_obs."
                             )
             elif psu_arr is not None:
-                # No strata: single stratum — FPC should be >= n_psu
+                # No strata: require FPC is a single constant value
+                if len(np.unique(fpc_arr)) > 1:
+                    raise ValueError(
+                        "FPC values must be constant when no strata are specified. "
+                        f"Found {len(np.unique(fpc_arr))} distinct values."
+                    )
                 if fpc_arr[0] < n_psu:
                     raise ValueError(
                         f"FPC ({fpc_arr[0]}) is less than the number of PSUs "
@@ -260,9 +265,9 @@ class ResolvedSurveyDesign:
         return None
 
     @property
-    def needs_tsl_vcov(self) -> bool:
-        """Whether TSL variance (not standard sandwich) is needed."""
-        return self.strata is not None or self.fpc is not None
+    def needs_survey_vcov(self) -> bool:
+        """Whether survey vcov (not generic sandwich) should be used."""
+        return True  # Any resolved survey design uses the survey vcov path
 
 
 @dataclass

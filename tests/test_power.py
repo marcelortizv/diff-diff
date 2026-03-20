@@ -2017,3 +2017,77 @@ class TestStaggeredSingleCohort:
                 progress=False,
                 data_generator_kwargs={"cohort_periods": [2]},
             )
+
+
+class TestSDIDPlaceboCustomDGP:
+    """Verify SyntheticDiD placebo feasibility check on custom-DGP path."""
+
+    @staticmethod
+    def _factor_dgp_wrapper(
+        n_units=100,
+        n_periods=4,
+        treatment_effect=5.0,
+        treatment_fraction=0.5,
+        treatment_period=2,
+        noise_sd=1.0,
+        seed=None,
+        **kwargs,
+    ):
+        from diff_diff.prep_dgp import generate_factor_data
+
+        n_treated = max(1, int(n_units * treatment_fraction))
+        n_pre = treatment_period
+        n_post = n_periods - treatment_period
+        return generate_factor_data(
+            n_units=n_units,
+            n_treated=n_treated,
+            n_pre=n_pre,
+            n_post=n_post,
+            treatment_effect=treatment_effect,
+            noise_sd=noise_sd,
+            seed=seed,
+        )
+
+    def test_sdid_placebo_custom_dgp_power_raises(self):
+        """simulate_power raises ValueError for infeasible placebo design."""
+        with pytest.raises(ValueError, match="placebo"):
+            simulate_power(
+                SyntheticDiD(),
+                data_generator=self._factor_dgp_wrapper,
+                n_units=100,
+                n_periods=4,
+                treatment_fraction=0.6,
+                treatment_period=2,
+                n_simulations=2,
+                seed=42,
+                progress=False,
+            )
+
+    def test_sdid_placebo_custom_dgp_mde_raises(self):
+        """simulate_mde raises ValueError for infeasible placebo design."""
+        with pytest.raises(ValueError, match="placebo"):
+            simulate_mde(
+                SyntheticDiD(),
+                data_generator=self._factor_dgp_wrapper,
+                n_units=100,
+                n_periods=4,
+                treatment_fraction=0.6,
+                treatment_period=2,
+                n_simulations=2,
+                seed=42,
+                progress=False,
+            )
+
+    def test_sdid_placebo_custom_dgp_sample_size_raises(self):
+        """simulate_sample_size raises ValueError for infeasible placebo design."""
+        with pytest.raises(ValueError, match="placebo"):
+            simulate_sample_size(
+                SyntheticDiD(),
+                data_generator=self._factor_dgp_wrapper,
+                n_periods=4,
+                treatment_fraction=0.6,
+                treatment_period=2,
+                n_simulations=2,
+                seed=42,
+                progress=False,
+            )

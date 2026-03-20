@@ -390,6 +390,41 @@ def _check_ddd_dgp_compat(
         )
 
 
+def _check_sdid_placebo_data(
+    data: pd.DataFrame,
+    estimator: Any,
+    est_kwargs: Dict[str, Any],
+) -> None:
+    """Check SyntheticDiD placebo feasibility on realized data.
+
+    This catches infeasible designs on the custom-DGP path where the
+    pre-generation check (which uses ``n_units * treatment_fraction``)
+    cannot run because treatment allocation is determined by the DGP.
+    """
+    vm = getattr(estimator, "variance_method", "placebo")
+    if vm != "placebo":
+        return
+
+    treat_col = est_kwargs.get("treatment", "treat")
+    unit_col = est_kwargs.get("unit", "unit")
+
+    if treat_col not in data.columns or unit_col not in data.columns:
+        return  # fit will fail with a more specific error
+
+    unit_treat = data.groupby(unit_col)[treat_col].first()
+    n_treated = int(unit_treat.sum())
+    n_control = len(unit_treat) - n_treated
+
+    if n_control <= n_treated:
+        raise ValueError(
+            f"SyntheticDiD placebo variance requires more control than "
+            f"treated units, but the generated data has n_control={n_control}, "
+            f"n_treated={n_treated}. Either adjust your data_generator so that "
+            f"n_control > n_treated, or use "
+            f"SyntheticDiD(variance_method='bootstrap')."
+        )
+
+
 # -- Registry construction (deferred to avoid import-time cost) ---------------
 
 _ESTIMATOR_REGISTRY: Optional[Dict[str, _EstimatorProfile]] = None
@@ -1626,6 +1661,10 @@ def simulate_power(
                 dgp_kwargs.update(data_gen_kwargs)
                 dgp_kwargs.pop("seed", None)
                 data = profile.default_dgp(seed=sim_seed, **dgp_kwargs)
+
+            # Check SDID placebo feasibility on realized data (custom DGP path)
+            if effect_idx == 0 and sim == 0 and estimator_name == "SyntheticDiD":
+                _check_sdid_placebo_data(data, estimator, est_kwargs)
 
             try:
                 # --- Fit estimator ---

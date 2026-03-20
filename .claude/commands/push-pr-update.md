@@ -123,6 +123,7 @@ When the working tree is clean but commits are ahead, check for methodology issu
 2. If methodology files are present:
    1. Read `/pre-merge-check` Section 2.1 for pattern check definitions.
    2. Run **all four pattern checks (A through D)** on those methodology files.
+      **Check C override**: The canonical Check C uses `git diff HEAD` which is empty on a clean working tree. For already-committed changes, substitute `git diff <comparison-ref>..HEAD -- <changed-methodology-files>` to extract new `self.X` assignments from the committed diff range.
    3. For any matches, display the file:line and flag message from that section.
 
    If warnings are found, display them as warnings (non-blocking) since changes are already committed.

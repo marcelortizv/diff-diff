@@ -93,15 +93,7 @@ When the working tree is clean but commits are ahead, scan for secrets in the co
 
 1. **Get diff range**: Use `<comparison-ref>..HEAD` (from Section 2.4 — either `@{u}`, `<default-branch>`, or `origin/<default-branch>`)
 
-2. **Run pattern check** (file names only, no content leaked):
-   ```bash
-   secret_files=$(git diff <comparison-ref>..HEAD -G "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Ss][Ee][Cc][Rr][Ee][Tt][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd][[:space:]]*[=:]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[a-zA-Z0-9_-]+|[Tt][Oo][Kk][Ee][Nn][[:space:]]*[=:])" --name-only 2>/dev/null || true)
-   ```
-
-3. **Check for sensitive file names**:
-   ```bash
-   sensitive_files=$(git diff --name-only <comparison-ref>..HEAD | grep -iE "(\.env|credentials|secret|\.pem|\.key|\.p12|\.pfx|id_rsa|id_ed25519)$" || true)
-   ```
+2. **Run pattern check** using the content pattern and sensitive filename pattern from `/pre-merge-check` Section 2.6. Apply the content pattern to `git diff <comparison-ref>..HEAD` with `--name-only`. Apply the filename pattern to `git diff --name-only <comparison-ref>..HEAD`. Use `|| true` on both.
 
 4. **If patterns detected**, warn with AskUserQuestion:
    ```
@@ -126,9 +118,10 @@ When the working tree is clean but commits are ahead, scan for secrets in the co
    git diff --cached --name-only | grep "^diff_diff/.*\.py$" | grep -v "__init__"
    ```
 
-   If methodology files are present, run Checks A and B from `/pre-merge-check` Section 2.1 on those files:
-   - **Check A**: `grep -n "t_stat[[:space:]]*=[[:space:]]*[^#]*/ *se" <methodology-files> | grep -v "safe_inference"`
-   - **Check B**: `grep -En "if.*(se|SE).*>.*0.*else[[:space:]]+(0\.0|0)" <methodology-files>`
+   If methodology files are present:
+   1. Read `/pre-merge-check` Section 2.1 for pattern check definitions.
+   2. Run **all four pattern checks (A through D)** on the staged methodology files.
+   3. For any matches, display the file:line and flag message from that section.
 
    If warnings are found:
    ```
@@ -141,6 +134,16 @@ When the working tree is clean but commits are ahead, scan for secrets in the co
    ```
    Use AskUserQuestion. If user chooses to fix, abort the commit flow.
 
+   **REGISTRY.md check** (if methodology files are staged):
+   Check whether `docs/methodology/REGISTRY.md` is also in the staged file set.
+   If methodology files changed but REGISTRY.md was NOT staged, warn:
+   "Methodology files changed but `docs/methodology/REGISTRY.md` was not updated.
+   If your changes deviate from reference implementations, document them using a
+   reviewer-recognized label (`**Note:**`, `**Deviation from R:**`, or
+   `**Note (deviation from R):**`) — undocumented deviations are flagged as P1
+   by the AI reviewer."
+   This is a WARNING, not a blocker.
+
 3. **Capture file count for reporting**:
    ```bash
    git diff --cached --name-only | wc -l
@@ -148,15 +151,7 @@ When the working tree is clean but commits are ahead, scan for secrets in the co
    Store as `<files-changed-count>` for use in final report.
 
 4. **Secret scanning check** (same as submit-pr):
-   - **Run deterministic pattern check** (file names only, no content leaked):
-     ```bash
-     secret_files=$(git diff --cached -G "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Ss][Ee][Cc][Rr][Ee][Tt][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd][[:space:]]*[=:]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[a-zA-Z0-9_-]+|[Tt][Oo][Kk][Ee][Nn][[:space:]]*[=:])" --name-only 2>/dev/null || true)
-     ```
-     Note: Uses `-G` to search diff content but `--name-only` to output only file names, preventing secret values from appearing in logs. The `|| true` prevents exit status 1 when patterns match from aborting strict runners.
-   - **Check for sensitive file names**:
-     ```bash
-     sensitive_files=$(git diff --cached --name-only | grep -iE "(\.env|credentials|secret|\.pem|\.key|\.p12|\.pfx|id_rsa|id_ed25519)$" || true)
-     ```
+   - **Run deterministic pattern check** using the content pattern and sensitive filename pattern from `/pre-merge-check` Section 2.6. Apply the content pattern to `git diff --cached` with `--name-only`. Apply the filename pattern to `git diff --cached --name-only`. Use `|| true` on both.
    - **If patterns detected** (i.e., `secret_files` or `sensitive_files` is non-empty), **unstage and warn**:
      ```bash
      git reset HEAD

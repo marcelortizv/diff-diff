@@ -163,7 +163,7 @@ Before calling `ExitPlanMode`, offer the user an independent plan review via `As
 **If review requested**: Spawn review agent (Task tool, `subagent_type: "general-purpose"`)
 to read `.claude/commands/review-plan.md` and follow Steps 2-5. Display output in conversation.
 Save to `~/.claude/plans/<plan-basename>.review.md` with YAML frontmatter (plan path,
-timestamp, verdict, issue counts). Update sentinel. Collect feedback and revise if needed.
+timestamp, assessment, issue counts). Update sentinel. Collect feedback and revise if needed.
 Touch review file after revision to avoid staleness check failure.
 
 **If skipped**: Write a minimal review marker to `~/.claude/plans/<plan-basename>.review.md`:
@@ -171,7 +171,7 @@ Touch review file after revision to avoid staleness check failure.
 ---
 plan: <plan-file-path>
 reviewed_at: <ISO 8601 timestamp>
-verdict: "Skipped"
+assessment: "Skipped"
 critical_count: 0
 medium_count: 0
 low_count: 0

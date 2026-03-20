@@ -153,6 +153,7 @@ class DifferenceInDifferences:
         covariates: Optional[List[str]] = None,
         fixed_effects: Optional[List[str]] = None,
         absorb: Optional[List[str]] = None,
+        survey_design=None,
     ) -> DiDResults:
         """
         Fit the Difference-in-Differences model.
@@ -228,6 +229,13 @@ class DifferenceInDifferences:
                 if ab not in data.columns:
                     raise ValueError(f"Absorb column '{ab}' not found in data")
 
+        # Resolve survey design if provided
+        from diff_diff.survey import _resolve_effective_cluster, _resolve_survey_for_fit
+
+        resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, data, self.inference)
+        )
+
         # Handle absorbed fixed effects (within-transformation)
         working_data = data.copy()
         absorbed_vars = []
@@ -241,7 +249,11 @@ class DifferenceInDifferences:
             vars_to_demean = [outcome] + (covariates or [])
             for ab_var in absorb:
                 working_data, n_fe = demean_by_group(
-                    working_data, vars_to_demean, ab_var, inplace=True
+                    working_data,
+                    vars_to_demean,
+                    ab_var,
+                    inplace=True,
+                    weights=survey_weights,
                 )
                 n_absorbed_effects += n_fe
                 absorbed_vars.append(ab_var)
@@ -285,12 +297,21 @@ class DifferenceInDifferences:
         # Always use LinearRegression for initial fit (unified code path)
         # For wild bootstrap, we don't need cluster SEs from the initial fit
         cluster_ids = data[self.cluster].values if self.cluster is not None else None
+
+        # When survey PSU is present, it overrides cluster for variance estimation
+        effective_cluster_ids = _resolve_effective_cluster(
+            resolved_survey, cluster_ids, self.cluster
+        )
+
         reg = LinearRegression(
             include_intercept=False,  # Intercept already in X
             robust=self.robust,
-            cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
+            cluster_ids=effective_cluster_ids if self.inference != "wild_bootstrap" else None,
             alpha=self.alpha,
             rank_deficient_action=self.rank_deficient_action,
+            weights=survey_weights,
+            weight_type=survey_weight_type,
+            survey_design=resolved_survey,
         ).fit(X, y, df_adjustment=n_absorbed_effects)
 
         coefficients = reg.coefficients_
@@ -351,6 +372,7 @@ class DifferenceInDifferences:
             inference_method=inference_method,
             n_bootstrap=n_bootstrap_used,
             n_clusters=n_clusters_used,
+            survey_metadata=survey_metadata,
         )
 
         self._coefficients = coefficients
@@ -730,6 +752,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
         absorb: Optional[List[str]] = None,
         reference_period: Any = None,
         unit: Optional[str] = None,
+        survey_design=None,
     ) -> MultiPeriodDiDResults:
         """
         Fit the Multi-Period Difference-in-Differences model.
@@ -926,6 +949,13 @@ class MultiPeriodDiD(DifferenceInDifferences):
                 if ab not in data.columns:
                     raise ValueError(f"Absorb column '{ab}' not found in data")
 
+        # Resolve survey design if provided
+        from diff_diff.survey import _resolve_effective_cluster, _resolve_survey_for_fit
+
+        resolved_survey, survey_weights, survey_weight_type, _ = _resolve_survey_for_fit(
+            survey_design, data, self.inference
+        )
+
         # Handle absorbed fixed effects (within-transformation)
         working_data = data.copy()
         n_absorbed_effects = 0
@@ -934,7 +964,11 @@ class MultiPeriodDiD(DifferenceInDifferences):
             vars_to_demean = [outcome] + (covariates or [])
             for ab_var in absorb:
                 working_data, n_fe = demean_by_group(
-                    working_data, vars_to_demean, ab_var, inplace=True
+                    working_data,
+                    vars_to_demean,
+                    ab_var,
+                    inplace=True,
+                    weights=survey_weights,
                 )
                 n_absorbed_effects += n_fe
 
@@ -988,22 +1022,40 @@ class MultiPeriodDiD(DifferenceInDifferences):
         # This handles rank-deficient matrices by returning NaN for dropped columns
         cluster_ids = data[self.cluster].values if self.cluster is not None else None
 
+        # When survey PSU is present, it overrides cluster for variance estimation
+        effective_cluster_ids = _resolve_effective_cluster(
+            resolved_survey, cluster_ids, self.cluster
+        )
+
+        # Determine if survey vcov should be used
+        _use_survey_vcov = resolved_survey is not None and resolved_survey.needs_tsl_vcov
+
         # Note: Wild bootstrap for multi-period effects is complex (multiple coefficients)
         # For now, we use analytical inference even if inference="wild_bootstrap"
         coefficients, residuals, fitted, vcov = solve_ols(
             X,
             y,
             return_fitted=True,
-            return_vcov=True,
-            cluster_ids=cluster_ids,
+            return_vcov=not _use_survey_vcov,
+            cluster_ids=effective_cluster_ids,
             column_names=var_names,
             rank_deficient_action=self.rank_deficient_action,
+            weights=survey_weights,
+            weight_type=survey_weight_type,
         )
+
+        # Compute survey vcov if applicable
+        if _use_survey_vcov:
+            from diff_diff.survey import compute_survey_vcov
+
+            vcov = compute_survey_vcov(X, residuals, resolved_survey)
         r_squared = compute_r_squared(y, residuals)
 
-        # Degrees of freedom using effective rank (non-NaN coefficients)
+        # Degrees of freedom: survey df overrides standard df
         k_effective = int(np.sum(~np.isnan(coefficients)))
         df = len(y) - k_effective - n_absorbed_effects
+        if resolved_survey is not None and resolved_survey.df_survey is not None:
+            df = resolved_survey.df_survey
 
         # For non-robust, non-clustered case, we need homoskedastic vcov
         # solve_ols returns HC1 by default, so compute homoskedastic if needed

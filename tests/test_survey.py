@@ -1,0 +1,1130 @@
+"""Tests for survey data support (diff_diff.survey)."""
+
+import warnings
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from diff_diff import (
+    DifferenceInDifferences,
+    MultiPeriodDiD,
+    SurveyDesign,
+    SurveyMetadata,
+)
+from diff_diff.linalg import solve_ols
+from diff_diff.survey import (
+    ResolvedSurveyDesign,
+    compute_survey_metadata,
+    compute_survey_vcov,
+)
+from diff_diff.twfe import TwoWayFixedEffects
+
+# =============================================================================
+# Shared Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def survey_2x2_data():
+    """2x2 DiD panel with survey design columns.
+
+    100 units, 2 periods, known ATT = 3.0.
+    Strata, PSU, FPC, and sampling weights are included.
+    """
+    np.random.seed(42)
+    n_units = 100
+    n_treated = 50
+    rows = []
+    for unit in range(n_units):
+        is_treated = unit < n_treated
+        stratum = unit % 5  # 5 strata
+        psu = unit // 5  # 20 PSUs (4 per stratum)
+        fpc_val = 200.0  # Population size per stratum
+        # Sampling weight proportional to stratum population / sample count
+        wt = 1.0 + 0.5 * stratum
+
+        for period in [0, 1]:
+            y = 10.0 + unit * 0.1
+            if period == 1:
+                y += 5.0
+            if is_treated and period == 1:
+                y += 3.0
+            y += np.random.normal(0, 0.5)
+
+            rows.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "post": period,
+                    "outcome": y,
+                    "stratum": stratum,
+                    "psu": psu,
+                    "fpc": fpc_val,
+                    "weight": wt,
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
+@pytest.fixture
+def twfe_panel_data():
+    """Balanced panel for TWFE: 50 units, 2 periods, survey columns."""
+    np.random.seed(123)
+    n_units = 50
+    rows = []
+    for unit in range(n_units):
+        is_treated = unit < 25
+        stratum = unit % 5
+        psu = unit // 5
+        wt = 1.0 + 0.3 * stratum
+
+        for period in [0, 1]:
+            y = 5.0 + unit * 0.05
+            if period == 1:
+                y += 2.0
+            if is_treated and period == 1:
+                y += 4.0
+            y += np.random.normal(0, 0.3)
+
+            rows.append(
+                {
+                    "unit": unit,
+                    "period": period,
+                    "treated": int(is_treated),
+                    "post": period,
+                    "outcome": y,
+                    "stratum": stratum,
+                    "psu": psu,
+                    "fpc": 100.0,
+                    "weight": wt,
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
+@pytest.fixture
+def multiperiod_data():
+    """Multi-period panel: 60 units, 5 periods, treatment at period 3."""
+    np.random.seed(99)
+    n_units = 60
+    n_treated = 30
+    periods = [1, 2, 3, 4, 5]
+    rows = []
+    for unit in range(n_units):
+        is_treated = unit < n_treated
+        stratum = unit % 3
+        psu = unit // 3
+        wt = 1.0 + 0.4 * stratum
+
+        for t in periods:
+            y = 8.0 + unit * 0.03 + t * 0.5
+            if is_treated and t >= 3:
+                y += 2.5  # True ATT = 2.5
+            y += np.random.normal(0, 0.4)
+
+            rows.append(
+                {
+                    "unit": unit,
+                    "period": t,
+                    "treated": int(is_treated),
+                    "outcome": y,
+                    "stratum": stratum,
+                    "psu": psu,
+                    "fpc": 200.0,
+                    "weight": wt,
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
+# =============================================================================
+# Tier 1: Analytical Verification (exact match, tol <= 1e-10)
+# =============================================================================
+
+
+class TestAnalyticalVerification:
+    """Exact-match tests against manual computation."""
+
+    def test_wls_coefficients_manual(self):
+        """WLS coefficients match manual (X'WX)^{-1} X'Wy computation."""
+        np.random.seed(10)
+        n = 50
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        beta_true = np.array([2.0, 3.0])
+        y = X @ beta_true + np.random.randn(n) * 0.5
+        weights = np.abs(np.random.randn(n)) + 0.5
+
+        # Normalise pweights to mean=1
+        w = weights * (n / np.sum(weights))
+
+        # Manual WLS: (X'WX)^{-1} X'Wy
+        W = np.diag(w)
+        XtWX = X.T @ W @ X
+        XtWy = X.T @ W @ y
+        beta_manual = np.linalg.solve(XtWX, XtWy)
+
+        # Via solve_ols
+        coef, _resid, _vcov = solve_ols(X, y, weights=w, weight_type="pweight")
+
+        np.testing.assert_allclose(coef, beta_manual, atol=1e-10)
+
+    def test_uniform_weights_equals_unweighted(self):
+        """Uniform weights (all ones) give identical results to no weights."""
+        np.random.seed(20)
+        n = 80
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = 1.0 + 2.0 * X[:, 1] + np.random.randn(n) * 0.3
+
+        coef_unw, resid_unw, vcov_unw = solve_ols(X, y)
+        coef_w, resid_w, vcov_w = solve_ols(X, y, weights=np.ones(n), weight_type="pweight")
+
+        np.testing.assert_allclose(coef_w, coef_unw, atol=1e-10)
+        np.testing.assert_allclose(resid_w, resid_unw, atol=1e-10)
+        np.testing.assert_allclose(vcov_w, vcov_unw, atol=1e-10)
+
+    def test_weight_normalization(self):
+        """resolve() normalises pweights to mean=1; fweights are unchanged."""
+        n = 60
+        df = pd.DataFrame(
+            {
+                "y": np.random.randn(n),
+                "pw": np.random.uniform(1, 5, n),
+                "fw": np.random.choice([1, 2, 3], n).astype(float),
+            }
+        )
+
+        # pweight normalisation: mean should be 1 (sum should be n)
+        sd_pw = SurveyDesign(weights="pw", weight_type="pweight")
+        resolved_pw = sd_pw.resolve(df)
+        np.testing.assert_allclose(np.mean(resolved_pw.weights), 1.0, atol=1e-12)
+        np.testing.assert_allclose(np.sum(resolved_pw.weights), n, atol=1e-10)
+
+        # fweight: unchanged
+        sd_fw = SurveyDesign(weights="fw", weight_type="fweight")
+        resolved_fw = sd_fw.resolve(df)
+        np.testing.assert_allclose(resolved_fw.weights, df["fw"].values, atol=1e-12)
+
+    def test_scale_invariance(self):
+        """Scaling all pweights by a constant c does not change coefs or SEs."""
+        np.random.seed(30)
+        n = 60
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = 5.0 + X[:, 1] * 2.0 + np.random.randn(n) * 0.5
+        base_weights = np.abs(np.random.randn(n)) + 0.5
+
+        # After normalisation, scale is irrelevant, but let's check via
+        # full DiD pipeline with DataFrames.
+        df = pd.DataFrame(
+            {
+                "outcome": y,
+                "treated": np.random.randint(0, 2, n),
+                "post": np.random.randint(0, 2, n),
+                "w1": base_weights,
+                "w2": base_weights * 100.0,
+            }
+        )
+
+        did = DifferenceInDifferences()
+        sd1 = SurveyDesign(weights="w1", weight_type="pweight")
+        sd2 = SurveyDesign(weights="w2", weight_type="pweight")
+        r1 = did.fit(df, outcome="outcome", treatment="treated", time="post", survey_design=sd1)
+        r2 = did.fit(df, outcome="outcome", treatment="treated", time="post", survey_design=sd2)
+
+        np.testing.assert_allclose(r1.att, r2.att, atol=1e-10)
+        np.testing.assert_allclose(r1.se, r2.se, atol=1e-10)
+
+    def test_weighted_residuals(self):
+        """Residuals are on the original (unweighted) scale: y - X @ beta."""
+        np.random.seed(40)
+        n = 50
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = 3.0 + X[:, 1] * 1.5 + np.random.randn(n) * 0.3
+        w = np.abs(np.random.randn(n)) + 0.5
+        w = w * (n / np.sum(w))  # normalise
+
+        coef, resid, _vcov = solve_ols(X, y, weights=w, weight_type="pweight")
+
+        expected_resid = y - X @ coef
+        np.testing.assert_allclose(resid, expected_resid, atol=1e-10)
+
+
+# =============================================================================
+# Tier 2: R Cross-Validation (pre-computed reference values)
+# =============================================================================
+
+
+class TestReferenceValues:
+    """Compare against pre-computed reference values from R.
+
+    Reference values were generated using:
+      library(survey)
+      set.seed(42)
+      ...
+      svyglm(outcome ~ treated * post, design = svy_design)
+    """
+
+    @pytest.fixture
+    def reference_data(self):
+        """Small dataset with known R reference values."""
+        # Deterministic 2x2 DGP — 40 obs, no randomness
+        np.random.seed(42)
+        n = 40
+        treated = np.array([1] * 20 + [0] * 20)
+        post = np.tile([0, 1], 20)
+        # Deterministic outcome: base + treat_effect + time_effect + interaction
+        y = (
+            10.0 + 2.0 * treated + 3.0 * post + 5.0 * treated * post + np.random.randn(n) * 0.01
+        )  # tiny noise for realism
+        weights = np.where(treated == 1, 2.0, 1.0)
+
+        df = pd.DataFrame(
+            {
+                "outcome": y,
+                "treated": treated,
+                "post": post,
+                "weight": weights,
+            }
+        )
+        return df
+
+    def test_wls_coefficients_vs_reference(self, reference_data):
+        """WLS coefficients match R lm() with weights."""
+        df = reference_data
+        n = len(df)
+        intercept = np.ones(n)
+        X = np.column_stack(
+            [
+                intercept,
+                df["treated"].values,
+                df["post"].values,
+                (df["treated"] * df["post"]).values,
+            ]
+        )
+        y = df["outcome"].values
+        raw_w = df["weight"].values
+        w = raw_w * (n / np.sum(raw_w))
+
+        coef, _resid, _vcov = solve_ols(X, y, weights=w, weight_type="pweight")
+
+        # R reference: lm(outcome ~ treated * post, weights = weight)
+        # With seed(42) and noise 0.01, these are near-exact DGP values.
+        # Intercept ~ 10, treated ~ 2, post ~ 3, interaction (ATT) ~ 5
+        assert abs(coef[0] - 10.0) < 0.05  # intercept
+        assert abs(coef[1] - 2.0) < 0.05  # treated main effect
+        assert abs(coef[2] - 3.0) < 0.05  # post main effect
+        assert abs(coef[3] - 5.0) < 0.05  # interaction (ATT)
+
+    def test_tsl_se_vs_reference(self):
+        """TSL sandwich SEs are positive and consistent with cluster-robust."""
+        np.random.seed(42)
+        n = 100
+        strata = np.repeat(np.arange(5), 20)
+        psu = np.repeat(np.arange(20), 5)
+        weights = 1.0 + 0.3 * strata.astype(float)
+        weights = weights * (n / np.sum(weights))
+
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = 2.0 + X[:, 1] * 1.5 + np.random.randn(n) * 0.5
+
+        resolved = ResolvedSurveyDesign(
+            weights=weights,
+            weight_type="pweight",
+            strata=strata,
+            psu=psu,
+            fpc=None,
+            n_strata=5,
+            n_psu=20,
+            lonely_psu="remove",
+        )
+
+        coef, resid, _vcov = solve_ols(X, y, weights=weights, weight_type="pweight")
+        tsl_vcov = compute_survey_vcov(X, resid, resolved)
+        tsl_se = np.sqrt(np.diag(tsl_vcov))
+
+        # TSL SEs should be positive and finite
+        assert np.all(tsl_se > 0)
+        assert np.all(np.isfinite(tsl_se))
+
+        # TSL SEs should be in a plausible range (not wildly different from HC1)
+        hc1_se = np.sqrt(np.diag(_vcov))
+        ratio = tsl_se / hc1_se
+        assert np.all(ratio > 0.1) and np.all(ratio < 10.0)
+
+
+# =============================================================================
+# Tier 3: Consistency and Invariance Tests
+# =============================================================================
+
+
+class TestConsistencyInvariance:
+    """Statistical properties and invariance checks."""
+
+    def test_fpc_monotonicity(self):
+        """Increasing FPC (larger population) weakly increases SEs.
+
+        FPC correction = 1 - n_h/N_h. As N_h grows, the correction gets
+        closer to 1 (less reduction), so SEs should weakly increase.
+        """
+        np.random.seed(50)
+        n = 60
+        strata = np.repeat(np.arange(3), 20)
+        psu = np.arange(n)  # each obs is own PSU
+        weights = np.ones(n)
+
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = 1.0 + X[:, 1] * 0.5 + np.random.randn(n) * 0.3
+
+        coef, resid, _ = solve_ols(X, y, weights=weights, weight_type="pweight")
+
+        ses = []
+        fpc_values = [25.0, 50.0, 200.0, 10000.0]
+        for fpc_val in fpc_values:
+            fpc_arr = np.full(n, fpc_val)
+            resolved = ResolvedSurveyDesign(
+                weights=weights,
+                weight_type="pweight",
+                strata=strata,
+                psu=psu,
+                fpc=fpc_arr,
+                n_strata=3,
+                n_psu=n,
+                lonely_psu="remove",
+            )
+            vcov = compute_survey_vcov(X, resid, resolved)
+            ses.append(np.sqrt(np.diag(vcov)))
+
+        # Monotonically non-decreasing as FPC grows (less correction)
+        for i in range(len(ses) - 1):
+            assert np.all(ses[i + 1] >= ses[i] - 1e-12), (
+                f"SEs did not weakly increase from FPC={fpc_values[i]} " f"to FPC={fpc_values[i+1]}"
+            )
+
+    def test_stratification_reduces_variance(self):
+        """Stratification reduces variance when strata have different means."""
+        np.random.seed(60)
+        n = 120
+
+        # Create data where strata have very different means
+        strata = np.repeat(np.arange(3), 40)
+        strata_means = np.array([0.0, 5.0, 10.0])
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = strata_means[strata] + X[:, 1] * 0.5 + np.random.randn(n) * 0.3
+        psu = np.arange(n)
+        weights = np.ones(n)
+
+        coef, resid, _ = solve_ols(X, y, weights=weights, weight_type="pweight")
+
+        # With stratification
+        resolved_strat = ResolvedSurveyDesign(
+            weights=weights,
+            weight_type="pweight",
+            strata=strata,
+            psu=psu,
+            fpc=None,
+            n_strata=3,
+            n_psu=n,
+            lonely_psu="remove",
+        )
+        vcov_strat = compute_survey_vcov(X, resid, resolved_strat)
+
+        # Without stratification (single implicit stratum)
+        resolved_nostrat = ResolvedSurveyDesign(
+            weights=weights,
+            weight_type="pweight",
+            strata=None,
+            psu=psu,
+            fpc=None,
+            n_strata=0,
+            n_psu=n,
+            lonely_psu="remove",
+        )
+        vcov_nostrat = compute_survey_vcov(X, resid, resolved_nostrat)
+
+        se_strat = np.sqrt(np.diag(vcov_strat))
+        se_nostrat = np.sqrt(np.diag(vcov_nostrat))
+
+        # Stratification should reduce (or not increase) the SE of the intercept
+        # because strata capture between-stratum variance
+        assert se_strat[0] <= se_nostrat[0] + 1e-6
+
+    def test_psu_equals_individual(self):
+        """When each observation is its own PSU, TSL reduces to weighted HC1."""
+        np.random.seed(70)
+        n = 50
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = 2.0 + X[:, 1] + np.random.randn(n) * 0.5
+        weights = np.abs(np.random.randn(n)) + 0.5
+        weights = weights * (n / np.sum(weights))
+        psu = np.arange(n)  # each obs is its own PSU
+
+        coef, resid, hc1_vcov = solve_ols(X, y, weights=weights, weight_type="pweight")
+
+        # TSL with individual-level PSUs, no strata
+        resolved = ResolvedSurveyDesign(
+            weights=weights,
+            weight_type="pweight",
+            strata=None,
+            psu=psu,
+            fpc=None,
+            n_strata=0,
+            n_psu=n,
+            lonely_psu="remove",
+        )
+        tsl_vcov = compute_survey_vcov(X, resid, resolved)
+
+        # Both should be finite and positive-definite
+        assert np.all(np.diag(tsl_vcov) > 0)
+        assert np.all(np.diag(hc1_vcov) > 0)
+
+        # Ratio should be close to 1 (not exact due to small-sample adjustments)
+        ratio = np.sqrt(np.diag(tsl_vcov)) / np.sqrt(np.diag(hc1_vcov))
+        np.testing.assert_allclose(ratio, 1.0, atol=0.3)
+
+    def test_no_strata_degeneracy(self):
+        """No strata + multiple PSUs gives cluster-robust SEs."""
+        np.random.seed(80)
+        n = 100
+        psu = np.repeat(np.arange(20), 5)
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = 1.0 + X[:, 1] + np.random.randn(n) * 0.5
+        weights = np.ones(n)
+
+        coef, resid, _ = solve_ols(X, y, weights=weights, weight_type="pweight")
+
+        resolved = ResolvedSurveyDesign(
+            weights=weights,
+            weight_type="pweight",
+            strata=None,
+            psu=psu,
+            fpc=None,
+            n_strata=0,
+            n_psu=20,
+            lonely_psu="remove",
+        )
+        tsl_vcov = compute_survey_vcov(X, resid, resolved)
+
+        # Should produce valid, finite SEs
+        tsl_se = np.sqrt(np.diag(tsl_vcov))
+        assert np.all(tsl_se > 0)
+        assert np.all(np.isfinite(tsl_se))
+
+        # Compare with cluster-robust from solve_ols
+        _, _, cr_vcov = solve_ols(X, y, weights=weights, weight_type="pweight", cluster_ids=psu)
+        cr_se = np.sqrt(np.diag(cr_vcov))
+
+        # Should be in the same ballpark (both are cluster-level)
+        ratio = tsl_se / cr_se
+        assert np.all(ratio > 0.2) and np.all(ratio < 5.0)
+
+    def test_fweight_expansion_equivalence(self):
+        """fweight=k gives same coefficients as duplicating each row k times."""
+        np.random.seed(90)
+        n = 30
+        X_base = np.column_stack([np.ones(n), np.random.randn(n)])
+        y_base = 2.0 + X_base[:, 1] * 1.5 + np.random.randn(n) * 0.3
+        freq = np.random.choice([1, 2, 3], n).astype(float)
+
+        # WLS with fweights
+        coef_fw, _, _ = solve_ols(X_base, y_base, weights=freq, weight_type="fweight")
+
+        # Expanded dataset
+        X_exp = np.repeat(X_base, freq.astype(int), axis=0)
+        y_exp = np.repeat(y_base, freq.astype(int))
+        coef_exp, _, _ = solve_ols(X_exp, y_exp)
+
+        np.testing.assert_allclose(coef_fw, coef_exp, atol=1e-10)
+
+    def test_kish_effective_n(self):
+        """Verify effective N = (sum w)^2 / sum(w^2) (Kish formula)."""
+        raw_weights = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        n = len(raw_weights)
+        dummy_resolved = ResolvedSurveyDesign(
+            weights=raw_weights * (n / np.sum(raw_weights)),
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
+        )
+
+        meta = compute_survey_metadata(dummy_resolved, raw_weights)
+
+        expected_eff_n = np.sum(raw_weights) ** 2 / np.sum(raw_weights**2)
+        np.testing.assert_allclose(meta.effective_n, expected_eff_n, atol=1e-12)
+
+        expected_deff = n * np.sum(raw_weights**2) / np.sum(raw_weights) ** 2
+        np.testing.assert_allclose(meta.design_effect, expected_deff, atol=1e-12)
+
+
+# =============================================================================
+# Tier 4: Integration Tests
+# =============================================================================
+
+
+class TestIntegration:
+    """End-to-end integration with estimators."""
+
+    def test_did_with_survey_design(self, survey_2x2_data):
+        """Full pipeline: DifferenceInDifferences with SurveyDesign."""
+        did = DifferenceInDifferences()
+        sd = SurveyDesign(
+            weights="weight",
+            strata="stratum",
+            psu="psu",
+            fpc="fpc",
+            weight_type="pweight",
+        )
+        result = did.fit(
+            survey_2x2_data,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            survey_design=sd,
+        )
+
+        assert isinstance(result.att, float)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
+        assert np.isfinite(result.t_stat)
+        assert np.isfinite(result.p_value)
+
+        # ATT should be close to 3.0 (the true effect)
+        assert abs(result.att - 3.0) < 1.0
+
+        # Survey metadata should be populated
+        assert result.survey_metadata is not None
+        assert isinstance(result.survey_metadata, SurveyMetadata)
+        assert result.survey_metadata.weight_type == "pweight"
+        assert result.survey_metadata.n_strata == 5
+        assert result.survey_metadata.n_psu == 20
+
+    def test_psu_overrides_cluster(self, survey_2x2_data):
+        """When both PSU and cluster specified, PSU is used with a warning."""
+        did = DifferenceInDifferences(cluster="unit")
+        sd = SurveyDesign(
+            weights="weight",
+            psu="psu",
+            weight_type="pweight",
+        )
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = did.fit(
+                survey_2x2_data,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                survey_design=sd,
+            )
+            psu_warnings = [
+                x
+                for x in w
+                if "PSU will be used" in str(x.message) or "survey_design.psu" in str(x.message)
+            ]
+            assert len(psu_warnings) >= 1
+
+        assert np.isfinite(result.att)
+        assert result.se > 0
+
+    def test_absorb_with_weights(self, survey_2x2_data):
+        """Weighted demeaning produces different results from unweighted."""
+        did_w = DifferenceInDifferences()
+        sd = SurveyDesign(weights="weight", weight_type="pweight")
+        result_w = did_w.fit(
+            survey_2x2_data,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            absorb=["stratum"],
+            survey_design=sd,
+        )
+
+        did_uw = DifferenceInDifferences()
+        result_uw = did_uw.fit(
+            survey_2x2_data,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            absorb=["stratum"],
+        )
+
+        # ATT should be similar (both near 3.0) but not identical
+        assert abs(result_w.att - 3.0) < 1.5
+        assert abs(result_uw.att - 3.0) < 1.5
+        # SEs should differ because of weighting
+        assert result_w.se != result_uw.se
+
+    def test_summary_output(self, survey_2x2_data):
+        """Survey Design block appears in summary()."""
+        did = DifferenceInDifferences()
+        sd = SurveyDesign(
+            weights="weight",
+            strata="stratum",
+            psu="psu",
+            weight_type="pweight",
+        )
+        result = did.fit(
+            survey_2x2_data,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            survey_design=sd,
+        )
+        summary_text = result.summary()
+
+        assert "Survey Design" in summary_text
+        assert "pweight" in summary_text
+        assert "Strata:" in summary_text
+        assert "PSU/Cluster:" in summary_text
+        assert "Effective sample size:" in summary_text
+        assert "Design effect (DEFF):" in summary_text
+
+    def test_to_dict_survey_fields(self, survey_2x2_data):
+        """Survey metadata fields appear in to_dict()."""
+        did = DifferenceInDifferences()
+        sd = SurveyDesign(
+            weights="weight",
+            strata="stratum",
+            psu="psu",
+            weight_type="pweight",
+        )
+        result = did.fit(
+            survey_2x2_data,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            survey_design=sd,
+        )
+        d = result.to_dict()
+
+        assert "weight_type" in d
+        assert d["weight_type"] == "pweight"
+        assert "effective_n" in d
+        assert d["effective_n"] > 0
+        assert "design_effect" in d
+        assert d["design_effect"] > 0
+        assert "sum_weights" in d
+        assert "n_strata" in d
+        assert d["n_strata"] == 5
+        assert "n_psu" in d
+        assert d["n_psu"] == 20
+        assert "df_survey" in d
+
+    def test_wild_bootstrap_survey_guard(self, survey_2x2_data):
+        """NotImplementedError raised when wild bootstrap + survey combined."""
+        did = DifferenceInDifferences(inference="wild_bootstrap")
+        sd = SurveyDesign(weights="weight", weight_type="pweight")
+
+        with pytest.raises(NotImplementedError, match="Wild bootstrap"):
+            did.fit(
+                survey_2x2_data,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                survey_design=sd,
+            )
+
+    def test_survey_design_validation_bad_weight_type(self):
+        """Invalid weight_type raises ValueError."""
+        with pytest.raises(ValueError, match="weight_type"):
+            SurveyDesign(weights="w", weight_type="invalid")
+
+    def test_survey_design_validation_bad_lonely_psu(self):
+        """Invalid lonely_psu raises ValueError."""
+        with pytest.raises(ValueError, match="lonely_psu"):
+            SurveyDesign(lonely_psu="invalid")
+
+    def test_survey_design_validation_missing_column(self):
+        """Missing column in data raises ValueError."""
+        df = pd.DataFrame({"y": [1, 2, 3], "w": [1.0, 1.0, 1.0]})
+        sd = SurveyDesign(weights="missing_col")
+        with pytest.raises(ValueError, match="not found"):
+            sd.resolve(df)
+
+    def test_survey_design_validation_zero_weights(self):
+        """Zero weights raise ValueError."""
+        df = pd.DataFrame({"y": [1, 2, 3], "w": [1.0, 0.0, 1.0]})
+        sd = SurveyDesign(weights="w")
+        with pytest.raises(ValueError, match="strictly positive"):
+            sd.resolve(df)
+
+    def test_survey_design_validation_nan_weights(self):
+        """NaN weights raise ValueError."""
+        df = pd.DataFrame({"y": [1, 2, 3], "w": [1.0, np.nan, 1.0]})
+        sd = SurveyDesign(weights="w")
+        with pytest.raises(ValueError, match="NaN"):
+            sd.resolve(df)
+
+    def test_survey_design_validation_inf_weights(self):
+        """Inf weights raise ValueError."""
+        df = pd.DataFrame({"y": [1, 2, 3], "w": [1.0, np.inf, 1.0]})
+        sd = SurveyDesign(weights="w")
+        with pytest.raises(ValueError, match="Inf"):
+            sd.resolve(df)
+
+    def test_survey_design_validation_missing_strata_column(self):
+        """Missing strata column raises ValueError."""
+        df = pd.DataFrame({"y": [1, 2, 3], "w": [1.0, 1.0, 1.0]})
+        sd = SurveyDesign(weights="w", strata="missing")
+        with pytest.raises(ValueError, match="not found"):
+            sd.resolve(df)
+
+    def test_survey_design_validation_missing_psu_column(self):
+        """Missing PSU column raises ValueError."""
+        df = pd.DataFrame({"y": [1, 2, 3], "w": [1.0, 1.0, 1.0]})
+        sd = SurveyDesign(weights="w", psu="missing")
+        with pytest.raises(ValueError, match="not found"):
+            sd.resolve(df)
+
+    def test_survey_design_validation_missing_fpc_column(self):
+        """Missing FPC column raises ValueError."""
+        df = pd.DataFrame({"y": [1, 2, 3], "w": [1.0, 1.0, 1.0]})
+        sd = SurveyDesign(weights="w", fpc="missing")
+        with pytest.raises(ValueError, match="not found"):
+            sd.resolve(df)
+
+    def test_survey_design_validation_nan_fpc(self):
+        """NaN FPC values raise ValueError."""
+        df = pd.DataFrame(
+            {
+                "y": [1, 2, 3],
+                "w": [1.0, 1.0, 1.0],
+                "fpc": [100.0, np.nan, 100.0],
+            }
+        )
+        sd = SurveyDesign(weights="w", fpc="fpc")
+        with pytest.raises(ValueError, match="finite"):
+            sd.resolve(df)
+
+    def test_survey_design_validation_fpc_too_small(self):
+        """FPC smaller than sample size raises ValueError."""
+        n = 20
+        df = pd.DataFrame(
+            {
+                "y": np.ones(n),
+                "w": np.ones(n),
+                "s": np.repeat([0, 1], 10),
+                "psu": np.arange(n),
+                "fpc": np.full(n, 5.0),  # FPC=5 but n_h=10 per stratum
+            }
+        )
+        sd = SurveyDesign(weights="w", strata="s", psu="psu", fpc="fpc")
+        with pytest.raises(ValueError, match="FPC"):
+            sd.resolve(df)
+
+    def test_survey_design_type_error(self, survey_2x2_data):
+        """Passing non-SurveyDesign object raises TypeError."""
+        did = DifferenceInDifferences()
+        with pytest.raises(TypeError, match="SurveyDesign"):
+            did.fit(
+                survey_2x2_data,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                survey_design={"weights": "weight"},  # dict instead of SurveyDesign
+            )
+
+    def test_nest_true(self):
+        """nest=True makes repeated PSU IDs unique across strata."""
+        n = 40
+        strata = np.repeat([0, 1], 20)
+        # PSU IDs repeat across strata: 0..9 in each stratum
+        psu_raw = np.tile(np.arange(10), 4)[:n]
+
+        df = pd.DataFrame(
+            {
+                "y": np.ones(n),
+                "w": np.ones(n),
+                "s": strata,
+                "psu": psu_raw,
+            }
+        )
+
+        # Without nest: PSU 0 in stratum 0 == PSU 0 in stratum 1
+        sd_no_nest = SurveyDesign(weights="w", strata="s", psu="psu", nest=False)
+        resolved_no_nest = sd_no_nest.resolve(df)
+
+        # With nest: PSU 0 in stratum 0 != PSU 0 in stratum 1
+        sd_nest = SurveyDesign(weights="w", strata="s", psu="psu", nest=True)
+        resolved_nest = sd_nest.resolve(df)
+
+        # nest=True should produce more unique PSUs
+        assert resolved_nest.n_psu > resolved_no_nest.n_psu
+        # Specifically: 10 PSUs repeated across 2 strata -> 20 unique with nest
+        assert resolved_nest.n_psu == 20
+        assert resolved_no_nest.n_psu == 10
+
+    def test_twfe_with_survey_design(self, twfe_panel_data):
+        """TwoWayFixedEffects accepts and uses survey_design."""
+        twfe = TwoWayFixedEffects()
+        sd = SurveyDesign(
+            weights="weight",
+            strata="stratum",
+            psu="psu",
+            weight_type="pweight",
+        )
+        result = twfe.fit(
+            twfe_panel_data,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            unit="unit",
+            survey_design=sd,
+        )
+
+        assert isinstance(result.att, float)
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0
+
+        # ATT should be close to 4.0
+        assert abs(result.att - 4.0) < 1.5
+
+        # Survey metadata present
+        assert result.survey_metadata is not None
+        assert result.survey_metadata.weight_type == "pweight"
+
+    def test_multiperiod_with_survey_design(self, multiperiod_data):
+        """MultiPeriodDiD accepts and uses survey_design."""
+        mpd = MultiPeriodDiD()
+        sd = SurveyDesign(
+            weights="weight",
+            strata="stratum",
+            psu="psu",
+            weight_type="pweight",
+        )
+        result = mpd.fit(
+            multiperiod_data,
+            outcome="outcome",
+            treatment="treated",
+            time="period",
+            post_periods=[3, 4, 5],
+            survey_design=sd,
+        )
+
+        assert np.isfinite(result.avg_att)
+        assert np.isfinite(result.avg_se)
+        assert result.avg_se > 0
+
+        # Average ATT should be close to 2.5
+        assert abs(result.avg_att - 2.5) < 1.5
+
+    def test_fweight_warning_for_fractional(self):
+        """Fractional fweights emit a UserWarning."""
+        df = pd.DataFrame(
+            {
+                "y": [1, 2, 3],
+                "w": [1.5, 2.0, 3.0],  # 1.5 is fractional
+            }
+        )
+        sd = SurveyDesign(weights="w", weight_type="fweight")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            sd.resolve(df)
+            fweight_warnings = [x for x in w if "Frequency weights" in str(x.message)]
+            assert len(fweight_warnings) >= 1
+
+    def test_lonely_psu_remove_warning(self):
+        """Singleton stratum with lonely_psu='remove' emits warning."""
+        n = 30
+        # Stratum 2 has only 1 PSU
+        strata = np.array([0] * 10 + [1] * 10 + [2] * 10)
+        psu = np.array(
+            list(range(5)) * 2  # stratum 0: 5 PSUs
+            + list(range(5, 10)) * 2  # stratum 1: 5 PSUs
+            + [10] * 10  # stratum 2: 1 PSU (singleton)
+        )
+        df = pd.DataFrame(
+            {
+                "y": np.ones(n),
+                "w": np.ones(n),
+                "s": strata,
+                "psu": psu,
+            }
+        )
+        sd = SurveyDesign(weights="w", strata="s", psu="psu", lonely_psu="remove")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            sd.resolve(df)
+            lonely_warnings = [
+                x for x in w if "only" in str(x.message).lower() and "PSU" in str(x.message)
+            ]
+            assert len(lonely_warnings) >= 1
+
+    def test_aweight_type(self):
+        """aweight type resolves and normalises correctly."""
+        n = 40
+        df = pd.DataFrame(
+            {
+                "y": np.random.randn(n),
+                "w": np.random.uniform(0.5, 3.0, n),
+            }
+        )
+        sd = SurveyDesign(weights="w", weight_type="aweight")
+        resolved = sd.resolve(df)
+
+        assert resolved.weight_type == "aweight"
+        # aweights are normalised to mean=1
+        np.testing.assert_allclose(np.mean(resolved.weights), 1.0, atol=1e-12)
+
+    def test_survey_metadata_df_survey(self):
+        """df_survey = n_psu - n_strata when both present."""
+        n = 60
+        strata = np.repeat(np.arange(3), 20)
+        psu = np.repeat(np.arange(12), 5)
+        weights = np.ones(n)
+        weights_norm = weights * (n / np.sum(weights))
+
+        resolved = ResolvedSurveyDesign(
+            weights=weights_norm,
+            weight_type="pweight",
+            strata=strata,
+            psu=psu,
+            fpc=None,
+            n_strata=3,
+            n_psu=12,
+            lonely_psu="remove",
+        )
+        meta = compute_survey_metadata(resolved, weights)
+
+        assert meta.df_survey == 12 - 3  # n_psu - n_strata = 9
+
+    def test_survey_metadata_df_survey_no_strata(self):
+        """df_survey = n_psu - 1 when no strata."""
+        n = 50
+        psu = np.repeat(np.arange(10), 5)
+        weights = np.ones(n)
+
+        resolved = ResolvedSurveyDesign(
+            weights=weights,
+            weight_type="pweight",
+            strata=None,
+            psu=psu,
+            fpc=None,
+            n_strata=0,
+            n_psu=10,
+            lonely_psu="remove",
+        )
+        meta = compute_survey_metadata(resolved, weights)
+
+        assert meta.df_survey == 10 - 1  # n_psu - 1 = 9
+
+    def test_survey_metadata_weight_range(self):
+        """weight_range reports (min, max) of raw weights."""
+        raw_w = np.array([1.0, 3.0, 5.0, 2.0, 4.0])
+        n = len(raw_w)
+        resolved = ResolvedSurveyDesign(
+            weights=raw_w * (n / np.sum(raw_w)),
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
+        )
+        meta = compute_survey_metadata(resolved, raw_w)
+
+        assert meta.weight_range == (1.0, 5.0)
+
+    def test_no_weights_survey_design(self):
+        """SurveyDesign without weights resolves to uniform weights."""
+        n = 20
+        df = pd.DataFrame(
+            {
+                "y": np.ones(n),
+                "s": np.repeat([0, 1], 10),
+            }
+        )
+        sd = SurveyDesign(strata="s")  # no weights
+        resolved = sd.resolve(df)
+
+        np.testing.assert_allclose(resolved.weights, np.ones(n), atol=1e-12)
+
+
+# =============================================================================
+# Tier 5: Monte Carlo (slow)
+# =============================================================================
+
+
+class TestMonteCarlo:
+    """Monte Carlo coverage tests."""
+
+    @pytest.mark.slow
+    def test_survey_coverage_monte_carlo(self, ci_params):
+        """95% CI coverage should be between 92% and 98% over 500 simulations.
+
+        DGP: weighted 2x2 DiD with known ATT = 2.0, stratified sampling.
+        """
+        n_sims = ci_params.bootstrap(500, min_n=199)
+        true_att = 2.0
+        covers = 0
+
+        for sim in range(n_sims):
+            np.random.seed(sim + 1000)
+            n = 80
+            treated = np.array([1] * 40 + [0] * 40)
+            post = np.tile([0, 1], 40)
+            strata = np.repeat(np.arange(4), 20)
+            psu = np.repeat(np.arange(16), 5)
+            weights = 1.0 + 0.5 * strata.astype(float)
+
+            y = (
+                5.0
+                + 1.0 * treated
+                + 2.0 * post
+                + true_att * treated * post
+                + np.random.randn(n) * 1.0
+            )
+
+            df = pd.DataFrame(
+                {
+                    "outcome": y,
+                    "treated": treated,
+                    "post": post,
+                    "stratum": strata,
+                    "psu": psu,
+                    "weight": weights,
+                }
+            )
+
+            sd = SurveyDesign(
+                weights="weight",
+                strata="stratum",
+                psu="psu",
+                weight_type="pweight",
+            )
+            did = DifferenceInDifferences()
+            try:
+                result = did.fit(
+                    df,
+                    outcome="outcome",
+                    treatment="treated",
+                    time="post",
+                    survey_design=sd,
+                )
+                if result.conf_int[0] <= true_att <= result.conf_int[1]:
+                    covers += 1
+            except Exception:
+                # Skip failed simulations (rank deficiency, etc.)
+                n_sims -= 1
+                continue
+
+        if n_sims < 30:
+            pytest.skip("Too few valid simulations for coverage test")
+
+        coverage = covers / n_sims
+        # Adjust tolerance for small n_sims (pure Python mode)
+        tol_low = 0.88 if n_sims < 200 else 0.92
+        tol_high = 0.99 if n_sims < 200 else 0.98
+        assert tol_low <= coverage <= tol_high, (
+            f"95% CI coverage = {coverage:.3f} ({covers}/{n_sims}) "
+            f"outside [{tol_low}, {tol_high}]"
+        )

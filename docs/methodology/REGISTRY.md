@@ -1821,6 +1821,62 @@ should be a deliberate user choice.
 
 ---
 
+## Survey Data Support
+
+Survey-weighted estimation allows correct population-level inference from data
+collected via complex survey designs (multi-stage sampling, stratification,
+unequal selection probabilities).
+
+### Weighted Estimation
+
+- **Reference**: Lumley (2004) "Analysis of Complex Survey Samples", Journal of
+  Statistical Software 9(8). Solon, Haider, & Wooldridge (2015) "What Are We
+  Weighting For?" Journal of Human Resources 50(2).
+- **WLS formula**: `beta_WLS = (X'WX)^{-1} X'Wy` where `W = diag(w_i)`
+- **Implementation**: Equivalent transformation via `sqrt(w)` scaling, then
+  standard OLS. Residuals back-transformed to original scale.
+- **Weight types**: pweight (inverse selection probability), fweight
+  (frequency/expansion), aweight (inverse variance/precision)
+- **Note:** Weight normalization uses `sum(w) = n` convention (DRDID/Stata), not
+  raw weights (R `survey`). Coefficients are identical; SEs differ by constant
+  factor.
+
+### Taylor Series Linearization (TSL) Variance
+
+- **Reference**: Binder (1983) "On the Variances of Asymptotically Normal
+  Estimators from Complex Surveys", International Statistical Review 51(3).
+  Lumley (2004).
+- **Formula**: `V_TSL = (X'WX)^{-1} [sum_h V_h] (X'WX)^{-1}` with stratified
+  PSU-level scores
+- **Relationship to sandwich estimator**: TSL is a generalization of the
+  Huber-White sandwich estimator that accounts for stratification and finite
+  population correction
+- **Deviation from R:** R `survey` defaults `lonely_psu` to "fail"; we default
+  to "remove" with warning, matching common applied practice
+- **Edge case**: Singleton strata (one PSU per stratum) — handled via
+  `lonely_psu` parameter ("remove", "certainty", or "adjust")
+
+### Weight Type Effects on Inference
+
+- **Note:** aweights use unweighted meat in the sandwich estimator (no `w` in
+  `u^2` term). This matches Stata convention. Rationale: aweights model known
+  heteroskedasticity; after WLS transformation, errors are approximately
+  homoskedastic.
+- **Note:** fweights affect degrees of freedom (`df = sum(w) - k`, not
+  `n - k`). This matches Stata convention for frequency-expanded data.
+
+### Survey Degrees of Freedom
+
+- **Reference**: Korn & Graubard (1990) "Simultaneous Testing of Regression
+  Coefficients with Complex Survey Data", JASA 85(409).
+- **Formula**: `df = n_PSU - n_strata` (replaces `n - k` for t-distribution
+  inference)
+- **Deviation from R:** Some software uses Satterthwaite-type df approximation;
+  we use the simpler and more common `n_PSU - n_strata` convention.
+
+---
+
 # Version History
 
+- **v1.1** (2026-03-20): Added Survey Data Support section
 - **v1.0** (2025-01-19): Initial registry with 12 estimators

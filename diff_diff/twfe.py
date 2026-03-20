@@ -15,8 +15,6 @@ from diff_diff.estimators import DifferenceInDifferences
 from diff_diff.linalg import LinearRegression
 from diff_diff.results import DiDResults
 from diff_diff.utils import (
-    compute_confidence_interval,
-    compute_p_value,
     within_transform as _within_transform_util,
 )
 
@@ -62,6 +60,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         time: str,
         unit: str,
         covariates: Optional[List[str]] = None,
+        survey_design: object = None,
     ) -> DiDResults:
         """
         Fit Two-Way Fixed Effects model.
@@ -118,6 +117,13 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                     stacklevel=2,
                 )
 
+        # Resolve survey design if provided
+        from diff_diff.survey import _resolve_effective_cluster, _resolve_survey_for_fit
+
+        resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, data, self.inference)
+        )
+
         # Use unit-level clustering if not specified (use local variable to avoid mutation)
         cluster_var = self.cluster if self.cluster is not None else unit
 
@@ -129,7 +135,14 @@ class TwoWayFixedEffects(DifferenceInDifferences):
 
         # Demean outcome, covariates, AND interaction in a single pass
         all_vars = [outcome] + (covariates or []) + ["_treatment_post"]
-        data_demeaned = _within_transform_util(data, all_vars, unit, time, suffix="_demeaned")
+        data_demeaned = _within_transform_util(
+            data,
+            all_vars,
+            unit,
+            time,
+            suffix="_demeaned",
+            weights=survey_weights,
+        )
 
         # Extract variables for regression
         y = data_demeaned[f"{outcome}_demeaned"].values
@@ -153,6 +166,11 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         # For wild bootstrap, we don't need cluster SEs from the initial fit
         cluster_ids = data[cluster_var].values
 
+        # When survey PSU is present, it overrides cluster for variance estimation
+        effective_cluster_ids = _resolve_effective_cluster(
+            resolved_survey, cluster_ids, self.cluster
+        )
+
         # Pass rank_deficient_action to LinearRegression
         # If "error", let LinearRegression raise immediately
         # If "warn" or "silent", suppress generic warning and use TWFE's context-specific
@@ -161,9 +179,12 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             reg = LinearRegression(
                 include_intercept=False,
                 robust=True,
-                cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
+                cluster_ids=effective_cluster_ids if self.inference != "wild_bootstrap" else None,
                 alpha=self.alpha,
                 rank_deficient_action="error",
+                weights=survey_weights,
+                weight_type=survey_weight_type,
+                survey_design=resolved_survey,
             ).fit(X, y, df_adjustment=df_adjustment)
         else:
             # Suppress generic warning, TWFE provides context-specific messages below
@@ -172,9 +193,14 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                 reg = LinearRegression(
                     include_intercept=False,
                     robust=True,
-                    cluster_ids=cluster_ids if self.inference != "wild_bootstrap" else None,
+                    cluster_ids=(
+                        effective_cluster_ids if self.inference != "wild_bootstrap" else None
+                    ),
                     alpha=self.alpha,
                     rank_deficient_action="silent",
+                    weights=survey_weights,
+                    weight_type=survey_weight_type,
+                    survey_design=resolved_survey,
                 ).fit(X, y, df_adjustment=df_adjustment)
 
         coefficients = reg.coefficients_
@@ -267,6 +293,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             inference_method=inference_method,
             n_bootstrap=n_bootstrap_used,
             n_clusters=n_clusters_used,
+            survey_metadata=survey_metadata,
         )
 
         self.is_fitted_ = True

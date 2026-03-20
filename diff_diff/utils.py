@@ -1709,11 +1709,14 @@ def demean_by_group(
     group_var: str,
     inplace: bool = False,
     suffix: str = "",
+    weights: Optional[np.ndarray] = None,
 ) -> Tuple[pd.DataFrame, int]:
     """
     Demean variables by a grouping variable (one-way within transformation).
 
     For each variable, computes: x_ig - mean(x_g) where g is the group.
+    When weights are provided, uses weighted group means:
+    mean_g = sum(w_i * x_i) / sum(w_i) for i in group g.
 
     Parameters
     ----------
@@ -1729,6 +1732,8 @@ def demean_by_group(
     suffix : str, default ""
         Suffix to add to demeaned column names (only used when inplace=False
         and you want to keep both original and demeaned columns).
+    weights : np.ndarray, optional
+        Observation weights for weighted group means.
 
     Returns
     -------
@@ -1748,13 +1753,25 @@ def demean_by_group(
     # Count fixed effects (categories - 1 for identification)
     n_effects = data[group_var].nunique() - 1
 
-    # Cache the groupby object for efficiency
-    grouper = data.groupby(group_var, sort=False)
-
-    for var in variables:
-        col_name = var if not suffix else f"{var}{suffix}"
-        group_means = grouper[var].transform("mean")
-        data[col_name] = data[var] - group_means
+    if weights is not None:
+        # Weighted demeaning: weighted_mean_g = sum(w*x) / sum(w) per group
+        groups = data[group_var].values
+        w = np.asarray(weights, dtype=np.float64)
+        # Cache weight sums per group (invariant across variables)
+        w_sum = pd.Series(w).groupby(groups).transform("sum")
+        for var in variables:
+            col_name = var if not suffix else f"{var}{suffix}"
+            x = data[var].values.astype(np.float64)
+            wx = pd.Series(w * x).groupby(groups).transform("sum")
+            weighted_means = wx / w_sum
+            data[col_name] = x - weighted_means.values
+    else:
+        # Cache the groupby object for efficiency
+        grouper = data.groupby(group_var, sort=False)
+        for var in variables:
+            col_name = var if not suffix else f"{var}{suffix}"
+            group_means = grouper[var].transform("mean")
+            data[col_name] = data[var] - group_means
 
     return data, n_effects
 
@@ -1766,11 +1783,13 @@ def within_transform(
     time: str,
     inplace: bool = False,
     suffix: str = "_demeaned",
+    weights: Optional[np.ndarray] = None,
 ) -> pd.DataFrame:
     """
     Apply two-way within transformation to remove unit and time fixed effects.
 
     Computes: y_it - y_i. - y_.t + y_.. for each variable.
+    When weights are provided, uses weighted group means at each step.
 
     This is the standard fixed effects transformation for panel data that
     removes both unit-specific and time-specific effects.
@@ -1790,6 +1809,8 @@ def within_transform(
         with the specified suffix.
     suffix : str, default "_demeaned"
         Suffix for new column names when inplace=False.
+    weights : np.ndarray, optional
+        Observation weights for weighted group means.
 
     Returns
     -------
@@ -1811,30 +1832,57 @@ def within_transform(
     if not inplace:
         data = data.copy()
 
-    # Cache groupby objects for efficiency
-    unit_grouper = data.groupby(unit, sort=False)
-    time_grouper = data.groupby(time, sort=False)
+    if weights is not None:
+        # Weighted within-transformation
+        w = np.asarray(weights, dtype=np.float64)
+        unit_groups = data[unit].values
+        time_groups = data[time].values
+        total_w = np.sum(w)
 
-    if inplace:
-        # Modify columns in place
-        for var in variables:
-            unit_means = unit_grouper[var].transform("mean")
-            time_means = time_grouper[var].transform("mean")
-            grand_mean = data[var].mean()
-            data[var] = data[var] - unit_means - time_means + grand_mean
+        # Cache weight sums per group (invariant across variables)
+        unit_w_sum = pd.Series(w).groupby(unit_groups).transform("sum")
+        time_w_sum = pd.Series(w).groupby(time_groups).transform("sum")
+
+        if inplace:
+            for var in variables:
+                x = data[var].values.astype(np.float64)
+                unit_means = pd.Series(w * x).groupby(unit_groups).transform("sum") / unit_w_sum
+                time_means = pd.Series(w * x).groupby(time_groups).transform("sum") / time_w_sum
+                grand_mean = np.sum(w * x) / total_w
+                data[var] = x - unit_means.values - time_means.values + grand_mean
+        else:
+            demeaned_data = {}
+            for var in variables:
+                x = data[var].values.astype(np.float64)
+                unit_means = pd.Series(w * x).groupby(unit_groups).transform("sum") / unit_w_sum
+                time_means = pd.Series(w * x).groupby(time_groups).transform("sum") / time_w_sum
+                grand_mean = np.sum(w * x) / total_w
+                demeaned_data[f"{var}{suffix}"] = (
+                    x - unit_means.values - time_means.values + grand_mean
+                )
+            demeaned_df = pd.DataFrame(demeaned_data, index=data.index)
+            data = pd.concat([data, demeaned_df], axis=1)
     else:
-        # Build all demeaned columns at once to avoid DataFrame fragmentation
-        demeaned_data = {}
-        for var in variables:
-            unit_means = unit_grouper[var].transform("mean")
-            time_means = time_grouper[var].transform("mean")
-            grand_mean = data[var].mean()
-            demeaned_data[f"{var}{suffix}"] = (
-                data[var] - unit_means - time_means + grand_mean
-            ).values
+        # Cache groupby objects for efficiency
+        unit_grouper = data.groupby(unit, sort=False)
+        time_grouper = data.groupby(time, sort=False)
 
-        # Add all columns at once
-        demeaned_df = pd.DataFrame(demeaned_data, index=data.index)
-        data = pd.concat([data, demeaned_df], axis=1)
+        if inplace:
+            for var in variables:
+                unit_means = unit_grouper[var].transform("mean")
+                time_means = time_grouper[var].transform("mean")
+                grand_mean = data[var].mean()
+                data[var] = data[var] - unit_means - time_means + grand_mean
+        else:
+            demeaned_data = {}
+            for var in variables:
+                unit_means = unit_grouper[var].transform("mean")
+                time_means = time_grouper[var].transform("mean")
+                grand_mean = data[var].mean()
+                demeaned_data[f"{var}{suffix}"] = (
+                    data[var] - unit_means - time_means + grand_mean
+                ).values
+            demeaned_df = pd.DataFrame(demeaned_data, index=data.index)
+            data = pd.concat([data, demeaned_df], axis=1)
 
     return data

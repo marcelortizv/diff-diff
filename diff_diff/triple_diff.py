@@ -1025,12 +1025,19 @@ class TripleDifference:
         )
 
         # Influence function weights (matching R's att_dr_rc)
-        n3 = np.sum((subgroup == 3) | (subgroup == 4))
-        n2 = np.sum((subgroup == 2) | (subgroup == 4))
-        n1 = np.sum((subgroup == 1) | (subgroup == 4))
-        w3 = n / n3
-        w2 = n / n2
-        w1 = n / n1
+        if survey_weights is not None:
+            n3 = np.sum(survey_weights[(subgroup == 3) | (subgroup == 4)])
+            n2 = np.sum(survey_weights[(subgroup == 2) | (subgroup == 4)])
+            n1 = np.sum(survey_weights[(subgroup == 1) | (subgroup == 4)])
+            n_total = np.sum(survey_weights)
+        else:
+            n3 = np.sum((subgroup == 3) | (subgroup == 4))
+            n2 = np.sum((subgroup == 2) | (subgroup == 4))
+            n1 = np.sum((subgroup == 1) | (subgroup == 4))
+            n_total = n
+        w3 = n_total / n3
+        w2 = n_total / n2
+        w1 = n_total / n1
 
         inf_func = (
             w3 * did_results[3]["inf"] + w2 * did_results[2]["inf"] - w1 * did_results[1]["inf"]

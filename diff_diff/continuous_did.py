@@ -608,6 +608,10 @@ class ContinuousDiD:
                             control_idx = b_info["control_indices"]
                             n_t = b_info["n_treated"]
                             n_c = b_info["n_control"]
+                            # Use survey-weighted masses when available
+                            if "w_treated" in b_info:
+                                n_t = b_info["w_treated"]
+                                n_c = b_info["w_control"]
                             n_total_gt = n_t + n_c
                             p_1 = n_t / n_total_gt
                             p_0 = n_c / n_total_gt
@@ -972,11 +976,18 @@ class ContinuousDiD:
         treated_indices = np.where(treated_mask)[0]
         control_indices = np.where(control_mask)[0]
 
+        # dpsi_bar: mean derivative basis vector (weighted when survey)
+        if w_treated is not None:
+            dpsi_bar = np.average(dPsi_treated, axis=0, weights=w_treated)
+        else:
+            dpsi_bar = np.mean(dPsi_treated, axis=0)
+
         bootstrap_info = {
             "bread": bread,
             "ee_treated": ee_treated,
             "ee_control": ee_control,
             "psi_bar": psi_bar,
+            "dpsi_bar": dpsi_bar,
             "beta_hat": beta_hat,
             "beta_pred": beta_pred,
             "treated_indices": treated_indices,
@@ -992,6 +1003,11 @@ class ContinuousDiD:
             "att_glob": att_glob,
             "acrt_glob": acrt_glob,
         }
+
+        # Store survey-weighted masses for IF linearization
+        if w_treated is not None:
+            bootstrap_info["w_treated"] = float(np.sum(w_treated))
+            bootstrap_info["w_control"] = float(np.sum(w_control))
 
         return {
             "att_d": att_d,
@@ -1080,13 +1096,17 @@ class ContinuousDiD:
             control_idx = info["control_indices"]
             n_t = info["n_treated"]
             n_c = info["n_control"]
+            # Use survey-weighted masses when available
+            if "w_treated" in info:
+                n_t = info["w_treated"]
+                n_c = info["w_control"]
             bread = info["bread"]
             ee_treated = info["ee_treated"]
             ee_control = info["ee_control"]
             psi_bar = info["psi_bar"]
+            dpsi_bar = info["dpsi_bar"]
             Psi_eval = info["Psi_eval"]
             dPsi_eval = info["dPsi_eval"]
-            dPsi_treated = info["dPsi_treated"]
             att_glob_gt = info["att_glob"]
             mu_0 = info["mu_0"]
             delta_y_treated = info["delta_y_treated"]
@@ -1119,7 +1139,6 @@ class ContinuousDiD:
                 if_acrt_d[idx] += w * (dPsi_eval @ beta_pert)
 
             # ACRT_glob IF: (1/n_t) sum_j dpsi(D_j)' @ beta_pert
-            dpsi_bar = np.mean(dPsi_treated, axis=0)
             for k, idx in enumerate(treated_idx):
                 beta_pert = bread @ ee_treated[k] / n_t
                 if_acrt_glob[idx] += w * float(dpsi_bar @ beta_pert)

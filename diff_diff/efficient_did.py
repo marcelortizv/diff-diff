@@ -687,6 +687,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             influence_functions=None,  # can store full EIF matrix if needed
             bootstrap_results=bootstrap_results,
             estimation_path="dr" if use_covariates else "nocov",
+            pscore_trim=self.pscore_trim,
         )
         self.is_fitted_ = True
         return self.results_

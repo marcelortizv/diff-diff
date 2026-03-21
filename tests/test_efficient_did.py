@@ -1225,6 +1225,51 @@ class TestCovariatesPTAssumptions:
         assert result.estimation_path == "dr"
         assert np.isfinite(result.overall_att)
 
+    def test_covariates_aggregate_event_study(self):
+        df = _make_covariate_panel()
+        result = EfficientDiD(pt_assumption="post").fit(
+            df,
+            "y",
+            "unit",
+            "time",
+            "first_treat",
+            covariates=["x1"],
+            aggregate="event_study",
+        )
+        assert result.event_study_effects is not None
+        assert len(result.event_study_effects) > 0
+        for e, eff in result.event_study_effects.items():
+            assert np.isfinite(eff["effect"])
+
+    def test_covariates_aggregate_group(self):
+        df = _make_covariate_panel()
+        result = EfficientDiD(pt_assumption="post").fit(
+            df,
+            "y",
+            "unit",
+            "time",
+            "first_treat",
+            covariates=["x1"],
+            aggregate="group",
+        )
+        assert result.group_effects is not None
+        assert len(result.group_effects) > 0
+
+    def test_covariates_aggregate_all(self):
+        df = _make_covariate_panel()
+        result = EfficientDiD(pt_assumption="post").fit(
+            df,
+            "y",
+            "unit",
+            "time",
+            "first_treat",
+            covariates=["x1"],
+            aggregate="all",
+        )
+        assert result.event_study_effects is not None
+        assert result.group_effects is not None
+        assert np.isfinite(result.overall_att)
+
 
 class TestCovariatesEdgeCases:
     """Tier 2: edge cases for covariate path."""
@@ -1257,6 +1302,33 @@ class TestCovariatesEdgeCases:
             df, "y", "unit", "time", "first_treat", covariates=["x1", "x2", "x3"]
         )
         assert np.isfinite(result.overall_att)
+
+    def test_shuffled_units_match_ordered(self):
+        """Shuffled unit ordering must produce same ATT as original ordering.
+
+        Regression test for P0 label-alignment bug in estimate_propensity_ratio:
+        D labels must follow the row order of combined_mask, not assume
+        g-units come before g'-units.
+        """
+        df_ordered = _make_covariate_panel(n_units=300, seed=55)
+        # Shuffle: randomize unit IDs so cohorts are interleaved
+        rng = np.random.default_rng(55)
+        df_shuffled = df_ordered.copy()
+        units = df_shuffled["unit"].unique()
+        perm = rng.permutation(len(units))
+        unit_map = dict(zip(units, perm))
+        df_shuffled["unit"] = df_shuffled["unit"].map(unit_map)
+        df_shuffled = df_shuffled.sort_values(["unit", "time"]).reset_index(drop=True)
+
+        edid = EfficientDiD(pt_assumption="post")
+        r_ordered = edid.fit(df_ordered, "y", "unit", "time", "first_treat", covariates=["x1"])
+        r_shuffled = EfficientDiD(pt_assumption="post").fit(
+            df_shuffled, "y", "unit", "time", "first_treat", covariates=["x1"]
+        )
+        assert abs(r_ordered.overall_att - r_shuffled.overall_att) < 1e-10, (
+            f"ATT mismatch: ordered={r_ordered.overall_att:.6f} "
+            f"vs shuffled={r_shuffled.overall_att:.6f}"
+        )
 
     def test_near_separation_trimming_warns(self):
         """Near-separation covariates should trigger overlap warning."""
@@ -1298,3 +1370,21 @@ class TestCovariatesBootstrap:
         ci = result.overall_conf_int
         assert ci[0] < ci[1], "CI lower must be less than upper"
         assert np.isfinite(result.overall_p_value)
+
+    def test_covariates_pt_all_bootstrap(self):
+        """PT-All + bootstrap + covariates end-to-end."""
+        df = _make_covariate_panel(n_units=300)
+        result = EfficientDiD(pt_assumption="all", n_bootstrap=99, seed=42).fit(
+            df,
+            "y",
+            "unit",
+            "time",
+            "first_treat",
+            covariates=["x1"],
+            aggregate="all",
+        )
+        assert result.bootstrap_results is not None
+        assert result.event_study_effects is not None
+        assert result.group_effects is not None
+        assert np.isfinite(result.overall_att)
+        assert result.overall_se > 0

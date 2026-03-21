@@ -129,11 +129,15 @@ def estimate_propensity_ratio(
     n_gp = int(np.sum(mask_gp))
     n_units = len(covariate_matrix)
 
+    # Short-circuit: r_{g,g}(X) = 1 for same-cohort comparisons (PT-All)
+    if np.array_equal(mask_g, mask_gp):
+        return np.ones(n_units)
+
     # Stack covariates for the two groups
     combined_mask = mask_g | mask_gp
     X_combined = covariate_matrix[combined_mask]
-    # Treatment indicator: 1 for group g, 0 for group g'
-    D = np.concatenate([np.ones(n_g), np.zeros(n_gp)])
+    # Treatment indicator: derive from mask_g so labels align with row order
+    D = mask_g[combined_mask].astype(float)
 
     try:
         beta, pscore_combined = solve_logit(X_combined, D, rank_deficient_action="warn")

@@ -155,12 +155,16 @@ from diff_diff.utils import (
 )
 from diff_diff.visualization import (
     plot_bacon,
+    plot_dose_response,
     plot_event_study,
     plot_group_effects,
+    plot_group_time_heatmap,
     plot_honest_event_study,
     plot_power_curve,
     plot_pretrends_power,
     plot_sensitivity,
+    plot_staircase,
+    plot_synth_weights,
 )
 from diff_diff.datasets import (
     clear_cache,

@@ -89,3 +89,117 @@ Example
    bounds = honest.fit(event_study_results)
 
    ax = plot_honest_event_study(bounds)
+
+plot_synth_weights
+------------------
+
+Visualize synthetic control unit or time weights.
+
+.. autofunction:: diff_diff.plot_synth_weights
+
+Example
+~~~~~~~
+
+.. code-block:: python
+
+   from diff_diff import SyntheticDiD, plot_synth_weights
+
+   sdid = SyntheticDiD()
+   results = sdid.fit(data, outcome='y', unit='unit_id',
+                      time='period', treatment='treated')
+
+   # Bar chart of unit weights
+   ax = plot_synth_weights(results)
+
+   # Show time weights instead
+   ax = plot_synth_weights(results, weight_type='time')
+
+plot_staircase
+--------------
+
+Visualize treatment adoption timing in staggered designs.
+
+.. autofunction:: diff_diff.plot_staircase
+
+Example
+~~~~~~~
+
+.. code-block:: python
+
+   from diff_diff import CallawaySantAnna, plot_staircase
+
+   cs = CallawaySantAnna()
+   results = cs.fit(data, outcome='y', unit='unit_id',
+                    time='period', first_treat='first_treat')
+
+   # Staircase plot from results
+   ax = plot_staircase(results)
+
+   # Or from raw panel data
+   ax = plot_staircase(data=data, unit='unit_id', time='period',
+                       first_treat='first_treat')
+
+plot_dose_response
+------------------
+
+Visualize dose-response curves from continuous DiD.
+
+.. autofunction:: diff_diff.plot_dose_response
+
+Example
+~~~~~~~
+
+.. code-block:: python
+
+   from diff_diff import ContinuousDiD, plot_dose_response
+
+   cdid = ContinuousDiD()
+   results = cdid.fit(data, outcome='y', unit='unit_id',
+                      time='period', first_treat='first_treat',
+                      dose='dose')
+
+   # ATT dose-response curve
+   ax = plot_dose_response(results, target='att')
+
+   # ACRT dose-response curve
+   ax = plot_dose_response(results, target='acrt')
+
+plot_group_time_heatmap
+-----------------------
+
+Heatmap of group-time treatment effects.
+
+.. autofunction:: diff_diff.plot_group_time_heatmap
+
+Example
+~~~~~~~
+
+.. code-block:: python
+
+   from diff_diff import CallawaySantAnna, plot_group_time_heatmap
+
+   cs = CallawaySantAnna()
+   results = cs.fit(data, outcome='y', unit='unit_id',
+                    time='period', first_treat='first_treat')
+
+   # Heatmap of ATT(g,t)
+   ax = plot_group_time_heatmap(results)
+
+   # Grey out non-significant cells
+   ax = plot_group_time_heatmap(results, mask_insignificant=True)
+
+Plotly Backend
+--------------
+
+All visualization functions support an interactive plotly backend via the
+``backend`` parameter:
+
+.. code-block:: python
+
+   # Interactive event study
+   fig = plot_event_study(results, backend='plotly')
+
+   # Interactive dose-response curve
+   fig = plot_dose_response(results, backend='plotly')
+
+Install plotly with: ``pip install diff-diff[plotly]``

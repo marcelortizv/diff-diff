@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Refactor `visualization.py` into `visualization/` subpackage for better organization
+- Add `plot_synth_weights()` — bar chart of Synthetic DiD unit/time weights
+- Add `plot_staircase()` — treatment adoption visualization for staggered designs
+- Add `plot_dose_response()` — dose-response curve for Continuous DiD
+- Add `plot_group_time_heatmap()` — heatmap of ATT(g,t) from staggered estimators
+- Add interactive plotly backend (`backend="plotly"`) for all visualization functions
+- Add `plotly` optional dependency group (`pip install diff-diff[plotly]`)
+
 ## [2.7.4] - 2026-03-21
 
 ### Added

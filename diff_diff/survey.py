@@ -157,7 +157,18 @@ class SurveyDesign:
             else:
                 psu_arr = _factorize_cluster_ids(psu_raw)
 
-            n_psu = len(np.unique(psu_arr))
+            # Count total PSUs: sum of unique PSUs within each stratum.
+            # When nest=True, labels are already globally unique so this
+            # is equivalent to len(np.unique(psu_arr)). When nest=False
+            # with strata, PSU labels may repeat across strata (common in
+            # survey data), so we count per-stratum to get the correct total.
+            if strata_arr is not None and not self.nest:
+                n_psu = sum(
+                    len(np.unique(psu_arr[strata_arr == h]))
+                    for h in np.unique(strata_arr)
+                )
+            else:
+                n_psu = len(np.unique(psu_arr))
 
         # --- FPC ---
         fpc_arr = None

@@ -492,11 +492,17 @@ def _render_event_study_plotly(
             )
         )
 
-    # Point estimates — separate reference vs non-reference
+    # Point estimates — separate reference vs non-reference.
+    # Attach original period labels via customdata + hovertemplate so hover
+    # shows real periods instead of ordinal positions.
     non_ref_x = [period_to_x[p] for p, r in zip(periods, is_ref) if not r]
     non_ref_e = [e for e, r in zip(effects, is_ref) if not r]
+    non_ref_labels = [str(p) for p, r in zip(periods, is_ref) if not r]
     ref_x = [period_to_x[p] for p, r in zip(periods, is_ref) if r]
     ref_e = [e for e, r in zip(effects, is_ref) if r]
+    ref_labels = [str(p) for p, r in zip(periods, is_ref) if r]
+
+    hover_tpl = "Period: %{customdata}<br>Effect: %{y:.4f}<extra></extra>"
 
     if non_ref_x:
         fig.add_trace(
@@ -506,6 +512,8 @@ def _render_event_study_plotly(
                 mode="markers",
                 marker=dict(color=color, size=10),
                 name="Effect",
+                customdata=non_ref_labels,
+                hovertemplate=hover_tpl,
             )
         )
 
@@ -521,6 +529,8 @@ def _render_event_study_plotly(
                     line=dict(color=color, width=2),
                 ),
                 name="Reference",
+                customdata=ref_labels,
+                hovertemplate=hover_tpl,
             )
         )
 

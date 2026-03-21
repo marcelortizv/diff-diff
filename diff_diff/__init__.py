@@ -255,10 +255,13 @@ __all__ = [
     "EDiDBootstrapResults",
     "EDiD",
     # Visualization
+    "plot_bacon",
     "plot_event_study",
     "plot_group_effects",
     "plot_sensitivity",
     "plot_honest_event_study",
+    "plot_power_curve",
+    "plot_pretrends_power",
     "plot_synth_weights",
     "plot_staircase",
     "plot_dose_response",

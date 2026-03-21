@@ -283,10 +283,17 @@ class TestPlotlyHeatmapMasking:
 class TestTopLevelExports:
     """Regression: new plot functions must be in diff_diff.__all__."""
 
-    def test_new_plots_in_all(self):
+    def test_all_plots_in_all(self):
         import diff_diff
 
         for name in [
+            "plot_bacon",
+            "plot_event_study",
+            "plot_group_effects",
+            "plot_sensitivity",
+            "plot_honest_event_study",
+            "plot_power_curve",
+            "plot_pretrends_power",
             "plot_synth_weights",
             "plot_staircase",
             "plot_dose_response",

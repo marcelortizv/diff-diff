@@ -25,9 +25,10 @@ from diff_diff.efficient_did_bootstrap import (
 from diff_diff.efficient_did_covariates import (
     compute_eif_cov,
     compute_generated_outcomes_cov,
-    compute_omega_star_cov,
+    compute_omega_star_conditional,
+    compute_per_unit_weights,
     estimate_outcome_regression,
-    estimate_propensity_ratio,
+    estimate_propensity_ratio_sieve,
 )
 from diff_diff.efficient_did_results import EfficientDiDResults
 from diff_diff.efficient_did_weights import (
@@ -51,11 +52,9 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
 
     Without covariates, uses a closed-form estimator based on within-group
     sample means and covariances.  With covariates, uses the doubly robust
-    path: outcome regression via OLS plus propensity score ratios via logit.
-    The covariate path uses unconditional Omega* for pair weights (not the
-    kernel-smoothed conditional Omega*(X) from the paper), so it does not
-    achieve the full semiparametric efficiency bound but remains consistent
-    and doubly robust.
+    path: sieve-based propensity score ratios (Eq 4.1-4.2) with AIC/BIC
+    selection, OLS outcome regression, and kernel-smoothed conditional
+    Omega*(X) for per-unit efficient weights.
 
     Parameters
     ----------
@@ -77,9 +76,16 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
     anticipation : int, default 0
         Number of anticipation periods (shifts the effective treatment
         boundary forward by this amount).
-    pscore_trim : float, default 0.01
-        Propensity scores are clipped to ``[pscore_trim, 1-pscore_trim]``
-        before ratio computation.  Only used when covariates are provided.
+    sieve_k_max : int or None
+        Maximum polynomial degree for sieve ratio estimation. None = auto
+        (``min(floor(n_gp^{1/5}), 5)``). Only used with covariates.
+    sieve_criterion : str, default ``"bic"``
+        Information criterion for sieve degree selection: ``"aic"`` or ``"bic"``.
+    ratio_clip : float, default 20.0
+        Clip sieve propensity ratios to ``[1/ratio_clip, ratio_clip]``.
+    kernel_bandwidth : float or None
+        Bandwidth for Gaussian kernel in conditional Omega* estimation.
+        None = Silverman's rule-of-thumb (automatic).
 
     Examples
     --------
@@ -99,7 +105,10 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         bootstrap_weights: str = "rademacher",
         seed: Optional[int] = None,
         anticipation: int = 0,
-        pscore_trim: float = 0.01,
+        sieve_k_max: Optional[int] = None,
+        sieve_criterion: str = "bic",
+        ratio_clip: float = 20.0,
+        kernel_bandwidth: Optional[float] = None,
     ):
         if cluster is not None:
             raise NotImplementedError(
@@ -113,7 +122,10 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         self.bootstrap_weights = bootstrap_weights
         self.seed = seed
         self.anticipation = anticipation
-        self.pscore_trim = pscore_trim
+        self.sieve_k_max = sieve_k_max
+        self.sieve_criterion = sieve_criterion
+        self.ratio_clip = ratio_clip
+        self.kernel_bandwidth = kernel_bandwidth
         self.is_fitted_ = False
         self.results_: Optional[EfficientDiDResults] = None
         self._validate_params()
@@ -128,8 +140,12 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 f"bootstrap_weights must be one of {valid_weights}, "
                 f"got '{self.bootstrap_weights}'"
             )
-        if not (0 < self.pscore_trim < 0.5):
-            raise ValueError(f"pscore_trim must be in (0, 0.5), got {self.pscore_trim}")
+        if self.sieve_criterion not in ("aic", "bic"):
+            raise ValueError(
+                f"sieve_criterion must be 'aic' or 'bic', got '{self.sieve_criterion}'"
+            )
+        if self.ratio_clip <= 1.0:
+            raise ValueError(f"ratio_clip must be > 1.0, got {self.ratio_clip}")
 
     # -- sklearn compatibility ------------------------------------------------
 
@@ -143,7 +159,10 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             "n_bootstrap": self.n_bootstrap,
             "bootstrap_weights": self.bootstrap_weights,
             "seed": self.seed,
-            "pscore_trim": self.pscore_trim,
+            "sieve_k_max": self.sieve_k_max,
+            "sieve_criterion": self.sieve_criterion,
+            "ratio_clip": self.ratio_clip,
+            "kernel_bandwidth": self.kernel_bandwidth,
         }
 
     def set_params(self, **params: Any) -> "EfficientDiD":
@@ -457,18 +476,20 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                                 tpre_col_val,
                                 effective_p1_col,
                             )
-                        # r_{g, inf}(X) and r_{g, g'}(X)
+                        # r_{g, inf}(X) and r_{g, g'}(X) via sieve (Eq 4.1-4.2)
                         for comp in {np.inf, gp}:
                             rkey = (g, comp)
                             if rkey not in r_hat_cache:
                                 comp_mask = (
                                     never_treated_mask if np.isinf(comp) else cohort_masks[comp]
                                 )
-                                r_hat_cache[rkey] = estimate_propensity_ratio(
+                                r_hat_cache[rkey] = estimate_propensity_ratio_sieve(
                                     covariate_matrix,
                                     cohort_masks[g],
                                     comp_mask,
-                                    pscore_trim=self.pscore_trim,
+                                    k_max=self.sieve_k_max,
+                                    criterion=self.sieve_criterion,
+                                    ratio_clip=self.ratio_clip,
                                 )
 
                     # Per-unit DR generated outcomes: shape (n_units, H)
@@ -486,23 +507,34 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                         r_hat_cache=r_hat_cache,
                     )
 
-                    # Average per pair → scalar generated outcomes
                     y_hat = np.mean(gen_out, axis=0)  # shape (H,)
 
-                    # Unconditional Omega* from per-unit generated outcomes
-                    omega = compute_omega_star_cov(gen_out)
+                    # Conditional Omega*(X): (n_units, H, H)
+                    omega_cond = compute_omega_star_conditional(
+                        target_g=g,
+                        target_t=t,
+                        valid_pairs=pairs,
+                        outcome_wide=outcome_wide,
+                        cohort_masks=cohort_masks,
+                        never_treated_mask=never_treated_mask,
+                        period_to_col=period_to_col,
+                        period_1_col=effective_p1_col,
+                        cohort_fractions=cohort_fractions,
+                        covariate_matrix=covariate_matrix,
+                        bandwidth=self.kernel_bandwidth,
+                    )
 
-                    # Efficient weights
-                    weights, _, cond_num = compute_efficient_weights(omega)
-                    stored_weights[(g, t)] = weights
-                    if omega.size > 0:
-                        stored_cond[(g, t)] = cond_num
+                    # Per-unit weights: (n_units, H)
+                    per_unit_w = compute_per_unit_weights(omega_cond)
 
-                    # ATT(g,t) = w @ y_hat
-                    att_gt = float(weights @ y_hat) if len(weights) > 0 else np.nan
+                    # ATT = mean_i( w(X_i) @ gen_out[i] )
+                    if per_unit_w.shape[1] > 0:
+                        att_gt = float(np.mean(np.sum(per_unit_w * gen_out, axis=1)))
+                    else:
+                        att_gt = np.nan
 
-                    # EIF from DR generated outcomes
-                    eif_vals = compute_eif_cov(weights, gen_out, y_hat, n_units)
+                    # EIF with per-unit weights (Remark 4.2: plug-in valid)
+                    eif_vals = compute_eif_cov(per_unit_w, gen_out, y_hat, n_units)
                     eif_by_gt[(g, t)] = eif_vals
                 else:
                     # No-covariates path (closed-form)
@@ -691,7 +723,10 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             influence_functions=None,  # can store full EIF matrix if needed
             bootstrap_results=bootstrap_results,
             estimation_path="dr" if use_covariates else "nocov",
-            pscore_trim=self.pscore_trim,
+            sieve_k_max=self.sieve_k_max,
+            sieve_criterion=self.sieve_criterion,
+            ratio_clip=self.ratio_clip,
+            kernel_bandwidth=self.kernel_bandwidth,
         )
         self.is_fitted_ = True
         return self.results_

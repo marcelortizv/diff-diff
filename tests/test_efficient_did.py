@@ -1186,19 +1186,23 @@ class TestCovariateValidation:
         with pytest.raises(ValueError, match="non-finite"):
             EfficientDiD().fit(df, "y", "unit", "time", "first_treat", covariates=["x1"])
 
-    def test_pscore_trim_validation(self):
-        with pytest.raises(ValueError, match="pscore_trim"):
-            EfficientDiD(pscore_trim=0.0)
-        with pytest.raises(ValueError, match="pscore_trim"):
-            EfficientDiD(pscore_trim=0.5)
-        with pytest.raises(ValueError, match="pscore_trim"):
-            EfficientDiD(pscore_trim=-0.1)
+    def test_ratio_clip_validation(self):
+        with pytest.raises(ValueError, match="ratio_clip"):
+            EfficientDiD(ratio_clip=0.5)
+        with pytest.raises(ValueError, match="ratio_clip"):
+            EfficientDiD(ratio_clip=1.0)
 
-    def test_pscore_trim_in_get_params(self):
-        edid = EfficientDiD(pscore_trim=0.05)
+    def test_sieve_criterion_validation(self):
+        with pytest.raises(ValueError, match="sieve_criterion"):
+            EfficientDiD(sieve_criterion="invalid")
+
+    def test_new_params_in_get_params(self):
+        edid = EfficientDiD(sieve_k_max=3, sieve_criterion="aic", ratio_clip=10.0)
         params = edid.get_params()
-        assert "pscore_trim" in params
-        assert params["pscore_trim"] == 0.05
+        assert params["sieve_k_max"] == 3
+        assert params["sieve_criterion"] == "aic"
+        assert params["ratio_clip"] == 10.0
+        assert "kernel_bandwidth" in params
 
     def test_time_varying_covariates_raises(self):
         df = _make_covariate_panel()
@@ -1308,21 +1312,12 @@ class TestCovariatesEdgeCases:
         )
         assert np.isfinite(result.overall_att)
 
-    def test_logit_failure_fallback(self):
-        """Logit failure should fall back to population fraction ratio with warning."""
-        from unittest.mock import patch
-
+    def test_sieve_ratio_produces_valid_results(self):
+        """Sieve ratio estimation produces finite ATT with valid ratios."""
         df = _make_covariate_panel(n_units=300, seed=88)
-        # Patch solve_logit to raise, simulating convergence failure
-        with patch(
-            "diff_diff.efficient_did_covariates.solve_logit",
-            side_effect=np.linalg.LinAlgError("Simulated logit failure"),
-        ):
-            with pytest.warns(UserWarning, match="Propensity score estimation failed"):
-                result = EfficientDiD(pt_assumption="post").fit(
-                    df, "y", "unit", "time", "first_treat", covariates=["x1"]
-                )
-        # Should still produce valid finite results via fallback
+        result = EfficientDiD(pt_assumption="post", sieve_k_max=3, sieve_criterion="bic").fit(
+            df, "y", "unit", "time", "first_treat", covariates=["x1"]
+        )
         assert np.isfinite(result.overall_att)
         assert result.overall_se > 0
 
@@ -1353,8 +1348,12 @@ class TestCovariatesEdgeCases:
             f"vs shuffled={r_shuffled.overall_att:.6f}"
         )
 
-    def test_near_separation_trimming_warns(self):
-        """Near-separation covariates should trigger overlap warning."""
+    def test_extreme_covariates_still_valid(self):
+        """Extreme covariates (near-separation) should still produce valid results.
+
+        The sieve ratio estimator clips extreme ratios; conditional Omega*
+        handles the resulting variation in weights gracefully.
+        """
         df = _make_covariate_panel(n_units=300, seed=77)
         # Create a covariate that nearly separates treated from control
         rng = np.random.default_rng(77)
@@ -1363,17 +1362,14 @@ class TestCovariatesEdgeCases:
         ft_map = df.groupby("unit")["first_treat"].first()
         sep_vals = np.where(
             ft_map.values < np.inf,
-            5.0 + rng.normal(0, 0.01, n_units),  # treated: ~5
-            -5.0 + rng.normal(0, 0.01, n_units),  # control: ~-5
+            5.0 + rng.normal(0, 0.01, n_units),
+            -5.0 + rng.normal(0, 0.01, n_units),
         )
         sep_map = dict(zip(units, sep_vals))
         df["x_sep"] = df["unit"].map(sep_map)
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            result = EfficientDiD(pt_assumption="post").fit(
-                df, "y", "unit", "time", "first_treat", covariates=["x_sep"]
-            )
-        # Should still produce valid results despite trimming
+        result = EfficientDiD(pt_assumption="post").fit(
+            df, "y", "unit", "time", "first_treat", covariates=["x_sep"]
+        )
         assert np.isfinite(result.overall_att)
         assert result.overall_se > 0
 

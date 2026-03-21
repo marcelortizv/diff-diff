@@ -105,7 +105,10 @@ class EfficientDiDResults:
     influence_functions: Optional["np.ndarray"] = field(default=None, repr=False)
     bootstrap_results: Optional["EDiDBootstrapResults"] = field(default=None, repr=False)
     estimation_path: str = "nocov"
-    pscore_trim: float = 0.01
+    sieve_k_max: Optional[int] = None
+    sieve_criterion: str = "bic"
+    ratio_clip: float = 20.0
+    kernel_bandwidth: Optional[float] = None
 
     def __repr__(self) -> str:
         sig = _get_significance_stars(self.overall_p_value)

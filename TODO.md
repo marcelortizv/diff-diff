@@ -53,8 +53,6 @@ Deferred items from PR reviews that were not addressed before merge.
 | EfficientDiD: warn when cohort share is very small (< 2 units or < 1% of sample) — inverted in Omega*/EIF | `efficient_did_weights.py` | #192 | Low |
 | EfficientDiD: API docs / tutorial page for new public estimator | `docs/` | #192 | Medium |
 | Multi-absorb weighted demeaning needs iterative alternating projections for N > 1 absorbed FE with survey weights; unweighted multi-absorb also uses single-pass (pre-existing, exact only for balanced panels) | `estimators.py` | #218 | Medium |
-| EfficientDiD: sieve-based propensity ratio estimation (Eq 4.1-4.2) with AIC/BIC selection — currently uses standard logit | `efficient_did_covariates.py` | — | Low |
-| EfficientDiD: kernel-smoothed conditional covariance Omega*(X) for X-dependent efficient weights — currently uses unconditional Omega* | `efficient_did_covariates.py` | — | Low |
 | TripleDifference power: `generate_ddd_data` is a fixed 2×2×2 cross-sectional DGP — no multi-period or unbalanced-group support. Add a `generate_ddd_panel_data` for panel DDD power analysis. | `prep_dgp.py`, `power.py` | #208 | Low |
 
 #### Performance

@@ -2,7 +2,8 @@
 Doubly robust math for the Efficient DiD estimator (with covariates).
 
 Implements the with-covariates path from Chen, Sant'Anna & Xie (2025):
-outcome regression via OLS, propensity score ratios via logistic regression,
+outcome regression via OLS, sieve-based propensity score ratios (Eq 4.1-4.2),
+kernel-smoothed conditional Omega*(X) for per-unit efficient weights,
 doubly robust generated outcomes (Eq 4.4), and the efficient influence
 function for analytical standard errors.
 
@@ -10,15 +11,18 @@ All functions are pure (no state), operating on pre-pivoted numpy arrays.
 """
 
 import warnings
-from typing import Dict, List, Tuple
+from itertools import combinations_with_replacement
+from math import comb
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+from scipy.spatial.distance import cdist
 
-from diff_diff.linalg import (
-    _check_propensity_diagnostics,
-    solve_logit,
-    solve_ols,
-)
+from diff_diff.linalg import solve_ols
+
+# ---------------------------------------------------------------------------
+# Outcome regression
+# ---------------------------------------------------------------------------
 
 
 def estimate_outcome_regression(
@@ -52,15 +56,12 @@ def estimate_outcome_regression(
     m_hat : ndarray, shape (n_units,)
         Predicted ``E[Y_t - Y_{tpre} | X]`` for every unit.
     """
-    # Dependent variable: outcome change within the comparison group
     Y_group = outcome_wide[group_mask]
     delta_y = Y_group[:, t_col] - Y_group[:, tpre_col]
 
-    # Design matrix with intercept for the group
     X_group = covariate_matrix[group_mask]
     X_design = np.column_stack([np.ones(len(X_group)), X_group])
 
-    # Fit OLS — we only need coefficients, not vcov
     coef, _, _ = solve_ols(
         X_design,
         delta_y,
@@ -68,15 +69,10 @@ def estimate_outcome_regression(
         rank_deficient_action="warn",
     )
 
-    # Predict for all units
     X_all = np.column_stack([np.ones(len(covariate_matrix)), covariate_matrix])
-
-    # Handle NaN coefficients from rank-deficient fits: set NaN coefs to 0
-    # so prediction degrades gracefully (those terms contribute nothing)
     coef_safe = np.where(np.isfinite(coef), coef, 0.0)
     m_hat = X_all @ coef_safe
 
-    # Guard against non-finite predictions
     non_finite = ~np.isfinite(m_hat)
     if non_finite.any():
         n_bad = int(non_finite.sum())
@@ -91,83 +87,163 @@ def estimate_outcome_regression(
     return m_hat
 
 
-def estimate_propensity_ratio(
+# ---------------------------------------------------------------------------
+# Sieve-based propensity ratio estimation (Eq 4.1-4.2)
+# ---------------------------------------------------------------------------
+
+
+def _polynomial_sieve_basis(X: np.ndarray, degree: int) -> np.ndarray:
+    """Build polynomial sieve basis up to total degree K.
+
+    For d covariates and degree K, includes all monomials
+    ``X_1^{a_1} * ... * X_d^{a_d}`` where ``a_1 + ... + a_d <= K``,
+    including the intercept term (degree 0).
+
+    Standardizes X to zero mean, unit variance for numerical stability.
+
+    Parameters
+    ----------
+    X : ndarray, shape (n, d)
+        Covariate matrix.
+    degree : int
+        Maximum total polynomial degree.
+
+    Returns
+    -------
+    basis : ndarray, shape (n, n_basis)
+        Sieve basis matrix. ``n_basis = C(K+d, d)``.
+    """
+    n, d = X.shape
+
+    # Standardize for numerical stability
+    X_mean = X.mean(axis=0)
+    X_std = X.std(axis=0)
+    X_std[X_std < 1e-10] = 1.0  # avoid division by zero for constant columns
+    X_s = (X - X_mean) / X_std
+
+    # Build monomials: enumerate all (a_1, ..., a_d) with sum <= degree
+    columns = [np.ones(n)]  # degree-0 (intercept)
+    for total_deg in range(1, degree + 1):
+        for exponents in combinations_with_replacement(range(d), total_deg):
+            col = np.ones(n)
+            for idx in exponents:
+                col = col * X_s[:, idx]
+            columns.append(col)
+
+    return np.column_stack(columns)
+
+
+def estimate_propensity_ratio_sieve(
     covariate_matrix: np.ndarray,
     mask_g: np.ndarray,
     mask_gp: np.ndarray,
-    pscore_trim: float = 0.01,
+    k_max: Optional[int] = None,
+    criterion: str = "bic",
+    ratio_clip: float = 20.0,
 ) -> np.ndarray:
-    r"""Estimate propensity score ratio r_{g,g'}(X) = p_g(X) / p_{g'}(X).
+    r"""Estimate propensity ratio via sieve convex minimization (Eq 4.1-4.2).
 
-    Fits binary logistic regression on units in ``{g, g'}`` with ``D=1``
-    for ``G=g`` and ``D=0`` for ``G=g'``.  The fitted probability is
-    ``pscore = P(G=g | G in {g,g'}, X)``, and the ratio is computed as
-    ``pscore / (1 - pscore)`` (conditional odds).
+    Solves for each sieve degree K = 1, ..., k_max:
 
-    On logit failure (convergence, separation, LinAlgError), falls back to
-    the unconditional population fraction ratio ``n_g / n_{g'}``.
+    .. math::
+        \hat\beta_K = \arg\min_{\beta} \frac{1}{n}
+            \sum_i \bigl[ G_{g',i} (\psi^K(X_i)'\beta)^2
+            - 2 G_{g,i} (\psi^K(X_i)'\beta) \bigr]
+
+    The FOC gives a closed-form linear system (no iterative optimization):
+    ``(Psi_{g'}' Psi_{g'}) beta = Psi_g.sum(axis=0)``.
+
+    Selects K via AIC/BIC: ``IC(K) = 2*loss(K) + C_n*K/n``.
+
+    On singular basis: tries lower K.  Short-circuits r_{g,g}(X) = 1.
 
     Parameters
     ----------
     covariate_matrix : ndarray, shape (n_units, n_covariates)
-        Unit-level covariates.
     mask_g : ndarray of bool, shape (n_units,)
-        Mask for the target treatment group.
+        Target treatment group mask.
     mask_gp : ndarray of bool, shape (n_units,)
-        Mask for the comparison group.
-    pscore_trim : float, default 0.01
-        Propensity scores are clipped to ``[pscore_trim, 1-pscore_trim]``
-        before ratio computation.
+        Comparison group mask.
+    k_max : int or None
+        Maximum polynomial degree. None = ``min(floor(n_gp^{1/5}), 5)``.
+    criterion : str
+        ``"aic"`` or ``"bic"``.
+    ratio_clip : float
+        Clip ratios to ``[1/ratio_clip, ratio_clip]``.
 
     Returns
     -------
     ratio : ndarray, shape (n_units,)
-        Estimated ``r_{g,g'}(X_i)`` for every unit (extrapolated from
-        the fit on ``{g, g'}`` units).
+        Estimated ``r_{g,g'}(X_i)`` for every unit.
     """
-    n_g = int(np.sum(mask_g))
-    n_gp = int(np.sum(mask_gp))
     n_units = len(covariate_matrix)
+    n_gp = int(np.sum(mask_gp))
 
     # Short-circuit: r_{g,g}(X) = 1 for same-cohort comparisons (PT-All)
     if np.array_equal(mask_g, mask_gp):
         return np.ones(n_units)
 
-    # Stack covariates for the two groups
-    combined_mask = mask_g | mask_gp
-    X_combined = covariate_matrix[combined_mask]
-    # Treatment indicator: derive from mask_g so labels align with row order
-    D = mask_g[combined_mask].astype(float)
+    d = covariate_matrix.shape[1]
 
-    try:
-        beta, pscore_combined = solve_logit(X_combined, D, rank_deficient_action="warn")
-        _check_propensity_diagnostics(pscore_combined, pscore_trim)
+    # Default k_max: use comparison group size, not total n
+    if k_max is None:
+        k_max = min(int(n_gp**0.2), 5)
+    k_max = max(k_max, 1)
 
-        # Predict for all units using the logit coefficients
-        X_all_with_intercept = np.column_stack([np.ones(n_units), covariate_matrix])
-        # Handle NaN coefficients from rank-deficient fits
-        beta_safe = np.where(np.isfinite(beta), beta, 0.0)
-        z = X_all_with_intercept @ beta_safe
-        z = np.clip(z, -500, 500)
-        pscore_all = 1.0 / (1.0 + np.exp(-z))
+    # Penalty multiplier for IC
+    n_total = int(np.sum(mask_g)) + n_gp
+    c_n = 2.0 if criterion == "aic" else np.log(max(n_total, 2))
 
-    except (np.linalg.LinAlgError, ValueError):
-        warnings.warn(
-            "Propensity score estimation failed for a group pair. "
-            "Falling back to unconditional population fraction ratio.",
-            UserWarning,
-            stacklevel=2,
-        )
-        # Fallback: constant ratio n_g / n_gp for all units
-        flat_p = n_g / (n_g + n_gp) if (n_g + n_gp) > 0 else 0.5
-        pscore_all = np.full(n_units, flat_p)
+    best_ic = np.inf
+    best_ratio = np.ones(n_units)  # fallback: constant ratio 1
 
-    # Trim propensity scores
-    pscore_all = np.clip(pscore_all, pscore_trim, 1.0 - pscore_trim)
+    for K in range(1, k_max + 1):
+        n_basis = comb(K + d, d)
 
-    # Ratio: pscore / (1 - pscore) = conditional odds
-    ratio = pscore_all / (1.0 - pscore_all)
-    return ratio
+        # Cap K so basis dimension < n_gp (avoid singular system)
+        if n_basis >= n_gp:
+            break
+
+        basis_all = _polynomial_sieve_basis(covariate_matrix, K)
+        Psi_gp = basis_all[mask_gp]  # (n_gp, n_basis)
+        Psi_g = basis_all[mask_g]  # (n_g, n_basis)
+
+        # Normal equations: (Psi_gp' Psi_gp) beta = Psi_g.sum(axis=0)
+        A = Psi_gp.T @ Psi_gp
+        b = Psi_g.sum(axis=0)
+
+        try:
+            beta = np.linalg.solve(A, b)
+        except np.linalg.LinAlgError:
+            continue  # singular — try next K
+
+        # Check for NaN/Inf in solution
+        if not np.all(np.isfinite(beta)):
+            continue
+
+        # Predicted ratio for all units
+        r_hat = basis_all @ beta
+
+        # IC selection: loss at optimum = -(1/n) * b'beta
+        # Derivation: L(beta) = (1/n)(beta'A*beta - 2*b'beta).
+        # At optimum A*beta = b, so beta'A*beta = b'beta.
+        # Therefore L = (1/n)(b'beta - 2*b'beta) = -(1/n)*b'beta.
+        loss = -float(b @ beta) / n_total
+        ic_val = 2.0 * loss + c_n * n_basis / n_total
+
+        if ic_val < best_ic:
+            best_ic = ic_val
+            best_ratio = r_hat.copy()
+
+    # Clip: population ratio p_g(X)/p_{g'}(X) is non-negative
+    best_ratio = np.clip(best_ratio, 1.0 / ratio_clip, ratio_clip)
+
+    return best_ratio
+
+
+# ---------------------------------------------------------------------------
+# Doubly robust generated outcomes (Eq 4.4)
+# ---------------------------------------------------------------------------
 
 
 def compute_generated_outcomes_cov(
@@ -200,29 +276,6 @@ def compute_generated_outcomes_cov(
             -r_{g,g'}(X_i) * (G_{g',i} / pi_g)
                 * (Y_{i,tpre} - Y_{i,1} - m_{g',tpre,1}(X_i))
 
-    Parameters
-    ----------
-    target_g, target_t : float
-        Target group-time.
-    valid_pairs : list of (g', t_pre)
-        Valid comparison pairs.
-    outcome_wide : ndarray, shape (n_units, n_periods)
-    cohort_masks : dict
-        ``{cohort: bool_mask}``
-    never_treated_mask : ndarray of bool
-    period_to_col : dict
-    period_1_col : int
-        Column index of effective baseline period (Y_1).
-    cohort_fractions : dict
-        ``{cohort: n_cohort / n}``
-    m_hat_cache : dict
-        Outcome regression predictions, keyed by
-        ``(comparison_group, t_col, tpre_col)``.
-    r_hat_cache : dict
-        Propensity score ratios, keyed by ``(target_g, comparison_g)``.
-    never_treated_val : float
-        Sentinel for the never-treated group.
-
     Returns
     -------
     gen_out : ndarray, shape (n_units, H)
@@ -244,23 +297,18 @@ def compute_generated_outcomes_cov(
     for j, (gp, tpre) in enumerate(valid_pairs):
         tpre_col = period_to_col[tpre]
 
-        # Retrieve cached nuisance parameters
-        # m_{inf, t, tpre}(X)
         m_inf_t_tpre = m_hat_cache[(never_treated_val, t_col, tpre_col)]
-        # m_{g', tpre, 1}(X)
         m_gp_tpre_1 = m_hat_cache[(gp, tpre_col, y1_col)]
-        # r_{g, inf}(X)
         r_g_inf = r_hat_cache[(target_g, never_treated_val)]
-        # r_{g, g'}(X)
         r_g_gp = r_hat_cache[(target_g, gp)]
 
-        # ------- Term 1: treated units (G = g) -------
+        # Term 1: treated units
         if pi_g > 0:
             Y_t_minus_Y1 = outcome_wide[g_mask, t_col] - outcome_wide[g_mask, y1_col]
             residual_treated = Y_t_minus_Y1 - m_inf_t_tpre[g_mask] - m_gp_tpre_1[g_mask]
             gen_out[g_mask, j] += (1.0 / pi_g) * residual_treated
 
-        # ------- Term 2: never-treated units (G = inf) -------
+        # Term 2: never-treated units
         pi_inf = cohort_fractions.get(never_treated_val, 0.0)
         if pi_inf > 0:
             Y_t_minus_Ytpre = (
@@ -271,7 +319,7 @@ def compute_generated_outcomes_cov(
                 r_g_inf[never_treated_mask] * (1.0 / pi_g) * residual_inf
             )
 
-        # ------- Term 3: comparison cohort units (G = g') -------
+        # Term 3: comparison cohort units
         if np.isinf(gp):
             gp_mask = never_treated_mask
         else:
@@ -285,36 +333,294 @@ def compute_generated_outcomes_cov(
     return gen_out
 
 
-def compute_omega_star_cov(
-    generated_outcomes: np.ndarray,
-) -> np.ndarray:
-    """Unconditional sample covariance of per-unit DR generated outcomes.
+# ---------------------------------------------------------------------------
+# Kernel-smoothed conditional Omega* (Eq 3.12)
+# ---------------------------------------------------------------------------
 
-    Uses ``ddof=1`` for consistency with ``_sample_cov()`` in the nocov path.
+
+def _silverman_bandwidth(X: np.ndarray) -> float:
+    """Silverman's rule-of-thumb bandwidth for d-dimensional X.
+
+    ``h = (4 / (d + 2))^{1/(d+4)} * median_std * n^{-1/(d+4)}``
+    """
+    n, d = X.shape
+    stds = np.std(X, axis=0)
+    stds[stds < 1e-10] = 1.0
+    median_std = float(np.median(stds))
+    h = (4.0 / (d + 2)) ** (1.0 / (d + 4)) * median_std * n ** (-1.0 / (d + 4))
+    return max(h, 1e-10)
+
+
+def _kernel_weights_matrix(
+    X_all: np.ndarray,
+    X_group: np.ndarray,
+    bandwidth: float,
+) -> np.ndarray:
+    """Gaussian kernel weight matrix.
+
+    Returns shape ``(n_all, n_group)`` where entry ``[i, j]`` is the
+    normalized kernel weight ``K_h(X_group[j], X_all[i])``.
+
+    Each row sums to 1 (Nadaraya-Watson normalization).
+    """
+    # Squared distances: (n_all, n_group)
+    dist_sq = cdist(X_all, X_group, metric="sqeuclidean")
+    # Gaussian kernel
+    raw = np.exp(-dist_sq / (2.0 * bandwidth**2))
+    # Normalize each row
+    row_sums = raw.sum(axis=1, keepdims=True)
+    row_sums[row_sums < 1e-15] = 1.0  # avoid division by zero
+    return raw / row_sums
+
+
+def _kernel_weighted_cov(
+    A: np.ndarray,
+    B: np.ndarray,
+    W: np.ndarray,
+) -> np.ndarray:
+    """Kernel-weighted local covariance.
 
     Parameters
     ----------
-    generated_outcomes : ndarray, shape (n_units, H)
-        Per-unit generated outcomes from :func:`compute_generated_outcomes_cov`.
+    A : ndarray, shape (n_group,)
+    B : ndarray, shape (n_group,)
+    W : ndarray, shape (n_all, n_group)
+        Normalized kernel weights (rows sum to 1).
 
     Returns
     -------
-    omega : ndarray, shape (H, H)
-        Covariance matrix.
+    cov : ndarray, shape (n_all,)
+        ``Cov_hat(A, B | X_i)`` for each target unit i.
     """
-    n, H = generated_outcomes.shape
+    # Local means: (n_all,)
+    A_local = W @ A
+    B_local = W @ B
+
+    # Centered products: (n_all, n_group)
+    A_centered = A[np.newaxis, :] - A_local[:, np.newaxis]  # (n_all, n_group)
+    B_centered = B[np.newaxis, :] - B_local[:, np.newaxis]
+
+    # Weighted local covariance: (n_all,)
+    cov = np.sum(W * A_centered * B_centered, axis=1)
+    return cov
+
+
+def compute_omega_star_conditional(
+    target_g: float,
+    target_t: float,
+    valid_pairs: List[Tuple[float, float]],
+    outcome_wide: np.ndarray,
+    cohort_masks: Dict[float, np.ndarray],
+    never_treated_mask: np.ndarray,
+    period_to_col: Dict[float, int],
+    period_1_col: int,
+    cohort_fractions: Dict[float, float],
+    covariate_matrix: np.ndarray,
+    bandwidth: Optional[float] = None,
+    never_treated_val: float = np.inf,
+) -> np.ndarray:
+    r"""Kernel-smoothed conditional Omega\*(X_i) for each unit (Eq 3.12).
+
+    Estimates the five-term conditional covariance matrix using
+    Nadaraya-Watson kernel regression with Gaussian kernel and
+    local (kernel-weighted) means.
+
+    Parameters
+    ----------
+    target_g, target_t : float
+        Target group-time.
+    valid_pairs : list of (g', t_pre)
+    outcome_wide : ndarray, shape (n_units, n_periods)
+    cohort_masks, never_treated_mask, period_to_col, period_1_col,
+    cohort_fractions : pre-computed data structures
+    covariate_matrix : ndarray, shape (n_units, n_covariates)
+    bandwidth : float or None
+        Kernel bandwidth. None = Silverman's rule.
+    never_treated_val : float
+
+    Returns
+    -------
+    omega : ndarray, shape (n_units, H, H)
+        Per-unit conditional covariance matrices.
+    """
+    H = len(valid_pairs)
+    n_units = outcome_wide.shape[0]
     if H == 0:
-        return np.empty((0, 0))
-    if n < 2:
-        return np.zeros((H, H))
+        return np.empty((n_units, 0, 0))
 
-    # Demean
-    means = generated_outcomes.mean(axis=0)  # shape (H,)
-    centered = generated_outcomes - means  # shape (n, H)
+    if bandwidth is None:
+        bandwidth = _silverman_bandwidth(covariate_matrix)
 
-    # Sample covariance with ddof=1
-    omega = (centered.T @ centered) / (n - 1)
+    t_col = period_to_col[target_t]
+    y1_col = period_1_col
+
+    g_mask = cohort_masks[target_g]
+    pi_g = cohort_fractions[target_g]
+
+    Y_inf = outcome_wide[never_treated_mask]
+    X_inf = covariate_matrix[never_treated_mask]
+    pi_inf = cohort_fractions.get(never_treated_val, 0.0)
+
+    # Scalability warning
+    if n_units > 5000:
+        warnings.warn(
+            f"Conditional Omega* estimation with n={n_units} is expensive "
+            f"(O(n^2 * H^2)). Consider using fewer units or unconditional Omega*.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    # Pre-compute kernel weight matrices per group (reused across pairs)
+    # W_g[i, j] = normalized K_h(X_g[j], X_all[i])
+    Y_g = outcome_wide[g_mask]
+    X_g = covariate_matrix[g_mask]
+    Yg_t_minus_1 = Y_g[:, t_col] - Y_g[:, y1_col]
+
+    W_g = _kernel_weights_matrix(covariate_matrix, X_g, bandwidth)
+    W_inf = _kernel_weights_matrix(covariate_matrix, X_inf, bandwidth)
+
+    # Pre-compute per-pair differenced arrays for never-treated
+    inf_t_minus_tpre = {}
+    for _, tpre in valid_pairs:
+        tpre_col = period_to_col[tpre]
+        if tpre_col not in inf_t_minus_tpre:
+            inf_t_minus_tpre[tpre_col] = Y_inf[:, t_col] - Y_inf[:, tpre_col]
+
+    # Pre-compute kernel weights for comparison cohorts
+    W_gp_cache: Dict[float, np.ndarray] = {}
+    gp_outcomes_cache: Dict[float, np.ndarray] = {}
+
+    omega = np.zeros((n_units, H, H))
+
+    # Term 1: (1/pi_g) * Cov(Y_t-Y_1, Y_t-Y_1 | G=g, X) — same for all (j,k)
+    if pi_g > 0:
+        term1 = (1.0 / pi_g) * _kernel_weighted_cov(Yg_t_minus_1, Yg_t_minus_1, W_g)
+    else:
+        term1 = np.zeros(n_units)
+
+    for j in range(H):
+        gp_j, tpre_j = valid_pairs[j]
+        tpre_j_col = period_to_col[tpre_j]
+
+        for k in range(j, H):
+            gp_k, tpre_k = valid_pairs[k]
+            tpre_k_col = period_to_col[tpre_k]
+
+            val = term1.copy()
+
+            # Term 2: (1/pi_inf) * Cov(Y_t-Y_{tpre_j}, Y_t-Y_{tpre_k} | G=inf, X)
+            if pi_inf > 0:
+                val += (1.0 / pi_inf) * _kernel_weighted_cov(
+                    inf_t_minus_tpre[tpre_j_col],
+                    inf_t_minus_tpre[tpre_k_col],
+                    W_inf,
+                )
+
+            # Term 3: -1{g==g'_j}/pi_g * Cov(Y_t-Y_1, Y_{tpre_j}-Y_1 | G=g, X)
+            if gp_j == target_g and pi_g > 0:
+                g_tpre_j = Y_g[:, tpre_j_col] - Y_g[:, y1_col]
+                val -= (1.0 / pi_g) * _kernel_weighted_cov(Yg_t_minus_1, g_tpre_j, W_g)
+
+            # Term 4: -1{g==g'_k}/pi_g * Cov(Y_t-Y_1, Y_{tpre_k}-Y_1 | G=g, X)
+            if gp_k == target_g and pi_g > 0:
+                g_tpre_k = Y_g[:, tpre_k_col] - Y_g[:, y1_col]
+                val -= (1.0 / pi_g) * _kernel_weighted_cov(Yg_t_minus_1, g_tpre_k, W_g)
+
+            # Term 5: 1{g'_j==g'_k}/pi_{g'_j} * Cov(Y_{tpre_j}-Y_1, Y_{tpre_k}-Y_1 | G=g'_j, X)
+            if gp_j == gp_k:
+                if np.isinf(gp_j):
+                    if pi_inf > 0:
+                        inf_tpre_j = Y_inf[:, tpre_j_col] - Y_inf[:, y1_col]
+                        inf_tpre_k = Y_inf[:, tpre_k_col] - Y_inf[:, y1_col]
+                        val += (1.0 / pi_inf) * _kernel_weighted_cov(inf_tpre_j, inf_tpre_k, W_inf)
+                else:
+                    pi_gp_j = cohort_fractions.get(gp_j, 0.0)
+                    if pi_gp_j > 0:
+                        if gp_j not in W_gp_cache:
+                            X_gp = covariate_matrix[cohort_masks[gp_j]]
+                            W_gp_cache[gp_j] = _kernel_weights_matrix(
+                                covariate_matrix, X_gp, bandwidth
+                            )
+                            gp_outcomes_cache[gp_j] = outcome_wide[cohort_masks[gp_j]]
+                        W_gp = W_gp_cache[gp_j]
+                        Y_gp = gp_outcomes_cache[gp_j]
+                        gp_tpre_j = Y_gp[:, tpre_j_col] - Y_gp[:, y1_col]
+                        gp_tpre_k = Y_gp[:, tpre_k_col] - Y_gp[:, y1_col]
+                        val += (1.0 / pi_gp_j) * _kernel_weighted_cov(gp_tpre_j, gp_tpre_k, W_gp)
+
+            omega[:, j, k] = val
+            if j != k:
+                omega[:, k, j] = val
+
     return omega
+
+
+# ---------------------------------------------------------------------------
+# Per-unit efficient weights from conditional Omega*
+# ---------------------------------------------------------------------------
+
+
+def compute_per_unit_weights(
+    omega_conditional: np.ndarray,
+    cond_threshold: float = 1e12,
+) -> np.ndarray:
+    """Per-unit efficient weights from conditional Omega* inverse.
+
+    ``w(X_i) = 1' Omega*(X_i)^{-1} / (1' Omega*(X_i)^{-1} 1)``
+
+    Falls back to pseudoinverse per unit if condition number exceeds threshold.
+
+    Parameters
+    ----------
+    omega_conditional : ndarray, shape (n_units, H, H)
+        Per-unit conditional covariance matrices.
+    cond_threshold : float
+        Condition number threshold for pseudoinverse fallback.
+
+    Returns
+    -------
+    weights : ndarray, shape (n_units, H)
+        Per-unit efficient combination weights (each row sums to 1).
+    """
+    n_units, H, _ = omega_conditional.shape
+    if H == 0:
+        return np.empty((n_units, 0))
+    if H == 1:
+        return np.ones((n_units, 1))
+
+    ones = np.ones(H)
+    weights = np.zeros((n_units, H))
+
+    for i in range(n_units):
+        omega_i = omega_conditional[i]
+
+        if np.allclose(omega_i, 0.0):
+            weights[i] = ones / H
+            continue
+
+        cond = float(np.linalg.cond(omega_i))
+        if cond > cond_threshold:
+            omega_inv = np.linalg.pinv(omega_i)
+        else:
+            try:
+                omega_inv = np.linalg.inv(omega_i)
+            except np.linalg.LinAlgError:
+                omega_inv = np.linalg.pinv(omega_i)
+
+        numerator = ones @ omega_inv
+        denominator = numerator @ ones
+
+        if abs(denominator) < 1e-15:
+            weights[i] = ones / H
+        else:
+            weights[i] = numerator / denominator
+
+    return weights
+
+
+# ---------------------------------------------------------------------------
+# EIF computation
+# ---------------------------------------------------------------------------
 
 
 def compute_eif_cov(
@@ -325,11 +631,16 @@ def compute_eif_cov(
 ) -> np.ndarray:
     """Per-unit efficient influence function from DR generated outcomes.
 
-    ``EIF_i = sum_j w_j * (Y_hat_{j,i} - y_hat_j)``
+    Supports both global weights ``(H,)`` and per-unit weights ``(n_units, H)``.
+
+    The plug-in EIF treats estimated per-unit weights w(X_i) as fixed.
+    This is valid under Neyman orthogonality (Remark 4.2): estimation
+    error in the conditional Omega*(X) weights is second-order and does
+    not affect the first-order asymptotics of the EIF.
 
     Parameters
     ----------
-    weights : ndarray, shape (H,)
+    weights : ndarray, shape (H,) or (n_units, H)
         Efficient combination weights.
     generated_outcomes : ndarray, shape (n_units, H)
         Per-unit generated outcomes.
@@ -343,13 +654,16 @@ def compute_eif_cov(
     eif : ndarray, shape (n_units,)
         EIF value for every unit.
     """
-    H = len(weights)
-    if H == 0:
+    if weights.size == 0:
         return np.zeros(n_units)
 
-    # Demeaned generated outcomes: (n_units, H)
-    centered = generated_outcomes - y_hat_mean
+    centered = generated_outcomes - y_hat_mean  # (n_units, H)
 
-    # Weighted sum across pairs: (n_units,)
-    eif = centered @ weights
+    if weights.ndim == 1:
+        # Global weights: (n_units,) = (n_units, H) @ (H,)
+        eif = centered @ weights
+    else:
+        # Per-unit weights: element-wise multiply then sum
+        eif = np.sum(weights * centered, axis=1)
+
     return eif

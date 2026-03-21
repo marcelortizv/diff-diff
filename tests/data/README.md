@@ -31,4 +31,25 @@ Section 6:
 **Columns:** `unit` (hhidpn), `time` (wave), `outcome` (oop_spend, 2005 dollars), `first_treat` (first_hosp)
 
 **Regeneration:** Requires the Dobkin et al. replication kit (`.gitignore`d as `replication_data/`).
-The extraction logic is documented in the plan file and was executed as a one-time preprocessing step.
+
+```python
+import pandas as pd, numpy as np
+df = pd.read_stata("replication_data/116186-V1/Replication-Kit/HRS/Data/HRS_long.dta")
+sub = df[df["wave"].isin([7, 8, 9, 10, 11])]
+balanced = sub.groupby("hhidpn")["wave"].nunique()
+sub = sub[sub["hhidpn"].isin(balanced[balanced == 5].index)]
+sub = sub[sub["hhidpn"].isin(sub[sub["first_hosp"].notna()]["hhidpn"].unique())]
+fh = sub.groupby("hhidpn")["first_hosp"].first()
+sub = sub[sub["hhidpn"].isin(fh[fh >= 8].index)]
+ages = sub.groupby("hhidpn")["age_hosp"].first()
+sub = sub[sub["hhidpn"].isin(ages[(ages >= 50) & (ages <= 59)].index)]
+sub = sub[sub["wave"] <= 10]
+sub["first_treat"] = sub["first_hosp"].apply(lambda x: np.inf if x == 11 else int(x))
+out = sub[["hhidpn", "wave", "oop_spend", "first_treat"]].copy()
+out.columns = ["unit", "time", "outcome", "first_treat"]
+out["unit"] = out["unit"].astype(int)
+out["time"] = out["time"].astype(int)
+out.sort_values(["unit", "time"]).reset_index(drop=True).to_csv(
+    "tests/data/hrs_edid_validation.csv", index=False
+)
+```

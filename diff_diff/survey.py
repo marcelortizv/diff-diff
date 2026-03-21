@@ -492,6 +492,7 @@ def compute_survey_vcov(
     psu = resolved.psu
 
     legitimate_zero_count = 0
+    _variance_computed = False  # Did any actual variance computation happen?
 
     if strata is None and psu is None:
         # No survey structure beyond weights — use implicit per-observation PSUs
@@ -501,6 +502,7 @@ def compute_survey_vcov(
         centered = scores - psu_mean
         adjustment = n / (n - 1)
         meat = adjustment * (centered.T @ centered)
+        _variance_computed = True
     elif strata is None and psu is not None:
         # No strata, but PSU present — single-stratum cluster-robust
         psu_scores = pd.DataFrame(scores).groupby(psu).sum().values
@@ -523,6 +525,7 @@ def compute_survey_vcov(
                     legitimate_zero_count += 1
             adjustment = (1.0 - f_h) * (n_psu / (n_psu - 1))
             meat = adjustment * (centered.T @ centered)
+            _variance_computed = True
     else:
         # Stratified with or without PSU
         unique_strata = np.unique(strata)
@@ -565,6 +568,7 @@ def compute_survey_vcov(
                     centered = psu_scores_h - _global_psu_mean
                     V_h = centered.T @ centered
                     meat += V_h
+                    _variance_computed = True
                     continue
 
             # FPC
@@ -583,12 +587,17 @@ def compute_survey_vcov(
             adjustment = (1.0 - f_h) * (n_psu_h / (n_psu_h - 1))
             V_h = adjustment * (centered.T @ centered)
             meat += V_h
+            _variance_computed = True
 
-    # Guard: if no stratum contributed variance, check why
+    # Guard: if meat is zero, distinguish legitimate zero from unidentified variance
     if not np.any(meat != 0):
-        if legitimate_zero_count > 0:
-            # All zero variance came from legitimate sources (certainty PSUs or full-census FPC)
+        if _variance_computed or legitimate_zero_count > 0:
+            # Zero meat from actual computation (e.g., identical PSU scores,
+            # perfect fit) or from legitimate zero-variance sources (certainty
+            # PSUs, full-census FPC). Zero vcov is the correct result.
             return np.zeros((k, k))
+        # No variance computation happened (e.g., all strata removed, single
+        # unstratified PSU). Variance is genuinely unidentified.
         return np.full((k, k), np.nan)
 
     # Sandwich: (X'WX)^{-1} meat (X'WX)^{-1}

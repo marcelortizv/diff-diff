@@ -2740,3 +2740,56 @@ class TestRound11Fixes:
                 assert np.isfinite(pe.p_value), (
                     f"Period {period}: finite SE={pe.se} but p_value={pe.p_value}"
                 )
+
+
+class TestRound13Fixes:
+    """Tests for PR #218 review round 13: zero-score-dispersion vcov."""
+
+    def test_zero_score_dispersion_weights_only(self):
+        """Weights-only design with identical scores returns zero vcov, not NaN."""
+        np.random.seed(42)
+        n = 20
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        # All residuals zero → all scores zero → meat is zero from computation
+        residuals = np.zeros(n)
+        weights = np.ones(n)
+
+        resolved = ResolvedSurveyDesign(
+            weights=weights,
+            weight_type="pweight",
+            strata=None,
+            psu=None,
+            fpc=None,
+            n_strata=0,
+            n_psu=0,
+            lonely_psu="remove",
+        )
+        vcov = compute_survey_vcov(X, residuals, resolved=resolved)
+        # Zero residuals → zero scores → zero meat → zero vcov (not NaN)
+        np.testing.assert_array_equal(vcov, np.zeros((2, 2)))
+
+    def test_zero_score_dispersion_stratified_psu(self):
+        """Stratified PSU design with identical PSU scores returns zero vcov."""
+        np.random.seed(42)
+        n = 30
+        strata = np.repeat([0, 1, 2], 10)
+        psu = np.tile(np.arange(5), 6)  # 5 PSUs per stratum
+
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        # All residuals zero → zero dispersion within each stratum
+        residuals = np.zeros(n)
+        weights = np.ones(n)
+
+        resolved = ResolvedSurveyDesign(
+            weights=weights,
+            weight_type="pweight",
+            strata=strata,
+            psu=psu,
+            fpc=None,
+            n_strata=3,
+            n_psu=15,
+            lonely_psu="remove",
+        )
+        vcov = compute_survey_vcov(X, residuals, resolved=resolved)
+        # Zero residuals → zero scores → zero V_h per stratum → zero vcov
+        np.testing.assert_array_equal(vcov, np.zeros((2, 2)))

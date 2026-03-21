@@ -757,11 +757,9 @@ def _render_group_time_heatmap_plotly(
 
     go = _require_plotly()
 
-    # Map matplotlib cmap names to plotly
+    # Pass cmap name through to plotly unchanged — plotly supports the same
+    # diverging colorscale names as matplotlib (RdBu, RdBu_r, etc.)
     plotly_cmap = cmap
-    cmap_mapping = {"RdBu_r": "RdBu", "RdBu": "RdBu_r", "coolwarm": "RdBu"}
-    if cmap in cmap_mapping:
-        plotly_cmap = cmap_mapping[cmap]
 
     # Build text annotations
     text = None
@@ -777,10 +775,11 @@ def _render_group_time_heatmap_plotly(
                     row.append(f"{val:{fmt}}")
             text.append(row)
 
-    display = effect_matrix.copy()
+    # Build significance mask for overlay (do NOT replace with NaN — that
+    # conflates "insignificant" with "missing cell")
+    sig_mask = None
     if mask_insignificant and p_matrix is not None:
         sig_mask = p_matrix > alpha
-        display = np.where(sig_mask, np.nan, display)
 
     # Center the colorscale
     finite_vals = effect_matrix[np.isfinite(effect_matrix)]
@@ -791,9 +790,10 @@ def _render_group_time_heatmap_plotly(
     else:
         zmin, zmax = -1, 1
 
+    # Main heatmap — always shows all values (insignificant cells greyed via opacity)
     fig = go.Figure(
         data=go.Heatmap(
-            z=display,
+            z=effect_matrix,
             x=[str(t) for t in time_labels],
             y=[str(g) for g in group_labels],
             colorscale=plotly_cmap,
@@ -804,6 +804,20 @@ def _render_group_time_heatmap_plotly(
             colorbar=dict(title="Effect"),
         )
     )
+
+    # Grey overlay for insignificant cells (preserves underlying value)
+    if sig_mask is not None and np.any(sig_mask):
+        grey_z = np.where(sig_mask, 1.0, np.nan)
+        fig.add_trace(
+            go.Heatmap(
+                z=grey_z,
+                x=[str(t) for t in time_labels],
+                y=[str(g) for g in group_labels],
+                colorscale=[[0, "rgba(255,255,255,0.6)"], [1, "rgba(255,255,255,0.6)"]],
+                showscale=False,
+                hoverinfo="skip",
+            )
+        )
 
     _plotly_default_layout(
         fig,

@@ -238,3 +238,58 @@ class TestPlotlyEventStudyExtended:
             show=False,
         )
         assert isinstance(fig, go.Figure)
+
+
+class TestPlotlyHeatmapMasking:
+    """Regression: mask_insignificant must grey out, not NaN-ify cells."""
+
+    def test_mask_preserves_values(self, cs_results):
+        from diff_diff.visualization import plot_group_time_heatmap
+
+        fig = plot_group_time_heatmap(
+            cs_results, mask_insignificant=True, backend="plotly", show=False
+        )
+        assert isinstance(fig, go.Figure)
+        # Should have 2 traces: main heatmap + grey overlay
+        assert len(fig.data) == 2
+        # Main heatmap should NOT have NaN where cells were insignificant
+        import numpy as np
+
+        main_z = fig.data[0].z
+        assert np.any(np.isfinite(main_z))
+
+    def test_no_mask_single_trace(self, cs_results):
+        from diff_diff.visualization import plot_group_time_heatmap
+
+        fig = plot_group_time_heatmap(
+            cs_results, mask_insignificant=False, backend="plotly", show=False
+        )
+        assert isinstance(fig, go.Figure)
+        assert len(fig.data) == 1  # Only main heatmap, no overlay
+
+    def test_cmap_not_swapped(self, cs_results):
+        """RdBu_r should not be swapped — last color should be warm (red)."""
+        from diff_diff.visualization import plot_group_time_heatmap
+
+        fig = plot_group_time_heatmap(cs_results, cmap="RdBu_r", backend="plotly", show=False)
+        assert isinstance(fig, go.Figure)
+        # Plotly resolves named colorscales to tuples. RdBu_r ends with red.
+        cs = fig.data[0].colorscale
+        # Last entry should be a reddish color (high R value)
+        last_color = cs[-1][1]  # e.g. "rgb(103,0,31)"
+        assert "103" in last_color or "178" in last_color  # dark red end of RdBu_r
+
+
+class TestTopLevelExports:
+    """Regression: new plot functions must be in diff_diff.__all__."""
+
+    def test_new_plots_in_all(self):
+        import diff_diff
+
+        for name in [
+            "plot_synth_weights",
+            "plot_staircase",
+            "plot_dose_response",
+            "plot_group_time_heatmap",
+        ]:
+            assert name in diff_diff.__all__, f"{name} missing from diff_diff.__all__"

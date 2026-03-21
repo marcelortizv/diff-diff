@@ -259,6 +259,10 @@ __all__ = [
     "plot_group_effects",
     "plot_sensitivity",
     "plot_honest_event_study",
+    "plot_synth_weights",
+    "plot_staircase",
+    "plot_dose_response",
+    "plot_group_time_heatmap",
     # Parallel trends testing
     "check_parallel_trends",
     "check_parallel_trends_robust",

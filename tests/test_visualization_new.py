@@ -593,6 +593,50 @@ class TestPlotlyColorHandling:
         fig = plot_staircase(cs_results, color="teal", backend="plotly", show=False)
         assert isinstance(fig, go.Figure)
 
+    def test_event_study_string_periods(self):
+        """Regression: plotly event study must handle string period labels."""
+        import plotly.graph_objects as go
+
+        from diff_diff import plot_event_study
+
+        effects = {"pre2": 0.1, "pre1": 0.0, "post1": 0.5, "post2": 0.6}
+        se = {"pre2": 0.1, "pre1": 0.0, "post1": 0.15, "post2": 0.15}
+        fig = plot_event_study(
+            effects=effects,
+            se=se,
+            reference_period="pre1",
+            pre_periods=["pre2", "pre1"],
+            post_periods=["post1", "post2"],
+            shade_pre=True,
+            backend="plotly",
+            show=False,
+        )
+        assert isinstance(fig, go.Figure)
+
+    def test_event_study_timestamp_periods(self):
+        """Regression: plotly event study must handle pd.Timestamp periods."""
+        import plotly.graph_objects as go
+
+        from diff_diff import plot_event_study
+
+        p1 = pd.Timestamp("2020-01-01")
+        p2 = pd.Timestamp("2020-02-01")
+        p3 = pd.Timestamp("2020-03-01")
+        p4 = pd.Timestamp("2020-04-01")
+        effects = {p1: 0.1, p2: 0.0, p3: 0.5, p4: 0.6}
+        se = {p1: 0.1, p2: 0.0, p3: 0.15, p4: 0.15}
+        fig = plot_event_study(
+            effects=effects,
+            se=se,
+            reference_period=p2,
+            pre_periods=[p1, p2],
+            post_periods=[p3, p4],
+            shade_pre=True,
+            backend="plotly",
+            show=False,
+        )
+        assert isinstance(fig, go.Figure)
+
     def test_three_digit_hex(self):
         from diff_diff.visualization._common import _color_to_rgba
 

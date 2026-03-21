@@ -445,13 +445,19 @@ def _render_event_study_plotly(
     ci_upper = df["ci_upper"].tolist()
     is_ref = df["is_reference"].tolist()
 
+    # Map periods to ordinal x positions (matching matplotlib renderer).
+    # This ensures string, timestamp, and other non-numeric periods work correctly.
+    period_to_x = {p: i for i, p in enumerate(periods)}
+    x_vals = list(range(len(periods)))
+    tick_labels = [str(p) for p in periods]
+
     # Shade pre-treatment region
     if shade_pre and pre_periods is not None:
-        pre_in_plot = [p for p in pre_periods if p in periods]
-        if pre_in_plot:
+        pre_x = [period_to_x[p] for p in pre_periods if p in period_to_x]
+        if pre_x:
             fig.add_vrect(
-                x0=min(pre_in_plot) - 0.5,
-                x1=max(pre_in_plot) + 0.5,
+                x0=min(pre_x) - 0.5,
+                x1=max(pre_x) + 0.5,
                 fillcolor=_color_to_rgba(shade_color, 0.5),
                 line_width=0,
                 layer="below",
@@ -462,19 +468,21 @@ def _render_event_study_plotly(
         fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1)
 
     # Reference line
-    if show_reference_line and reference_period is not None and reference_period in periods:
-        fig.add_vline(x=reference_period, line_dash="dot", line_color="gray", line_width=1)
+    if show_reference_line and reference_period is not None and reference_period in period_to_x:
+        fig.add_vline(
+            x=period_to_x[reference_period], line_dash="dot", line_color="gray", line_width=1
+        )
 
     # CI band (filled area)
     has_ci = [not (np.isnan(lo) or np.isnan(hi)) for lo, hi in zip(ci_lower, ci_upper)]
-    ci_periods = [p for p, h in zip(periods, has_ci) if h]
+    ci_x = [period_to_x[p] for p, h in zip(periods, has_ci) if h]
     ci_lo = [lo for lo, h in zip(ci_lower, has_ci) if h]
     ci_hi = [hi for hi, h in zip(ci_upper, has_ci) if h]
 
-    if ci_periods:
+    if ci_x:
         fig.add_trace(
             go.Scatter(
-                x=ci_periods + ci_periods[::-1],
+                x=ci_x + ci_x[::-1],
                 y=ci_hi + ci_lo[::-1],
                 fill="toself",
                 fillcolor=_color_to_rgba(color, 0.15),
@@ -485,15 +493,15 @@ def _render_event_study_plotly(
         )
 
     # Point estimates — separate reference vs non-reference
-    non_ref_p = [p for p, r in zip(periods, is_ref) if not r]
+    non_ref_x = [period_to_x[p] for p, r in zip(periods, is_ref) if not r]
     non_ref_e = [e for e, r in zip(effects, is_ref) if not r]
-    ref_p = [p for p, r in zip(periods, is_ref) if r]
+    ref_x = [period_to_x[p] for p, r in zip(periods, is_ref) if r]
     ref_e = [e for e, r in zip(effects, is_ref) if r]
 
-    if non_ref_p:
+    if non_ref_x:
         fig.add_trace(
             go.Scatter(
-                x=non_ref_p,
+                x=non_ref_x,
                 y=non_ref_e,
                 mode="markers",
                 marker=dict(color=color, size=10),
@@ -501,10 +509,10 @@ def _render_event_study_plotly(
             )
         )
 
-    if ref_p:
+    if ref_x:
         fig.add_trace(
             go.Scatter(
-                x=ref_p,
+                x=ref_x,
                 y=ref_e,
                 mode="markers",
                 marker=dict(
@@ -515,6 +523,9 @@ def _render_event_study_plotly(
                 name="Reference",
             )
         )
+
+    # Set tick labels to show original period values
+    fig.update_xaxes(tickvals=x_vals, ticktext=tick_labels)
 
     _plotly_default_layout(fig, title=title, xlabel=xlabel, ylabel=ylabel)
 

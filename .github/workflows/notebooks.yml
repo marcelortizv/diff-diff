@@ -34,11 +34,15 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install numpy pandas scipy matplotlib nbmake pytest
+          pip install numpy pandas scipy matplotlib nbmake pytest ipykernel
+          # Add repo root to Python path so Jupyter kernels can import diff_diff
+          python -c "import site; print(site.getsitepackages()[0])" | xargs -I{} sh -c 'echo "$PWD" > {}/diff_diff_dev.pth'
 
       - name: Execute notebooks
+        env:
+          DIFF_DIFF_BACKEND: python
         run: |
-          DIFF_DIFF_BACKEND=python PYTHONPATH=. pytest --nbmake docs/tutorials/ \
+          pytest --nbmake docs/tutorials/ \
             --nbmake-timeout=300 \
             -v \
             --tb=short

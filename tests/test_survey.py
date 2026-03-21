@@ -940,8 +940,8 @@ class TestIntegration:
         # Average ATT should be close to 2.5
         assert abs(result.avg_att - 2.5) < 1.5
 
-    def test_fweight_warning_for_fractional(self):
-        """Fractional fweights emit a UserWarning."""
+    def test_fweight_error_for_fractional(self):
+        """Fractional fweights raise ValueError."""
         df = pd.DataFrame(
             {
                 "y": [1, 2, 3],
@@ -949,11 +949,8 @@ class TestIntegration:
             }
         )
         sd = SurveyDesign(weights="w", weight_type="fweight")
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
+        with pytest.raises(ValueError, match="Frequency weights.*must be positive integers"):
             sd.resolve(df)
-            fweight_warnings = [x for x in w if "Frequency weights" in str(x.message)]
-            assert len(fweight_warnings) >= 1
 
     def test_lonely_psu_remove_warning(self):
         """Singleton stratum with lonely_psu='remove' emits warning."""
@@ -2443,3 +2440,142 @@ class TestRound9Fixes:
         assert np.isfinite(result.avg_att)
         assert np.isfinite(result.avg_se)
         assert result.avg_se > 0
+
+
+class TestRound10Fixes:
+    """Tests for PR #218 review round 10 fixes."""
+
+    def test_zero_se_estimator_nan_inference(self):
+        """Zero-SE path in LinearRegression.get_inference() returns NaN, not ±inf."""
+        # Build a design where all strata are certainty PSUs → zero vcov → zero SE
+        np.random.seed(42)
+        n = 40
+        strata = np.repeat([0, 1, 2, 3], 10)
+        psu = strata.copy()  # 1 PSU per stratum → all certainty
+        df = pd.DataFrame(
+            {
+                "outcome": np.random.randn(n),
+                "treated": np.array([1] * 20 + [0] * 20),
+                "post": np.tile([0, 1], 20),
+                "w": np.ones(n),
+                "strat": strata,
+                "cluster": psu,
+            }
+        )
+        sd = SurveyDesign(
+            weights="w",
+            weight_type="pweight",
+            strata="strat",
+            psu="cluster",
+            lonely_psu="certainty",
+        )
+        did = DifferenceInDifferences()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = did.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                survey_design=sd,
+            )
+        # SE should be 0 (all certainty strata), inference should be NaN
+        assert result.se == 0.0
+        assert np.isnan(result.t_stat)
+        assert np.isnan(result.p_value)
+        assert np.isnan(result.conf_int[0])
+        assert np.isnan(result.conf_int[1])
+
+    def test_full_census_fpc_stratified_zero_vcov(self):
+        """Full-census FPC (f_h=1) returns zero vcov, not NaN."""
+        np.random.seed(42)
+        n = 60
+        strata = np.repeat([0, 1, 2], 20)
+        psu = np.tile(np.arange(5), 12)  # 5 PSUs per stratum
+
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = np.random.randn(n)
+        residuals = np.random.randn(n)
+        weights = np.ones(n)
+
+        # FPC = n_psu per stratum (full census: f_h = 5/5 = 1)
+        fpc = np.array([5.0] * n)
+
+        resolved = ResolvedSurveyDesign(
+            weights=weights,
+            weight_type="pweight",
+            strata=strata,
+            psu=psu,
+            fpc=fpc,
+            n_strata=3,
+            n_psu=15,
+            lonely_psu="remove",
+        )
+        vcov = compute_survey_vcov(X, residuals, resolved=resolved)
+        # Full census → zero variance → zero vcov
+        np.testing.assert_array_equal(vcov, np.zeros((2, 2)))
+
+    def test_full_census_fpc_unstratified_zero_vcov(self):
+        """Unstratified full-census FPC returns zero vcov, not NaN."""
+        np.random.seed(42)
+        n = 30
+        psu = np.repeat(np.arange(6), 5)  # 6 PSUs
+
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = np.random.randn(n)
+        residuals = np.random.randn(n)
+        weights = np.ones(n)
+
+        # FPC = n_psu (full census: f_h = 6/6 = 1)
+        fpc = np.array([6.0] * n)
+
+        resolved = ResolvedSurveyDesign(
+            weights=weights,
+            weight_type="pweight",
+            strata=None,
+            psu=psu,
+            fpc=fpc,
+            n_strata=0,
+            n_psu=6,
+            lonely_psu="remove",
+        )
+        vcov = compute_survey_vcov(X, residuals, resolved=resolved)
+        # Full census → (1-f_h)=0 → zero meat → zero vcov
+        np.testing.assert_array_equal(vcov, np.zeros((2, 2)))
+
+    def test_absorbed_did_sample_counts(self):
+        """n_treated/n_control reflect raw data, not demeaned values after absorb."""
+        np.random.seed(42)
+        n_units = 20
+        n_times = 4
+        rows = []
+        for u in range(n_units):
+            for t in range(n_times):
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "treated": 1 if u < 8 else 0,
+                        "post": 1 if t >= 2 else 0,
+                        "outcome": np.random.randn(),
+                        "region": u % 3,
+                    }
+                )
+        df = pd.DataFrame(rows)
+
+        did = DifferenceInDifferences()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = did.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                absorb=["region"],
+            )
+
+        # Raw counts: 8 treated units * 4 times = 32 treated obs
+        raw_treated = int(df["treated"].sum())
+        raw_control = len(df) - raw_treated
+        assert result.n_treated == raw_treated
+        assert result.n_control == raw_control

@@ -1835,25 +1835,6 @@ class LinearRegression:
         coef = float(self.coefficients_[index])
         se = float(np.sqrt(self.vcov_[index, index]))
 
-        # Handle zero or negative SE (indicates perfect fit or numerical issues)
-        if se <= 0:
-            import warnings
-
-            warnings.warn(
-                f"Standard error is zero or negative (se={se}) for coefficient at index {index}. "
-                "This may indicate perfect multicollinearity or numerical issues.",
-                UserWarning,
-            )
-            # NOTE: Deliberately uses ±inf (not NaN via safe_inference) for zero-SE coefficients.
-            if coef > 0:
-                t_stat = np.inf
-            elif coef < 0:
-                t_stat = -np.inf
-            else:
-                t_stat = 0.0
-        else:
-            t_stat = coef / se
-
         # Use instance alpha if not provided
         effective_alpha = alpha if alpha is not None else self.alpha
 
@@ -1877,11 +1858,12 @@ class LinearRegression:
             )
             effective_df = None
 
-        # Compute p-value
-        p_value = _compute_p_value(t_stat, df=effective_df)
+        # Use project-standard NaN-safe inference (returns all-NaN when SE <= 0)
+        from diff_diff.utils import safe_inference
 
-        # Compute confidence interval
-        conf_int = _compute_confidence_interval(coef, se, effective_alpha, df=effective_df)
+        t_stat, p_value, conf_int = safe_inference(
+            coef, se, alpha=effective_alpha, df=effective_df
+        )
 
         return InferenceResult(
             coefficient=coef,

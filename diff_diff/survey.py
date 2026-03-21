@@ -105,15 +105,13 @@ class SurveyDesign:
             if np.any(raw_weights <= 0):
                 raise ValueError("Weights must be strictly positive")
 
-            # fweight validation: should be positive integers
+            # fweight validation: must be positive integers
             if self.weight_type == "fweight":
                 fractional = raw_weights - np.round(raw_weights)
                 if np.any(np.abs(fractional) > 1e-10):
-                    warnings.warn(
-                        "Frequency weights (fweight) should be positive integers. "
-                        "Fractional values detected; rounding will not be applied.",
-                        UserWarning,
-                        stacklevel=2,
+                    raise ValueError(
+                        "Frequency weights (fweight) must be positive integers. "
+                        "Fractional values detected. Use pweight for non-integer weights."
                     )
 
             # Normalize: pweights/aweights to sum=n (mean=1); fweights unchanged
@@ -493,7 +491,7 @@ def compute_survey_vcov(
     strata = resolved.strata
     psu = resolved.psu
 
-    certainty_strata_count = 0
+    legitimate_zero_count = 0
 
     if strata is None and psu is None:
         # No survey structure beyond weights — use implicit per-observation PSUs
@@ -521,6 +519,8 @@ def compute_survey_vcov(
             if resolved.fpc is not None:
                 N_h = resolved.fpc[0]
                 f_h = n_psu / N_h
+                if f_h >= 1.0:
+                    legitimate_zero_count += 1
             adjustment = (1.0 - f_h) * (n_psu / (n_psu - 1))
             meat = adjustment * (centered.T @ centered)
     else:
@@ -558,7 +558,7 @@ def compute_survey_vcov(
                 if resolved.lonely_psu == "remove":
                     continue  # Skip this stratum
                 elif resolved.lonely_psu == "certainty":
-                    certainty_strata_count += 1
+                    legitimate_zero_count += 1
                     continue  # f_h = 1, so (1-f_h) = 0, zero contribution
                 elif resolved.lonely_psu == "adjust":
                     # Center around overall mean instead of stratum mean
@@ -572,6 +572,8 @@ def compute_survey_vcov(
             if resolved.fpc is not None:
                 N_h = resolved.fpc[mask_h][0]
                 f_h = n_psu_h / N_h
+                if f_h >= 1.0:
+                    legitimate_zero_count += 1
 
             # Stratum mean of PSU scores
             psu_mean_h = psu_scores_h.mean(axis=0, keepdims=True)
@@ -584,8 +586,8 @@ def compute_survey_vcov(
 
     # Guard: if no stratum contributed variance, check why
     if not np.any(meat != 0):
-        if certainty_strata_count > 0:
-            # All zero variance came from certainty PSUs — legitimate zero
+        if legitimate_zero_count > 0:
+            # All zero variance came from legitimate sources (certainty PSUs or full-census FPC)
             return np.zeros((k, k))
         return np.full((k, k), np.nan)
 

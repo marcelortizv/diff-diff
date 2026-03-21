@@ -246,6 +246,10 @@ class DifferenceInDifferences:
         absorbed_vars = []
         n_absorbed_effects = 0
 
+        # Save raw treatment counts before absorb demeaning
+        n_treated_raw = int(np.sum(data[treatment].values.astype(float)))
+        n_control_raw = len(data) - n_treated_raw
+
         if absorb:
             # FWL theorem: demean ALL regressors alongside outcome.
             # Regressors collinear with absorbed FE (e.g., treatment after
@@ -358,9 +362,9 @@ class DifferenceInDifferences:
 
         r_squared = compute_r_squared(y, residuals)
 
-        # Count observations
-        n_treated = int(np.sum(d))
-        n_control = int(np.sum(1 - d))
+        # Count observations (use raw counts to avoid demeaned values from absorb)
+        n_treated = n_treated_raw
+        n_control = n_control_raw
 
         # Create coefficient dictionary
         coef_dict = {name: coef for name, coef in zip(var_names, coefficients)}
@@ -985,6 +989,10 @@ class MultiPeriodDiD(DifferenceInDifferences):
         working_data = data.copy()
         n_absorbed_effects = 0
 
+        # Save raw treatment counts before absorb demeaning
+        n_treated_raw = int(np.sum(data[treatment].values.astype(float)))
+        n_control_raw = len(data) - n_treated_raw
+
         # Pre-compute non_ref_periods (needed for absorb demeaning)
         non_ref_periods = [p for p in all_periods if p != reference_period]
 
@@ -1216,9 +1224,9 @@ class MultiPeriodDiD(DifferenceInDifferences):
                     avg_att, avg_se, alpha=self.alpha, df=df
                 )
 
-        # Count observations
-        n_treated = int(np.sum(d))
-        n_control = int(np.sum(1 - d))
+        # Count observations (use raw counts to avoid demeaned values from absorb)
+        n_treated = n_treated_raw
+        n_control = n_control_raw
 
         # Create coefficient dictionary
         coef_dict = {name: coef for name, coef in zip(var_names, coefficients)}

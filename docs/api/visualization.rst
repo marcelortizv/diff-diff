@@ -102,17 +102,15 @@ Example
 
 .. code-block:: python
 
-   from diff_diff import SyntheticDiD, plot_synth_weights
+   from diff_diff import plot_synth_weights
 
-   sdid = SyntheticDiD()
-   results = sdid.fit(data, outcome='y', unit='unit_id',
-                      time='period', treatment='treated')
+   # Plot from a weights dictionary
+   weights = {"unit_A": 0.40, "unit_B": 0.30, "unit_C": 0.20, "unit_D": 0.10}
+   ax = plot_synth_weights(weights=weights)
 
-   # Bar chart of unit weights
-   ax = plot_synth_weights(results)
-
-   # Show time weights instead
-   ax = plot_synth_weights(results, weight_type='time')
+   # Or from SyntheticDiD results:
+   # ax = plot_synth_weights(results)
+   # ax = plot_synth_weights(results, weight_type='time')
 
 plot_staircase
 --------------
@@ -151,18 +149,20 @@ Example
 
 .. code-block:: python
 
-   from diff_diff import ContinuousDiD, plot_dose_response
+   import pandas as pd
+   from diff_diff import plot_dose_response
 
-   cdid = ContinuousDiD()
-   results = cdid.fit(data, outcome='y', unit='unit_id',
-                      time='period', first_treat='first_treat',
-                      dose='dose')
+   # Plot from a DataFrame with dose-response data
+   dr_data = pd.DataFrame({
+       'dose': [1, 2, 3, 4, 5],
+       'effect': [0.1, 0.3, 0.5, 0.4, 0.3],
+       'se': [0.05, 0.06, 0.07, 0.08, 0.09],
+   })
+   ax = plot_dose_response(data=dr_data)
 
-   # ATT dose-response curve
-   ax = plot_dose_response(results, target='att')
-
-   # ACRT dose-response curve
-   ax = plot_dose_response(results, target='acrt')
+   # Or from ContinuousDiD results:
+   # ax = plot_dose_response(results, target='att')
+   # ax = plot_dose_response(results, target='acrt')
 
 plot_group_time_heatmap
 -----------------------

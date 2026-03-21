@@ -357,6 +357,7 @@ _CONTEXT_DEPENDENT_SNIPPETS = {
     "api_bacon:block2",
     "api_visualization:block2",
     "api_visualization:block3",
+    "api_visualization:block8",
     "python_comparison:block5",
     "quickstart:block3",
     "quickstart:block9",

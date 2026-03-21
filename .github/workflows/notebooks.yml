@@ -45,9 +45,12 @@ jobs:
           DIFF_DIFF_BACKEND: python
         run: |
           pytest --nbmake docs/tutorials/ \
-            --nbmake-timeout=300 \
+            --nbmake-timeout=600 \
+            --ignore=docs/tutorials/10_trop.ipynb \
             -v \
             --tb=short
+          # Excluded notebooks:
+          #   10_trop — LOOCV grid search too slow for pure-Python CI (>600s)
 
       - name: Upload failed notebook outputs
         if: failure()

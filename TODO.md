@@ -69,6 +69,7 @@ Deferred items from PR reviews that were not addressed before merge.
 | R comparison tests spawn separate `Rscript` per test (slow CI) | `tests/test_methodology_twfe.py:294` | #139 | Low |
 | CS R helpers hard-code `xformla = ~ 1`; no covariate-adjusted R benchmark for IRLS path | `tests/test_methodology_callaway.py` | #202 | Low |
 | ~376 `duplicate object description` Sphinx warnings — caused by autodoc `:members:` on dataclass attributes within manual API pages (not from autosummary stubs); fix requires restructuring `docs/api/*.rst` pages to avoid documenting the same attribute via both `:members:` and inline `autosummary` tables | `docs/api/*.rst` | — | Low |
+| Plotly renderers silently ignore styling kwargs (marker, markersize, linewidth, capsize, ci_linewidth) that the matplotlib backend honors; thread them through or reject when `backend="plotly"` | `visualization/_event_study.py`, `_diagnostic.py`, `_power.py` | #222 | Medium |
 
 ---
 

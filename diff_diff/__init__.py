@@ -155,12 +155,16 @@ from diff_diff.utils import (
 )
 from diff_diff.visualization import (
     plot_bacon,
+    plot_dose_response,
     plot_event_study,
     plot_group_effects,
+    plot_group_time_heatmap,
     plot_honest_event_study,
     plot_power_curve,
     plot_pretrends_power,
     plot_sensitivity,
+    plot_staircase,
+    plot_synth_weights,
 )
 from diff_diff.datasets import (
     clear_cache,
@@ -220,7 +224,6 @@ __all__ = [
     "BaconDecompositionResults",
     "Comparison2x2",
     "bacon_decompose",
-    "plot_bacon",
     # Results
     "DiDResults",
     "MultiPeriodDiDResults",
@@ -251,10 +254,17 @@ __all__ = [
     "EDiDBootstrapResults",
     "EDiD",
     # Visualization
+    "plot_bacon",
     "plot_event_study",
     "plot_group_effects",
     "plot_sensitivity",
     "plot_honest_event_study",
+    "plot_power_curve",
+    "plot_pretrends_power",
+    "plot_synth_weights",
+    "plot_staircase",
+    "plot_dose_response",
+    "plot_group_time_heatmap",
     # Parallel trends testing
     "check_parallel_trends",
     "check_parallel_trends_robust",
@@ -308,14 +318,12 @@ __all__ = [
     "simulate_mde",
     "simulate_power",
     "simulate_sample_size",
-    "plot_power_curve",
     # Pre-trends power analysis
     "PreTrendsPower",
     "PreTrendsPowerResults",
     "PreTrendsPowerCurve",
     "compute_pretrends_power",
     "compute_mdv",
-    "plot_pretrends_power",
     # Survey support
     "SurveyDesign",
     "SurveyMetadata",

@@ -60,6 +60,10 @@ dev = [
     "maturin>=1.4,<2.0",
     "matplotlib>=3.5",
     "nbmake>=1.5",
+    "plotly>=5.0",
+]
+plotly = [
+    "plotly>=5.0",
 ]
 docs = [
     "sphinx>=6.0",

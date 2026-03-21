@@ -90,3 +90,6 @@ papers/
 
 # Local analysis notebooks (not committed)
 analysis/
+
+# Replication data (local only, not for distribution)
+replication_data/

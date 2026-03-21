@@ -235,6 +235,16 @@ def estimate_propensity_ratio_sieve(
             best_ic = ic_val
             best_ratio = r_hat.copy()
 
+    # Warn if no sieve fit succeeded (falling back to constant ratio 1)
+    if best_ic == np.inf:
+        warnings.warn(
+            "Propensity ratio sieve estimation failed for all K values. "
+            "Falling back to constant ratio of 1 (no ratio adjustment). "
+            "The DR estimator relies on outcome regression only.",
+            UserWarning,
+            stacklevel=2,
+        )
+
     # Overlap diagnostics: warn if ratios require significant clipping
     n_extreme = int(np.sum((best_ratio < 1.0 / ratio_clip) | (best_ratio > ratio_clip)))
     if n_extreme > 0:

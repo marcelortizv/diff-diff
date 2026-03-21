@@ -1448,8 +1448,8 @@ class TestCovariatesBootstrap:
 class TestSieveFallbacks:
     """Tier 2: sieve estimation failure fallbacks."""
 
-    def test_ratio_sieve_fallback_tiny_group(self):
-        """When comparison group is too small for any basis, fall back to constant ratio."""
+    def test_ratio_sieve_fallback_tiny_group_warns(self):
+        """When comparison group is too small for any basis, fall back with warning."""
         from diff_diff.efficient_did_covariates import estimate_propensity_ratio_sieve
 
         rng = np.random.default_rng(42)
@@ -1460,9 +1460,11 @@ class TestSieveFallbacks:
         # Tiny comparison group: only 2 units (fewer than any basis dimension)
         mask_gp = np.zeros(n, dtype=bool)
         mask_gp[50:52] = True
-        ratio = estimate_propensity_ratio_sieve(X, mask_g, mask_gp, k_max=3)
-        # Should produce valid ratios (fallback to constant 1)
+        with pytest.warns(UserWarning, match="Propensity ratio sieve estimation failed"):
+            ratio = estimate_propensity_ratio_sieve(X, mask_g, mask_gp, k_max=3)
         assert np.all(np.isfinite(ratio))
+        # Fallback: constant ratio of 1 (clipped to [1/ratio_clip, ratio_clip])
+        assert np.allclose(ratio, 1.0)
 
     def test_inverse_propensity_sieve_fallback_warns(self):
         """When group is too small for sieve, fall back with warning."""

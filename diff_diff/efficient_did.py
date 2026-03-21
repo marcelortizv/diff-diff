@@ -872,10 +872,25 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             sieve_criterion=self.sieve_criterion,
             ratio_clip=self.ratio_clip,
             kernel_bandwidth=self.kernel_bandwidth,
-            survey_metadata=survey_metadata,
+            survey_metadata=(
+                self._recompute_unit_survey_metadata(survey_metadata)
+                if survey_metadata is not None
+                else None
+            ),
         )
         self.is_fitted_ = True
         return self.results_
+
+    def _recompute_unit_survey_metadata(self, panel_metadata):
+        """Recompute survey metadata from unit-level design if available."""
+        if self._unit_resolved_survey is not None:
+            from diff_diff.survey import compute_survey_metadata
+
+            return compute_survey_metadata(
+                self._unit_resolved_survey,
+                self._unit_resolved_survey.weights,
+            )
+        return panel_metadata
 
     # -- Survey SE helpers ----------------------------------------------------
 

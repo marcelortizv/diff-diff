@@ -512,6 +512,15 @@ class ContinuousDiD:
                 # Survey df for t-distribution inference (unit-level, not panel-level)
                 _survey_df = analytic.get("df_survey")
 
+                # Recompute survey_metadata from unit-level design so reported
+                # effective_n/n_psu/df_survey match the inference actually run
+                _unit_resolved = analytic.get("unit_resolved")
+                if _unit_resolved is not None:
+                    from diff_diff.survey import compute_survey_metadata
+
+                    raw_w_unit = _unit_resolved.weights
+                    survey_metadata = compute_survey_metadata(_unit_resolved, raw_w_unit)
+
                 overall_att_t, overall_att_p, overall_att_ci = safe_inference(
                     overall_att, overall_att_se, self.alpha, df=_survey_df
                 )
@@ -948,11 +957,14 @@ class ContinuousDiD:
         # Store bootstrap info for influence function computation
         # bread = (Psi'WPsi / n_treated)^{-1} when survey, (Psi'Psi / n_treated)^{-1} otherwise
         if w_treated is not None:
+            w_treated_sum = float(np.sum(w_treated))
             PtWP = Psi.T @ (Psi * w_treated[:, np.newaxis])
+            # Normalize bread by weighted mass (not raw count) for consistency
+            # with downstream IF score denominators that also use weighted mass
             try:
-                bread = np.linalg.inv(PtWP / n_treated)
+                bread = np.linalg.inv(PtWP / w_treated_sum)
             except np.linalg.LinAlgError:
-                bread = np.linalg.pinv(PtWP / n_treated)
+                bread = np.linalg.pinv(PtWP / w_treated_sum)
         else:
             PtP = Psi.T @ Psi
             try:
@@ -1220,7 +1232,7 @@ class ContinuousDiD:
             att_d_se = np.sqrt(np.sum(if_att_d**2, axis=0))
             acrt_d_se = np.sqrt(np.sum(if_acrt_d**2, axis=0))
 
-        # Return unit-level survey df when available (for t-distribution inference)
+        # Return unit-level survey df and resolved design for metadata recomputation
         unit_df_survey = unit_resolved.df_survey if resolved_survey is not None else None
 
         return {
@@ -1229,6 +1241,7 @@ class ContinuousDiD:
             "att_d_se": att_d_se,
             "acrt_d_se": acrt_d_se,
             "df_survey": unit_df_survey,
+            "unit_resolved": unit_resolved if resolved_survey is not None else None,
         }
 
     def _run_bootstrap(

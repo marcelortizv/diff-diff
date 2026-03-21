@@ -18,8 +18,13 @@ pre-PR use. Designed for iterative review/revision cycles before submitting a PR
 
 ## Constraints
 
-Steps 1-4 are read-only. Step 5 makes a single external API call. Steps 6-8 are
-analysis and cleanup. No project files are modified by this skill.
+This skill does not modify source code files. It may:
+- Create a commit if there are uncommitted changes (Step 3)
+- Create/update review artifacts in `.claude/reviews/` (gitignored)
+- Write temporary files to `/tmp/` (cleaned up in Step 8)
+
+Step 5 makes a single external API call to OpenAI. Step 3b runs a secret scan
+before any data is sent externally.
 
 ## Instructions
 
@@ -63,10 +68,9 @@ mkdir -p .claude/reviews
 
 ### Step 3: Commit Changes and Generate Diff
 
-Determine the base branch:
+Determine the base branch (the repo's default branch, not the current branch's upstream):
 ```bash
-base_branch=$(git rev-parse --abbrev-ref @{upstream} 2>/dev/null | sed 's|origin/||')
-[ -z "$base_branch" ] && base_branch="main"
+base_branch=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || echo "main")
 ```
 
 Check for uncommitted changes (modified, staged, or untracked):
@@ -89,7 +93,6 @@ Generate diff and metadata:
 git diff --unified=5 "${base_branch}...HEAD" > /tmp/ai-review-diff.patch
 git diff --name-status "${base_branch}...HEAD" > /tmp/ai-review-files.txt
 branch_name=$(git branch --show-current)
-git log --oneline "${base_branch}...HEAD" > /tmp/ai-review-commits.txt
 ```
 
 If the diff is empty, report:
@@ -97,6 +100,33 @@ If the diff is empty, report:
 No committed changes vs ${base_branch} to review.
 ```
 Clean up temp files and stop.
+
+### Step 3b: Secret Scan Before API Upload
+
+Before sending any diff content to OpenAI, run the canonical secret scan patterns
+(from `/pre-merge-check` Section 2.6) against the same diff range:
+
+```bash
+# Content pattern — search diff content, output filenames only (never echo secret values)
+secret_files=$(git diff -G "(AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36}|sk-[a-zA-Z0-9]{48}|gho_[a-zA-Z0-9]{36}|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Ss][Ee][Cc][Rr][Ee][Tt][_-]?[Kk][Ee][Yy][[:space:]]*[=:]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd][[:space:]]*[=:]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+[a-zA-Z0-9_-]+|[Tt][Oo][Kk][Ee][Nn][[:space:]]*[=:])" --name-only "${base_branch}...HEAD" 2>/dev/null || true)
+
+# Sensitive filename pattern
+sensitive_files=$(git diff --name-only "${base_branch}...HEAD" | grep -iE "(\.env|credentials|secret|\.pem|\.key|\.p12|\.pfx|id_rsa|id_ed25519)$" || true)
+```
+
+If either `secret_files` or `sensitive_files` is non-empty, use AskUserQuestion:
+```
+Warning: Potential secrets detected in files that would be sent to OpenAI:
+- <list filenames>
+
+The diff containing these files is about to be transmitted to the OpenAI API.
+
+Options:
+1. Abort — review and remove secrets before retrying
+2. Continue — I confirm these are not real secrets
+```
+
+If user selects abort, clean up temp files and stop. If continue, proceed.
 
 ### Step 4: Handle Re-Review State
 
@@ -187,7 +217,7 @@ After fixes are committed, the user re-runs `/ai-review-local` for a follow-up r
 ### Step 8: Cleanup
 
 ```bash
-rm -f /tmp/ai-review-diff.patch /tmp/ai-review-files.txt /tmp/ai-review-commits.txt
+rm -f /tmp/ai-review-diff.patch /tmp/ai-review-files.txt
 ```
 
 ## Error Handling

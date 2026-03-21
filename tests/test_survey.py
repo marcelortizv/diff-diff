@@ -2956,3 +2956,100 @@ class TestRound16Fixes:
         )
         with pytest.raises(ValueError, match="FPC.*less than.*effective PSUs"):
             compute_survey_vcov(X, residuals, resolved=resolved)
+
+
+class TestRound18Fixes:
+    """Tests for PR #218 review round 18: implicit-PSU FPC handling."""
+
+    def test_weights_only_fpc_reduces_variance(self):
+        """Weights-only design with FPC > n_obs produces smaller vcov than without FPC."""
+        np.random.seed(42)
+        n = 20
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        residuals = np.random.randn(n)
+        weights = np.ones(n)
+
+        # Without FPC
+        resolved_no_fpc = ResolvedSurveyDesign(
+            weights=weights, weight_type="pweight",
+            strata=None, psu=None, fpc=None,
+            n_strata=0, n_psu=0, lonely_psu="remove",
+        )
+        vcov_no_fpc = compute_survey_vcov(X, residuals, resolved=resolved_no_fpc)
+
+        # With FPC = 100 (sampling 20 from 100)
+        fpc = np.full(n, 100.0)
+        resolved_fpc = ResolvedSurveyDesign(
+            weights=weights, weight_type="pweight",
+            strata=None, psu=None, fpc=fpc,
+            n_strata=0, n_psu=0, lonely_psu="remove",
+        )
+        vcov_fpc = compute_survey_vcov(X, residuals, resolved=resolved_fpc)
+
+        # FPC should reduce variance: (1 - 20/100) = 0.8 multiplier
+        assert np.all(np.diag(vcov_fpc) < np.diag(vcov_no_fpc))
+        np.testing.assert_allclose(
+            np.diag(vcov_fpc), np.diag(vcov_no_fpc) * 0.8, rtol=1e-10
+        )
+
+    def test_weights_only_fpc_full_census_zero_vcov(self):
+        """Weights-only FPC == n_obs (full census) produces zero vcov."""
+        np.random.seed(42)
+        n = 20
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        residuals = np.random.randn(n)
+        weights = np.ones(n)
+        fpc = np.full(n, float(n))  # Full census: FPC == n_obs
+
+        resolved = ResolvedSurveyDesign(
+            weights=weights, weight_type="pweight",
+            strata=None, psu=None, fpc=fpc,
+            n_strata=0, n_psu=0, lonely_psu="remove",
+        )
+        vcov = compute_survey_vcov(X, residuals, resolved=resolved)
+        np.testing.assert_array_equal(vcov, np.zeros((2, 2)))
+
+    def test_weights_only_fpc_lt_nobs_rejected(self):
+        """Weights-only FPC < n_obs is rejected at vcov time."""
+        np.random.seed(42)
+        n = 20
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        residuals = np.random.randn(n)
+        weights = np.ones(n)
+        fpc = np.full(n, 10.0)  # FPC < n_obs → invalid
+
+        resolved = ResolvedSurveyDesign(
+            weights=weights, weight_type="pweight",
+            strata=None, psu=None, fpc=fpc,
+            n_strata=0, n_psu=0, lonely_psu="remove",
+        )
+        with pytest.raises(ValueError, match="FPC.*less than.*observations"):
+            compute_survey_vcov(X, residuals, resolved=resolved)
+
+    def test_did_with_fpc_only_survey(self):
+        """DiD with weights-only FPC design produces finite results (estimator path)."""
+        np.random.seed(42)
+        n = 40
+        df = pd.DataFrame(
+            {
+                "outcome": np.random.randn(n),
+                "treated": np.array([1] * 20 + [0] * 20),
+                "post": np.tile([0, 1], 20),
+                "w": np.ones(n),
+                "pop": np.full(n, 200.0),  # Sampling 40 from 200
+            }
+        )
+        sd = SurveyDesign(weights="w", weight_type="pweight", fpc="pop")
+        did = DifferenceInDifferences()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = did.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                survey_design=sd,
+            )
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.se > 0

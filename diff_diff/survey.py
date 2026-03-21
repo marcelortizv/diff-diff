@@ -516,7 +516,18 @@ def compute_survey_vcov(
         # Each observation is its own PSU; scores are already per-obs.
         psu_mean = scores.mean(axis=0, keepdims=True)
         centered = scores - psu_mean
-        adjustment = n / (n - 1)
+        f_h = 0.0  # No FPC by default
+        if resolved.fpc is not None:
+            N_h = resolved.fpc[0]
+            if N_h < n:
+                raise ValueError(
+                    f"FPC ({N_h}) is less than the number of observations "
+                    f"({n}). FPC must be >= n_obs for implicit per-observation PSUs."
+                )
+            f_h = n / N_h
+            if f_h >= 1.0:
+                legitimate_zero_count += 1
+        adjustment = (1.0 - f_h) * (n / (n - 1))
         meat = adjustment * (centered.T @ centered)
         _variance_computed = True
     elif strata is None and psu is not None:

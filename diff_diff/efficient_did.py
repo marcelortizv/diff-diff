@@ -48,15 +48,18 @@ __all__ = ["EfficientDiD", "EfficientDiDResults", "EDiDBootstrapResults"]
 class EfficientDiD(EfficientDiDBootstrapMixin):
     """Efficient DiD estimator (Chen, Sant'Anna & Xie 2025).
 
-    Achieves the semiparametric efficiency bound for ATT(g,t) in
-    difference-in-differences settings with staggered treatment adoption.
+    Without covariates, achieves the semiparametric efficiency bound for
+    ATT(g,t) using a closed-form estimator based on within-group sample
+    means and covariances.
 
-    Without covariates, uses a closed-form estimator based on within-group
-    sample means and covariances.  With covariates, uses the doubly robust
-    path: sieve-based propensity score ratios (Eq 4.1-4.2) with AIC/BIC
-    selection, OLS outcome regression, sieve-estimated inverse propensities
-    (algorithm step 4), and kernel-smoothed conditional Omega*(X) with
-    per-unit efficient weights (Eq 3.12).
+    With covariates, uses a doubly robust path: sieve-based propensity
+    score ratios (Eq 4.1-4.2), OLS outcome regression, sieve-estimated
+    inverse propensities (algorithm step 4), and kernel-smoothed
+    conditional Omega*(X) with per-unit efficient weights (Eq 3.12).
+    The DR property ensures consistency if either the OLS outcome model
+    or the sieve propensity ratio is correctly specified.  The OLS
+    working model for outcome regressions does not generically guarantee
+    the semiparametric efficiency bound (see REGISTRY.md).
 
     Parameters
     ----------

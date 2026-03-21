@@ -2,10 +2,16 @@
 Doubly robust math for the Efficient DiD estimator (with covariates).
 
 Implements the with-covariates path from Chen, Sant'Anna & Xie (2025):
-outcome regression via OLS, sieve-based propensity score ratios (Eq 4.1-4.2),
+OLS outcome regression (linear working model), sieve-based propensity
+score ratios (Eq 4.1-4.2), sieve-based inverse propensities (step 4),
 kernel-smoothed conditional Omega*(X) for per-unit efficient weights,
 doubly robust generated outcomes (Eq 4.4), and the efficient influence
 function for analytical standard errors.
+
+The DR property ensures consistency if either the OLS outcome model or
+the sieve propensity ratio is correctly specified.  The OLS working model
+does not generically guarantee the semiparametric efficiency bound unless
+the conditional mean is linear in covariates (see REGISTRY.md).
 
 All functions are pure (no state), operating on pre-pivoted numpy arrays.
 """

@@ -48,7 +48,15 @@ def make_compustat_dgp(
     ft[n_g5 : n_g5 + n_g8] = 8
 
     # Generate unit-level covariates (time-invariant)
-    x1 = rng.normal(0, 1, n_units)
+    # When confounding_strength > 0, shift x1 distribution by group so
+    # treated units have higher x1 on average (selection on observables).
+    if confounding_strength > 0:
+        x1 = np.empty(n_units)
+        x1[:n_g5] = rng.normal(1.0, 1.0, n_g5)  # G=5: higher x1
+        x1[n_g5 : n_g5 + n_g8] = rng.normal(0.5, 1.0, n_g8)  # G=8: moderate
+        x1[n_g5 + n_g8 :] = rng.normal(0.0, 1.0, n_units - n_g5 - n_g8)  # G=inf: baseline
+    else:
+        x1 = rng.normal(0, 1, n_units)
     x2 = rng.binomial(1, 0.5, n_units)
 
     units = np.repeat(np.arange(n_units), n_t)
@@ -86,17 +94,12 @@ def make_compustat_dgp(
         y += covariate_effect * x1_expanded
 
         if confounding_strength > 0:
-            # Confounding: x1 interacts with group membership to create
-            # differential trends. Parallel trends hold conditional on X
-            # but not unconditionally.
-            for i in range(n_units):
-                g = ft[i]
-                if np.isinf(g):
-                    continue
-                for t_idx in range(n_t):
-                    t_val = t_idx + 1
-                    # Group-specific time trend that depends on x1
-                    y[i * n_t + t_idx] += confounding_strength * x1[i] * (t_val - 1) / n_t
+            # Confounding: x1-dependent time trend applied to ALL units.
+            # Conditional on x1, all groups share the same trend → conditional PT holds.
+            # Unconditional PT fails because treated/control have different x1 distributions.
+            x1_expanded = np.repeat(x1, n_t)
+            time_trend = np.tile(np.arange(n_t), n_units) / n_t
+            y += confounding_strength * x1_expanded * time_trend
 
     result = pd.DataFrame({"unit": units, "time": times, "first_treat": ft_col, "y": y})
 

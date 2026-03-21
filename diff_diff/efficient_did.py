@@ -52,6 +52,10 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
     Without covariates, uses a closed-form estimator based on within-group
     sample means and covariances.  With covariates, uses the doubly robust
     path: outcome regression via OLS plus propensity score ratios via logit.
+    The covariate path uses unconditional Omega* for pair weights (not the
+    kernel-smoothed conditional Omega*(X) from the paper), so it does not
+    achieve the full semiparametric efficiency bound but remains consistent
+    and doubly robust.
 
     Parameters
     ----------

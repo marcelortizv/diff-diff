@@ -13,6 +13,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from edid_dgp import make_compustat_dgp
 
 from diff_diff import CallawaySantAnna, EDiD, EfficientDiD
 from diff_diff.efficient_did_results import EfficientDiDResults
@@ -110,9 +111,6 @@ def _make_staggered_panel(
             "y": y,
         }
     )
-
-
-from edid_dgp import make_compustat_dgp
 
 
 def _make_compustat_dgp(n_units=400, n_periods=11, rho=0.0, seed=42):
@@ -1137,26 +1135,33 @@ class TestCovariatesBasic:
         assert abs(r_cov.overall_att - r_nocov.overall_att) < 0.2
 
     def test_covariates_recover_effect_under_confounding(self):
-        """DGP with confounding: DR should recover true ATT better than nocov."""
+        """DGP with confounding: DR should recover true ATT closer to truth than nocov.
+
+        The DGP adds x1-dependent time trends to ALL units and shifts x1
+        distribution by group, so unconditional PT fails but conditional PT holds.
+        True ATT is unchanged by confounding (only levels shift, not treatment).
+        """
+        from edid_dgp import true_overall_att
+
+        true_att = true_overall_att()
         df = _make_covariate_panel(
-            n_units=600,
+            n_units=900,
             covariate_effect=1.0,
-            confounding_strength=1.0,
+            confounding_strength=2.0,
             seed=123,
         )
         r_nocov = EfficientDiD(pt_assumption="post").fit(df, "y", "unit", "time", "first_treat")
         r_cov = EfficientDiD(pt_assumption="post").fit(
             df, "y", "unit", "time", "first_treat", covariates=["x1"]
         )
-        # Both should produce finite results
         assert np.isfinite(r_nocov.overall_att)
         assert np.isfinite(r_cov.overall_att)
-        # DR should be closer to the known treatment effect structure
-        # (we can't compute exact true ATT for confounded DGP easily,
-        # but we verify the DR path runs without error and produces
-        # different results from nocov)
-        assert r_cov.estimation_path == "dr"
-        assert r_nocov.estimation_path == "nocov"
+        # DR should be closer to the true ATT than nocov
+        bias_nocov = abs(r_nocov.overall_att - true_att)
+        bias_cov = abs(r_cov.overall_att - true_att)
+        assert (
+            bias_cov < bias_nocov
+        ), f"DR bias ({bias_cov:.4f}) should be smaller than nocov bias ({bias_nocov:.4f})"
 
     def test_empty_covariates_uses_nocov(self):
         """covariates=[] should normalize to nocov path."""
@@ -1302,6 +1307,24 @@ class TestCovariatesEdgeCases:
             df, "y", "unit", "time", "first_treat", covariates=["x1", "x2", "x3"]
         )
         assert np.isfinite(result.overall_att)
+
+    def test_logit_failure_fallback(self):
+        """Logit failure should fall back to population fraction ratio with warning."""
+        from unittest.mock import patch
+
+        df = _make_covariate_panel(n_units=300, seed=88)
+        # Patch solve_logit to raise, simulating convergence failure
+        with patch(
+            "diff_diff.efficient_did_covariates.solve_logit",
+            side_effect=np.linalg.LinAlgError("Simulated logit failure"),
+        ):
+            with pytest.warns(UserWarning, match="Propensity score estimation failed"):
+                result = EfficientDiD(pt_assumption="post").fit(
+                    df, "y", "unit", "time", "first_treat", covariates=["x1"]
+                )
+        # Should still produce valid finite results via fallback
+        assert np.isfinite(result.overall_att)
+        assert result.overall_se > 0
 
     def test_shuffled_units_match_ordered(self):
         """Shuffled unit ordering must produce same ATT as original ordering.

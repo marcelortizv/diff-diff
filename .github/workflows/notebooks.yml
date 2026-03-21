@@ -46,11 +46,13 @@ jobs:
         run: |
           pytest --nbmake docs/tutorials/ \
             --nbmake-timeout=600 \
+            --ignore=docs/tutorials/06_power_analysis.ipynb \
             --ignore=docs/tutorials/10_trop.ipynb \
             -v \
             --tb=short
-          # Excluded notebooks:
-          #   10_trop — LOOCV grid search too slow for pure-Python CI (>600s)
+          # Excluded notebooks (too slow for pure-Python CI without Rust backend):
+          #   06_power_analysis — SyntheticDiD simulate_power Monte Carlo (>600s)
+          #   10_trop — LOOCV grid search (>600s)
 
       - name: Upload failed notebook outputs
         if: failure()

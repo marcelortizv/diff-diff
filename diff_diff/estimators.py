@@ -247,11 +247,16 @@ class DifferenceInDifferences:
         n_absorbed_effects = 0
 
         if absorb:
-            # Apply within-transformation for each absorbed variable
-            # Only demean outcome and covariates, NOT treatment/time indicators
-            # Treatment is typically time-invariant (within unit), and time is
-            # unit-invariant, so demeaning them would create multicollinearity
-            vars_to_demean = [outcome] + (covariates or [])
+            # FWL theorem: demean ALL regressors alongside outcome.
+            # Regressors collinear with absorbed FE (e.g., treatment after
+            # absorbing unit FE) will zero out and be handled by rank-deficiency.
+            working_data["_treat_time"] = (
+                working_data[treatment].values.astype(float)
+                * working_data[time].values.astype(float)
+            )
+            vars_to_demean = (
+                [outcome, treatment, time, "_treat_time"] + (covariates or [])
+            )
             for ab_var in absorb:
                 working_data, n_fe = demean_by_group(
                     working_data,
@@ -269,7 +274,10 @@ class DifferenceInDifferences:
         t = working_data[time].values.astype(float)
 
         # Create interaction term
-        dt = d * t
+        if absorb:
+            dt = working_data["_treat_time"].values.astype(float)
+        else:
+            dt = d * t
 
         # Build design matrix
         X = np.column_stack([np.ones(len(y)), d, t, dt])
@@ -977,8 +985,29 @@ class MultiPeriodDiD(DifferenceInDifferences):
         working_data = data.copy()
         n_absorbed_effects = 0
 
+        # Pre-compute non_ref_periods (needed for absorb demeaning)
+        non_ref_periods = [p for p in all_periods if p != reference_period]
+
         if absorb:
-            vars_to_demean = [outcome] + (covariates or [])
+            # FWL theorem: demean ALL regressors alongside outcome.
+            # Regressors collinear with absorbed FE (e.g., treatment after
+            # absorbing unit FE) will zero out and be handled by rank-deficiency.
+            d_raw = working_data[treatment].values.astype(float)
+            t_raw = working_data[time].values
+            working_data["_did_treatment"] = d_raw
+            for period in non_ref_periods:
+                working_data[f"_did_period_{period}"] = (
+                    t_raw == period
+                ).astype(float)
+                working_data[f"_did_interact_{period}"] = (
+                    d_raw * (t_raw == period).astype(float)
+                )
+            vars_to_demean = (
+                [outcome, "_did_treatment"]
+                + [f"_did_period_{p}" for p in non_ref_periods]
+                + [f"_did_interact_{p}" for p in non_ref_periods]
+                + (covariates or [])
+            )
             for ab_var in absorb:
                 working_data, n_fe = demean_by_group(
                     working_data,
@@ -989,9 +1018,12 @@ class MultiPeriodDiD(DifferenceInDifferences):
                 )
                 n_absorbed_effects += n_fe
 
-        # Extract outcome and treatment
+        # Extract outcome and treatment (may be demeaned if absorb was used)
         y = working_data[outcome].values.astype(float)
-        d = working_data[treatment].values.astype(float)
+        if absorb:
+            d = working_data["_did_treatment"].values.astype(float)
+        else:
+            d = working_data[treatment].values.astype(float)
         t = working_data[time].values
 
         # Build design matrix
@@ -1000,11 +1032,15 @@ class MultiPeriodDiD(DifferenceInDifferences):
         var_names = ["const", treatment]
 
         # Add period dummies (excluding reference period)
-        non_ref_periods = [p for p in all_periods if p != reference_period]
         period_dummy_indices = {}  # Map period -> column index in X
 
         for period in non_ref_periods:
-            period_dummy = (t == period).astype(float)
+            if absorb:
+                period_dummy = working_data[
+                    f"_did_period_{period}"
+                ].values.astype(float)
+            else:
+                period_dummy = (t == period).astype(float)
             X = np.column_stack([X, period_dummy])
             var_names.append(f"period_{period}")
             period_dummy_indices[period] = X.shape[1] - 1
@@ -1015,7 +1051,12 @@ class MultiPeriodDiD(DifferenceInDifferences):
         interaction_indices = {}  # Map period -> column index in X
 
         for period in non_ref_periods:
-            interaction = d * (t == period).astype(float)
+            if absorb:
+                interaction = working_data[
+                    f"_did_interact_{period}"
+                ].values.astype(float)
+            else:
+                interaction = d * (t == period).astype(float)
             X = np.column_stack([X, interaction])
             var_names.append(f"{treatment}:period_{period}")
             interaction_indices[period] = X.shape[1] - 1
@@ -1092,7 +1133,7 @@ class MultiPeriodDiD(DifferenceInDifferences):
         # For fweights, df uses sum(w) - k (effective sample size)
         n_eff_df = len(y)
         if survey_weights is not None and survey_weight_type == "fweight":
-            n_eff_df = int(np.sum(survey_weights))
+            n_eff_df = int(round(np.sum(survey_weights)))
         df = n_eff_df - k_effective - n_absorbed_effects
         if resolved_survey is not None and resolved_survey.df_survey is not None:
             df = resolved_survey.df_survey

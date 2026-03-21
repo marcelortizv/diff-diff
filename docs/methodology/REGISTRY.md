@@ -1874,6 +1874,18 @@ unequal selection probabilities).
 - **Note:** pweight HC1 meat uses score outer products (Σ s_i s_i' where
   s_i = w_i x_i u_i), giving w² in the meat. fweight HC1 meat uses
   X'diag(w u²)X (one power of w), matching frequency-expanded HC1.
+- **Note:** fweights must be positive integers; fractional values are
+  rejected by `_validate_weights()`. This matches Stata's convention and
+  avoids ambiguous frequency semantics.
+
+### Absorbed Fixed Effects with Survey Weights
+
+- **Note:** When `absorb` is used in DiD/MultiPeriodDiD, all regressors
+  (treatment, time, interactions, covariates) are within-transformed
+  alongside the outcome per the FWL theorem. Regressors collinear with
+  the absorbed FE (e.g., treatment after absorbing unit FE) are dropped
+  via rank-deficiency handling. This matches TWFE's absorbed regression
+  behavior.
 
 ### Survey Degrees of Freedom
 

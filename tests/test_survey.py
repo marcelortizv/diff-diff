@@ -2213,3 +2213,233 @@ class TestRound8Fixes:
         vcov = compute_robust_vcov(X, resid, weights=w, weight_type="fweight")
         assert np.all(np.isfinite(vcov))
         assert np.all(np.diag(vcov) > 0)
+
+
+class TestRound9Fixes:
+    """Tests for round-9 review fixes (PR #218)."""
+
+    def test_did_absorb_matches_explicit_wls_dummies(self):
+        """Absorbed WLS matches explicit WLS with dummy variables (P0).
+
+        Uses absorb=["region"] (cross-cuts treatment) so all regressors
+        survive demeaning, giving a clean equivalence test.
+        """
+        np.random.seed(901)
+        n_units = 10
+        n_periods = 2
+        rows = []
+        for u in range(n_units):
+            for t in range(n_periods):
+                treated = 1 if u < 5 else 0
+                post = 1 if t >= 1 else 0
+                region = u % 3  # cross-cuts treatment
+                y = 5.0 + region * 0.5 + t * 0.5 + 3.0 * treated * post
+                y += np.random.randn() * 0.1
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "treated": treated,
+                        "post": post,
+                        "outcome": y,
+                        "region": region,
+                    }
+                )
+        df = pd.DataFrame(rows)
+        weights = np.array([1.0 + 0.5 * (i % 3) for i in range(len(df))])
+        weights = weights * len(df) / np.sum(weights)
+        df["weight"] = weights
+
+        sd = SurveyDesign(weights="weight", weight_type="pweight")
+
+        # Method 1: absorb region FE
+        did_absorb = DifferenceInDifferences()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            result_absorb = did_absorb.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                time="post",
+                absorb=["region"],
+                survey_design=sd,
+            )
+
+        # Method 2: explicit region dummies
+        did_explicit = DifferenceInDifferences()
+        result_explicit = did_explicit.fit(
+            df,
+            outcome="outcome",
+            treatment="treated",
+            time="post",
+            fixed_effects=["region"],
+            survey_design=sd,
+        )
+
+        np.testing.assert_allclose(result_absorb.att, result_explicit.att, atol=1e-6)
+
+    def test_multiperiod_absorb_matches_explicit_wls_dummies(self):
+        """MultiPeriodDiD absorbed WLS matches explicit WLS with dummies (P0)."""
+        np.random.seed(902)
+        n_units = 10
+        periods = [1, 2, 3, 4]
+        rows = []
+        for u in range(n_units):
+            for t in periods:
+                treated = 1 if u < 5 else 0
+                post = 1 if t >= 3 else 0
+                region = u % 3
+                y = 5.0 + region * 0.5 + t * 0.3 + 2.0 * treated * post
+                y += np.random.randn() * 0.1
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "treated": treated,
+                        "post": post,
+                        "outcome": y,
+                        "region": region,
+                    }
+                )
+        df = pd.DataFrame(rows)
+        weights = np.array([1.0 + 0.3 * (i % 4) for i in range(len(df))])
+        weights = weights * len(df) / np.sum(weights)
+        df["weight"] = weights
+
+        sd = SurveyDesign(weights="weight", weight_type="pweight")
+
+        # Method 1: absorb region FE
+        mpd_absorb = MultiPeriodDiD()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result_absorb = mpd_absorb.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                time="time",
+                post_periods=[3, 4],
+                absorb=["region"],
+                survey_design=sd,
+            )
+
+        # Method 2: explicit region dummies
+        mpd_explicit = MultiPeriodDiD()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result_explicit = mpd_explicit.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                time="time",
+                post_periods=[3, 4],
+                fixed_effects=["region"],
+                survey_design=sd,
+            )
+
+        np.testing.assert_allclose(
+            result_absorb.avg_att, result_explicit.avg_att, atol=1e-6
+        )
+
+    def test_fractional_fweight_rejected_solve_ols(self):
+        """Fractional fweights raise ValueError via solve_ols."""
+        np.random.seed(903)
+        n = 10
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = np.random.randn(n)
+        w = np.array([1.5, 2.3, 1.0, 2.0, 1.7, 3.0, 1.0, 2.0, 1.0, 1.0])
+
+        with pytest.raises(ValueError, match="positive integers"):
+            solve_ols(X, y, weights=w, weight_type="fweight")
+
+    def test_fractional_fweight_rejected_compute_robust_vcov(self):
+        """Fractional fweights raise ValueError via compute_robust_vcov."""
+        np.random.seed(904)
+        n = 10
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        resid = np.random.randn(n)
+        w = np.array([1.5, 2.0, 1.0, 2.0, 1.0, 3.0, 1.0, 2.0, 1.0, 1.0])
+
+        with pytest.raises(ValueError, match="positive integers"):
+            compute_robust_vcov(X, resid, weights=w, weight_type="fweight")
+
+    def test_integer_fweight_accepted(self):
+        """Integer fweights as float are accepted without error."""
+        np.random.seed(905)
+        n = 10
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = np.random.randn(n)
+        w = np.array([2.0, 3.0, 1.0, 2.0, 1.0, 3.0, 1.0, 2.0, 1.0, 1.0])
+
+        # Should NOT raise
+        coef, resid, vcov = solve_ols(X, y, weights=w, weight_type="fweight")
+        assert coef is not None
+        assert vcov is not None
+
+    def test_all_certainty_psu_zero_vcov(self):
+        """All-certainty-PSU stratified design returns zero vcov, not NaN (P1-B)."""
+        np.random.seed(906)
+        n = 30
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = 1.0 + 2.0 * X[:, 1] + np.random.randn(n) * 0.5
+        w = np.ones(n)
+        w_norm = w * n / np.sum(w)
+
+        # Each stratum has exactly 1 PSU → all certainty
+        strata = np.arange(n)  # 30 strata, 1 obs each
+        psu = np.arange(n)
+
+        coef, resid, _ = solve_ols(X, y, weights=w_norm, weight_type="pweight")
+
+        resolved = ResolvedSurveyDesign(
+            weights=w_norm,
+            weight_type="pweight",
+            strata=strata,
+            psu=psu,
+            fpc=None,
+            lonely_psu="certainty",
+            n_psu=n,
+            n_strata=n,
+        )
+        vcov = compute_survey_vcov(X, resid, resolved)
+
+        # Should be zero (not NaN) — every stratum is certainty
+        assert np.all(vcov == 0.0)
+        assert not np.any(np.isnan(vcov))
+
+    def test_multiperiod_fweight_df_rounding(self):
+        """MultiPeriodDiD uses rounded (not truncated) fweight df."""
+        np.random.seed(907)
+        n_units = 10
+        periods = [1, 2, 3]
+        rows = []
+        for u in range(n_units):
+            for t in periods:
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "treated": 1 if u < 5 else 0,
+                        "post": 1 if t >= 3 else 0,
+                        "outcome": np.random.randn(),
+                        "fw": 2,  # integer fweight
+                    }
+                )
+        df = pd.DataFrame(rows)
+
+        sd = SurveyDesign(weights="fw", weight_type="fweight")
+        mpd = MultiPeriodDiD()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = mpd.fit(
+                df,
+                outcome="outcome",
+                treatment="treated",
+                time="time",
+                post_periods=[3],
+                survey_design=sd,
+            )
+
+        # Should produce valid results (not crash on df truncation)
+        assert np.isfinite(result.avg_att)
+        assert np.isfinite(result.avg_se)
+        assert result.avg_se > 0

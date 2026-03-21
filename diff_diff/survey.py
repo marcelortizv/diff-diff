@@ -493,6 +493,8 @@ def compute_survey_vcov(
     strata = resolved.strata
     psu = resolved.psu
 
+    certainty_strata_count = 0
+
     if strata is None and psu is None:
         # No survey structure beyond weights — use implicit per-observation PSUs
         # so the TSL construction is consistent across all branches.
@@ -556,6 +558,7 @@ def compute_survey_vcov(
                 if resolved.lonely_psu == "remove":
                     continue  # Skip this stratum
                 elif resolved.lonely_psu == "certainty":
+                    certainty_strata_count += 1
                     continue  # f_h = 1, so (1-f_h) = 0, zero contribution
                 elif resolved.lonely_psu == "adjust":
                     # Center around overall mean instead of stratum mean
@@ -579,8 +582,11 @@ def compute_survey_vcov(
             V_h = adjustment * (centered.T @ centered)
             meat += V_h
 
-    # Guard: if no stratum contributed variance, return NaN vcov
+    # Guard: if no stratum contributed variance, check why
     if not np.any(meat != 0):
+        if certainty_strata_count > 0:
+            # All zero variance came from certainty PSUs — legitimate zero
+            return np.zeros((k, k))
         return np.full((k, k), np.nan)
 
     # Sandwich: (X'WX)^{-1} meat (X'WX)^{-1}

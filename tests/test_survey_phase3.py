@@ -405,6 +405,25 @@ class TestBaconDecompositionSurvey:
         assert len(r.comparisons) > 0
         for comp in r.comparisons:
             assert np.isfinite(comp.weight)
+        # With non-uniform weights, exact weights should differ from
+        # approximate weights (approximate uses n_k*(1-n_k)*Var(D))
+        r_approx = BaconDecomposition(weights="approximate").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            survey_design=sd,
+        )
+        # At least one comparison weight should differ
+        exact_weights = {(c.treated_group, c.control_group): c.weight for c in r.comparisons}
+        approx_weights = {
+            (c.treated_group, c.control_group): c.weight for c in r_approx.comparisons
+        }
+        common_keys = set(exact_weights) & set(approx_weights)
+        assert len(common_keys) > 0
+        diffs = [abs(exact_weights[k] - approx_weights[k]) for k in common_keys]
+        assert max(diffs) > 1e-10, "Exact and approximate weights should differ"
 
 
 # =============================================================================
@@ -886,6 +905,7 @@ class TestReviewRegressions:
     def test_continuous_did_dose_response_survey_pvalue(self, continuous_survey_data):
         """DoseResponseCurve.to_dataframe() p-values should use survey df."""
         from diff_diff import ContinuousDiD
+        from diff_diff.utils import safe_inference
 
         sd = SurveyDesign(weights="weight", strata="stratum")
         result = ContinuousDiD(n_bootstrap=0).fit(
@@ -899,8 +919,13 @@ class TestReviewRegressions:
         )
         sm = result.survey_metadata
         assert sm is not None
-        # Check that dose-response curve p-values are finite
+        assert sm.df_survey is not None
+        # Check that dose-response curve carries survey df
+        assert result.dose_response_att.df_survey == sm.df_survey
+        # Check exported p-values use survey df, not normal approx
         att_df = result.dose_response_att.to_dataframe()
-        assert "p_value" in att_df.columns
-        finite_p = att_df["p_value"].dropna()
-        assert len(finite_p) > 0
+        for i in range(min(3, len(att_df))):
+            row = att_df.iloc[i]
+            if np.isfinite(row["effect"]) and np.isfinite(row["se"]) and row["se"] > 0:
+                _, expected_p, _ = safe_inference(row["effect"], row["se"], df=sm.df_survey)
+                assert row["p_value"] == pytest.approx(expected_p, rel=1e-10)

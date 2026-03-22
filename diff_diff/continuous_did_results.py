@@ -45,6 +45,7 @@ class DoseResponseCurve:
     target: str
     p_value: Optional[np.ndarray] = None
     n_bootstrap: int = 0
+    df_survey: Optional[int] = None
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert to DataFrame with dose, effect, se, CI, t_stat, p_value."""
@@ -60,7 +61,7 @@ class DoseResponseCurve:
             t_stat = np.full(n, np.nan)
             p_value = np.full(n, np.nan)
             for i in range(n):
-                t_i, p_i, _ = safe_inference(self.effects[i], self.se[i])
+                t_i, p_i, _ = safe_inference(self.effects[i], self.se[i], df=self.df_survey)
                 t_stat[i] = t_i
                 p_value[i] = p_i
         return pd.DataFrame(

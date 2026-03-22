@@ -397,6 +397,8 @@ class ContinuousDiD:
                 unit_cohorts=precomp["unit_cohorts"],
             )
 
+        _survey_df = None  # Set by analytical branch when survey is active
+
         if len(post_gt) == 0:
             warnings.warn(
                 "No post-treatment (g,t) cells available for aggregation. "
@@ -665,6 +667,7 @@ class ContinuousDiD:
             target="att",
             p_value=att_d_p,
             n_bootstrap=self.n_bootstrap,
+            df_survey=_survey_df,
         )
         dose_response_acrt = DoseResponseCurve(
             dose_grid=dvals,
@@ -675,6 +678,7 @@ class ContinuousDiD:
             target="acrt",
             p_value=acrt_d_p,
             n_bootstrap=self.n_bootstrap,
+            df_survey=_survey_df,
         )
 
         # Strip bootstrap internals from gt_results

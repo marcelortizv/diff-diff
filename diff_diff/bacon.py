@@ -478,6 +478,12 @@ class BaconDecomposition:
             _resolve_survey_for_fit(survey_design, data, "analytical")
         )
 
+        # Validate within-unit constancy for panel survey designs
+        if resolved_survey is not None:
+            from diff_diff.survey import _validate_unit_constant_survey
+
+            _validate_unit_constant_survey(data, unit, survey_design)
+
         # Create working copy
         df = data.copy()
 

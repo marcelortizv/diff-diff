@@ -998,6 +998,28 @@ class TestReviewRegressions:
                 survey_design=sd,
             )
 
+    def test_bacon_exact_varying_weights_rejected(self):
+        """BaconDecomposition exact weights should reject time-varying survey weights."""
+        from diff_diff import BaconDecomposition
+
+        np.random.seed(42)
+        n_u, n_t = 20, 4
+        data = pd.DataFrame(
+            {
+                "unit": np.repeat(range(n_u), n_t),
+                "time": np.tile(range(1, n_t + 1), n_u),
+                "first_treat": np.repeat(np.where(np.arange(n_u) < 10, 3, 0), n_t),
+                "outcome": np.random.randn(n_u * n_t),
+                # Time-varying weights (different per period)
+                "w": np.random.uniform(0.5, 2.0, n_u * n_t),
+            }
+        )
+        sd = SurveyDesign(weights="w")
+        with pytest.raises(ValueError, match="varies within units"):
+            BaconDecomposition(weights="exact").fit(
+                data, "outcome", "unit", "time", "first_treat", survey_design=sd
+            )
+
     def test_sun_abraham_survey_df_regression(self, staggered_survey_data):
         """SunAbraham survey inference should use survey df, not normal approx."""
         from diff_diff import SunAbraham

@@ -1362,6 +1362,25 @@ class TestValidateReviewState:
         )
         assert not valid
 
+    def test_malformed_finding_returns_false(self, review_mod, tmp_path):
+        """Any malformed finding dict should invalidate delta mode entirely."""
+        state_file = tmp_path / "review-state.json"
+        state = {
+            "schema_version": 1,
+            "last_reviewed_commit": "abc123",
+            "branch": "feature/test",
+            "base_ref": "main",
+            "review_round": 1,
+            "findings": [
+                {"id": "R1-P1-1", "severity": "P1"},  # missing summary, status
+            ],
+        }
+        state_file.write_text(json.dumps(state))
+        _, _, _, valid = review_mod.validate_review_state(
+            str(state_file), "feature/test", "main"
+        )
+        assert not valid  # fail closed on malformed finding
+
 
 # ---------------------------------------------------------------------------
 # Include-files path confinement

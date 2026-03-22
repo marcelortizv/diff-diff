@@ -267,12 +267,21 @@ print(f'{commit}|{valid}')
         rm -f .claude/reviews/local-review-previous.md
     fi
 fi
+
+# Final cleanup: if delta mode was NOT activated (no delta files generated),
+# ensure no stale previous-review file can leak into the fresh review.
+# This covers the case where review-state.json is missing entirely but
+# local-review-previous.md lingers from a prior run.
+if [ ! -f /tmp/ai-review-delta-diff.patch ]; then
+    rm -f .claude/reviews/local-review-previous.md
+fi
 ```
 
-**Important**: Previous review text is ONLY preserved when delta mode is active (state was
-validated). When state is invalidated (branch mismatch, non-ancestor, rebase), the previous
-review file is deleted to prevent stale findings from leaking into a fresh review via
-`--previous-review`.
+**Important**: Previous review text is ONLY preserved when delta mode is active (delta files
+generated and state validated). When delta mode is NOT active — whether because
+`review-state.json` is missing, branch/base mismatch, non-ancestor, or `--force-fresh` —
+the previous review file is deleted to prevent stale findings from leaking into a fresh
+review via `--previous-review`.
 
 ### Step 5: Run the Review Script
 

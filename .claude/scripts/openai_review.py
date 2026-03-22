@@ -417,8 +417,7 @@ def validate_review_state(
 
     The skill should call this once and use is_valid to gate ALL delta behavior.
     """
-    findings, review_round = parse_review_state(path)
-
+    # Read raw data for validation (separate from parse_review_state which filters)
     try:
         with open(path) as f:
             data = json.load(f)
@@ -431,6 +430,21 @@ def validate_review_state(
     if data.get("schema_version") != _REVIEW_STATE_SCHEMA_VERSION:
         return ([], 0, "", False)
 
+    # Fail closed on ANY malformed finding — if raw findings contain non-dict
+    # or missing-key entries, the entire state is invalid for delta mode
+    _REQUIRED_FINDING_KEYS = {"id", "severity", "summary", "status"}
+    raw_findings = data.get("findings", [])
+    if not isinstance(raw_findings, list):
+        return ([], 0, "", False)
+    for f in raw_findings:
+        if not isinstance(f, dict) or not _REQUIRED_FINDING_KEYS.issubset(f.keys()):
+            print(
+                "Warning: review-state.json contains malformed finding. "
+                "Delta mode disabled.",
+                file=sys.stderr,
+            )
+            return ([], 0, "", False)
+
     last_commit = data.get("last_reviewed_commit", "")
     stored_branch = data.get("branch", "")
     stored_base = data.get("base_ref", "")
@@ -442,11 +456,13 @@ def validate_review_state(
             f"(base: '{expected_base}'). Delta mode disabled.",
             file=sys.stderr,
         )
-        return (findings, review_round, last_commit, False)
+        return ([], 0, last_commit, False)
 
     if not last_commit:
-        return (findings, review_round, "", False)
+        return ([], 0, "", False)
 
+    # All checks passed — use parse_review_state for the filtered findings
+    findings, review_round = parse_review_state(path)
     return (findings, review_round, last_commit, True)
 
 

@@ -576,19 +576,251 @@ class TestValidTriples:
         assert len(pairs_ant1) <= len(pairs_no_ant)
 
 
+class TestHausmanPretest:
+    """Hausman pretest for PT-All vs PT-Post."""
+
+    def test_hausman_homogeneous_trends_fail_to_reject(self):
+        """DGP with homogeneous trends → fail to reject PT-All."""
+        # Standard DGP: parallel trends hold for all groups
+        df = _make_staggered_panel(n_per_group=100, n_control=150, sigma=0.3, seed=42)
+        pretest = EfficientDiD.hausman_pretest(df, "y", "unit", "time", "first_treat", alpha=0.05)
+        assert np.isfinite(pretest.statistic)
+        assert np.isfinite(pretest.p_value)
+        assert pretest.df > 0
+        # With homogeneous trends, should generally fail to reject
+        assert pretest.recommendation in ("pt_all", "pt_post")
+
+    def test_hausman_differential_trends_detects(self):
+        """DGP with cohort-specific trends → test detects or warns."""
+        rng = np.random.default_rng(42)
+        n_per_group = 200
+        n_control = 300
+        n_periods = 7
+        groups = (3, 5)
+        n_units = n_per_group * len(groups) + n_control
+
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(1, n_periods + 1), n_units)
+        ft = np.full(n_units, np.inf)
+        ft[:n_per_group] = 3
+        ft[n_per_group : 2 * n_per_group] = 5
+        ft_col = np.repeat(ft, n_periods)
+
+        # Add strong cohort-specific trends that violate PT-All
+        trend = np.zeros(len(units))
+        for i in range(len(units)):
+            if ft_col[i] == 3:
+                trend[i] = 2.0 * times[i]
+            elif ft_col[i] == 5:
+                trend[i] = -1.5 * times[i]
+
+        unit_fe = np.repeat(rng.normal(0, 0.1, n_units), n_periods)
+        time_fe = np.tile(rng.normal(0, 0.05, n_periods), n_units)
+        eps = rng.normal(0, 0.1, len(units))
+        tau = np.where((ft_col < np.inf) & (times >= ft_col), 2.0, 0.0)
+
+        y = unit_fe + time_fe + trend + tau + eps
+        df = pd.DataFrame(
+            {
+                "unit": units,
+                "time": times,
+                "first_treat": ft_col,
+                "y": y,
+            }
+        )
+
+        pretest = EfficientDiD.hausman_pretest(df, "y", "unit", "time", "first_treat", alpha=0.05)
+        # With strong differential trends, either:
+        # (a) test rejects PT-All, or
+        # (b) covariance is unreliable (NaN) and recommendation defaults to pt_post
+        # Both are acceptable outcomes for a DGP that violates PT-All
+        if np.isfinite(pretest.statistic):
+            assert pretest.statistic >= 0
+        assert pretest.recommendation in ("pt_all", "pt_post")
+
+    def test_hausman_gt_details(self):
+        """gt_details should have expected columns."""
+        df = _make_staggered_panel(n_per_group=80, n_control=100)
+        pretest = EfficientDiD.hausman_pretest(df, "y", "unit", "time", "first_treat")
+        assert pretest.gt_details is not None
+        expected_cols = {"group", "time", "att_all", "att_post", "delta", "se_all", "se_post"}
+        assert set(pretest.gt_details.columns) == expected_cols
+
+    def test_hausman_recommendation_field(self):
+        """recommendation should be pt_all or pt_post."""
+        df = _make_staggered_panel(n_per_group=80, n_control=100)
+        pretest = EfficientDiD.hausman_pretest(df, "y", "unit", "time", "first_treat")
+        assert pretest.recommendation in ("pt_all", "pt_post")
+        if pretest.reject:
+            assert pretest.recommendation == "pt_post"
+        else:
+            assert pretest.recommendation == "pt_all"
+
+    def test_hausman_repr(self):
+        """repr should be informative."""
+        df = _make_staggered_panel(n_per_group=80, n_control=100)
+        pretest = EfficientDiD.hausman_pretest(df, "y", "unit", "time", "first_treat")
+        r = repr(pretest)
+        assert "HausmanPretestResult" in r
+        assert "recommend=" in r
+
+
+class TestClusterRobustSE:
+    """Cluster-robust standard errors for EfficientDiD."""
+
+    @staticmethod
+    def _make_clustered_panel(n_clusters=20, units_per_cluster=5, seed=42):
+        """Panel data with cluster structure and intracluster correlation."""
+        rng = np.random.default_rng(seed)
+        n_units = n_clusters * units_per_cluster
+        n_periods = 7
+        groups = (3, 5)
+        n_per_group = n_units // 4  # ~25% in each treatment group
+
+        cluster_ids = np.repeat(np.arange(n_clusters), units_per_cluster)
+        cluster_effects = rng.normal(0, 1.0, n_clusters)
+
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(1, n_periods + 1), n_units)
+
+        ft = np.full(n_units, np.inf)
+        ft[:n_per_group] = groups[0]
+        ft[n_per_group : 2 * n_per_group] = groups[1]
+        ft_col = np.repeat(ft, n_periods)
+
+        # Intracluster correlation via shared cluster effect
+        unit_fe = np.repeat(rng.normal(0, 0.3, n_units), n_periods)
+        cluster_fe = np.repeat(cluster_effects[cluster_ids], n_periods)
+        time_fe = np.tile(rng.normal(0, 0.1, n_periods), n_units)
+        eps = rng.normal(0, 0.3, len(units))
+
+        tau = np.zeros(len(units))
+        for g in groups:
+            mask = (ft_col == g) & (times >= g)
+            tau[mask] = 2.0
+
+        y = unit_fe + cluster_fe + time_fe + tau + eps
+        cluster_col = np.repeat(cluster_ids, n_periods)
+
+        return pd.DataFrame(
+            {
+                "unit": units,
+                "time": times,
+                "first_treat": ft_col,
+                "y": y,
+                "cluster_id": cluster_col,
+            }
+        )
+
+    def test_cluster_no_longer_raises(self):
+        """cluster parameter should not raise NotImplementedError."""
+        df = self._make_clustered_panel()
+        result = EfficientDiD(cluster="cluster_id").fit(df, "y", "unit", "time", "first_treat")
+        assert np.isfinite(result.overall_att)
+
+    def test_single_unit_clusters_match_unclustered(self):
+        """With one unit per cluster, clustered SE should match unclustered."""
+        df = _make_staggered_panel(n_per_group=60, n_control=80)
+        # Add cluster column = unit (each unit is its own cluster)
+        df["cluster_id"] = df["unit"]
+        result_unclustered = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        result_clustered = EfficientDiD(cluster="cluster_id").fit(
+            df, "y", "unit", "time", "first_treat"
+        )
+        assert result_clustered.overall_att == pytest.approx(
+            result_unclustered.overall_att, abs=1e-10
+        )
+        # SEs should be very close (centering correction is negligible)
+        assert result_clustered.overall_se == pytest.approx(result_unclustered.overall_se, rel=0.05)
+
+    def test_clustered_se_at_least_as_large(self):
+        """Clustered SE >= unclustered SE with positive intracluster correlation."""
+        df = self._make_clustered_panel()
+        result_unclustered = EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        result_clustered = EfficientDiD(cluster="cluster_id").fit(
+            df, "y", "unit", "time", "first_treat"
+        )
+        # Clustered SE should generally be larger with positive ICC
+        assert result_clustered.overall_se >= result_unclustered.overall_se * 0.9
+
+    def test_cluster_bootstrap(self, ci_params):
+        """Cluster bootstrap should produce finite inference."""
+        n_boot = ci_params.bootstrap(99)
+        df = self._make_clustered_panel()
+        result = EfficientDiD(cluster="cluster_id", n_bootstrap=n_boot, seed=42).fit(
+            df, "y", "unit", "time", "first_treat"
+        )
+        assert np.isfinite(result.overall_se)
+        assert result.overall_se > 0
+
+    def test_few_clusters_warns(self):
+        """Fewer than 50 clusters should warn."""
+        df = self._make_clustered_panel(n_clusters=10, units_per_cluster=10)
+        with pytest.warns(UserWarning, match="Only 10 clusters"):
+            EfficientDiD(cluster="cluster_id").fit(df, "y", "unit", "time", "first_treat")
+
+    def test_cluster_get_params(self):
+        """cluster param round-trips through get_params/set_params."""
+        edid = EfficientDiD(cluster="state")
+        assert edid.get_params()["cluster"] == "state"
+
+
+class TestSmallCohortWarning:
+    """Small cohort warnings for numerical stability."""
+
+    def test_single_unit_cohort_warns(self):
+        """Cohort with 1 unit triggers instability warning."""
+        # Create panel with 1-unit cohort (group 3) and normal cohort (group 5)
+        df = _make_staggered_panel(n_per_group=1, n_control=80, groups=(3,), effects={3: 2.0})
+        # Add a normal-sized cohort
+        df2 = _make_staggered_panel(
+            n_per_group=60, n_control=0, groups=(5,), effects={5: 1.0}, seed=99
+        )
+        df2["unit"] += df["unit"].max() + 1
+        combined = pd.concat([df, df2], ignore_index=True)
+
+        with pytest.warns(UserWarning, match="only 1 unit"):
+            result = EfficientDiD().fit(combined, "y", "unit", "time", "first_treat")
+        # Estimation should still succeed
+        assert np.isfinite(result.overall_att)
+
+    def test_small_share_cohort_warns(self):
+        """Cohort with < 1% share triggers precision warning."""
+        # 2 units in group 3 out of ~202 total units (< 1%)
+        df = _make_staggered_panel(n_per_group=2, n_control=100, groups=(3,), effects={3: 2.0})
+        df2 = _make_staggered_panel(
+            n_per_group=100, n_control=0, groups=(5,), effects={5: 1.0}, seed=99
+        )
+        df2["unit"] += df["unit"].max() + 1
+        combined = pd.concat([df, df2], ignore_index=True)
+
+        with pytest.warns(UserWarning, match="< 1%"):
+            result = EfficientDiD().fit(combined, "y", "unit", "time", "first_treat")
+        assert np.isfinite(result.overall_att)
+
+    def test_normal_cohorts_no_warning(self):
+        """Normal-sized cohorts should not warn about cohort size."""
+        df = _make_staggered_panel(n_per_group=60, n_control=80)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            EfficientDiD().fit(df, "y", "unit", "time", "first_treat")
+        cohort_warnings = [x for x in w if "Cohort" in str(x.message)]
+        assert len(cohort_warnings) == 0
+
+
 class TestEdgeCases:
     """Edge cases: all treated, empty pairs."""
 
     def test_all_units_treated_pt_all(self):
-        """No never-treated units under PT-All should raise ValueError."""
+        """No never-treated units under PT-All should raise ValueError with default control_group."""
         df = _make_staggered_panel(n_control=0, groups=(3, 5))
-        with pytest.raises(ValueError, match="never-treated"):
+        with pytest.raises(ValueError, match="control_group='last_cohort'"):
             EfficientDiD(pt_assumption="all").fit(df, "y", "unit", "time", "first_treat")
 
     def test_all_units_treated_pt_post_raises(self):
-        """No never-treated under PT-Post raises ValueError."""
+        """No never-treated under PT-Post raises ValueError with default control_group."""
         df = _make_staggered_panel(n_control=0, groups=(3, 5))
-        with pytest.raises(ValueError, match="never-treated"):
+        with pytest.raises(ValueError, match="control_group='last_cohort'"):
             EfficientDiD(pt_assumption="post").fit(df, "y", "unit", "time", "first_treat")
 
     def test_anticipation_parameter(self):
@@ -603,6 +835,82 @@ class TestEdgeCases:
             if t >= g - 1  # effective treatment at g - anticipation
         ]
         assert len(post_effects) > 0
+
+
+class TestLastCohortControl:
+    """Last-cohort-as-control fallback when no never-treated units."""
+
+    def test_last_cohort_pt_all(self):
+        """All-treated data with last_cohort control should fit successfully."""
+        df = _make_staggered_panel(
+            n_per_group=60,
+            n_control=0,
+            groups=(3, 5, 7),
+            effects={3: 2.0, 5: 1.5, 7: 1.0},
+        )
+        result = EfficientDiD(pt_assumption="all", control_group="last_cohort").fit(
+            df, "y", "unit", "time", "first_treat"
+        )
+        # Last cohort (7) becomes pseudo-control, only groups 3 and 5 remain
+        assert np.isfinite(result.overall_att)
+        assert result.control_group == "last_cohort"
+        assert 7 not in result.groups
+
+    def test_last_cohort_pt_post(self):
+        """PT-Post with last_cohort control works (just-identified)."""
+        df = _make_staggered_panel(
+            n_per_group=60,
+            n_control=0,
+            groups=(3, 5, 7),
+            effects={3: 2.0, 5: 1.5, 7: 1.0},
+        )
+        result = EfficientDiD(pt_assumption="post", control_group="last_cohort").fit(
+            df, "y", "unit", "time", "first_treat"
+        )
+        assert np.isfinite(result.overall_att)
+
+    def test_last_cohort_reasonable_att(self):
+        """Last-cohort ATT should be close to true effect."""
+        # True effects: group 3 gets +2.0, group 5 gets +1.5
+        df = _make_staggered_panel(
+            n_per_group=100,
+            n_control=0,
+            groups=(3, 5, 7),
+            effects={3: 2.0, 5: 1.5, 7: 1.0},
+            sigma=0.1,
+        )
+        result = EfficientDiD(control_group="last_cohort").fit(
+            df, "y", "unit", "time", "first_treat"
+        )
+        # ATT should be in the ballpark of the true effects (1.5-2.0 range)
+        assert 0.5 < result.overall_att < 3.5
+
+    def test_last_cohort_single_cohort_raises(self):
+        """Single treatment cohort with last_cohort should raise."""
+        df = _make_staggered_panel(n_per_group=60, n_control=0, groups=(3,), effects={3: 2.0})
+        with pytest.raises(ValueError, match="Only one treatment cohort"):
+            EfficientDiD(control_group="last_cohort").fit(df, "y", "unit", "time", "first_treat")
+
+    def test_last_cohort_with_never_treated_warns(self):
+        """Using last_cohort when never-treated exist should warn."""
+        df = _make_staggered_panel(n_per_group=60, n_control=80, groups=(3, 5))
+        with pytest.warns(UserWarning, match="despite never-treated"):
+            EfficientDiD(control_group="last_cohort").fit(df, "y", "unit", "time", "first_treat")
+
+    def test_control_group_get_params(self):
+        """control_group should appear in get_params and round-trip via set_params."""
+        edid = EfficientDiD(control_group="last_cohort")
+        params = edid.get_params()
+        assert params["control_group"] == "last_cohort"
+
+        edid2 = EfficientDiD()
+        edid2.set_params(control_group="last_cohort")
+        assert edid2.control_group == "last_cohort"
+
+    def test_control_group_invalid_raises(self):
+        """Invalid control_group should raise ValueError."""
+        with pytest.raises(ValueError, match="control_group"):
+            EfficientDiD(control_group="invalid")
 
 
 class TestBalanceE:

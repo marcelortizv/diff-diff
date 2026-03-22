@@ -622,7 +622,7 @@ where `q_{g,e} = pi_g / sum_{g' in G_{trt,e}} pi_{g'}`.
 - **Near-zero propensity scores**: Ratio `p_g(X)/p_{g'}(X)` explodes. Overlap assumption (O) rules this out in population; implement trimming or warn on finite-sample instability
 - **Note:** When no sieve degree K succeeds for ratio estimation (basis dimension exceeds comparison group size, or all linear systems are singular), the estimator falls back to a constant ratio of 1 for all units with a UserWarning. The outcome regression adjustment remains active, so the generated outcomes (Eq 4.4) still incorporate covariate information via the m_hat terms. The DR property ensures consistency as long as the outcome regression is correctly specified.
 - **Note:** When no sieve degree K succeeds for inverse propensity estimation (algorithm step 4), the estimator falls back to unconditional n/n_group scaling with a UserWarning, which reduces to the unconditional Omega* approximation for the affected group.
-- **All units eventually treated**: Last cohort serves as "never-treated" by dropping last time period (Phase 1: raises ValueError; last-cohort-as-control fallback planned for Phase 2)
+- **All units eventually treated**: Last cohort serves as "never-treated" by dropping last time period. Use `control_group="last_cohort"` to enable; default `"never_treated"` raises ValueError if no never-treated units exist
 - **Negative weights**: Explicitly stated as harmless for bias and beneficial for precision; arise from efficiency optimization under overidentification (Section 5.2)
 - **PT-Post regime (just-identified)**: Under PT-Post, EDiD automatically reduces to standard single-baseline estimator (Corollary 3.2). No downside to using EDiD -- it subsumes standard estimators
 - **Duplicate rows**: Duplicate `(unit, time)` entries are rejected with `ValueError`. The estimator requires exactly one observation per unit-period
@@ -666,9 +666,9 @@ where `q_{g,e} = pi_g / sum_{g' in G_{trt,e}} pi_{g'}`.
 - [x] With covariates: sieve-based propensity ratio estimation with AIC/BIC selection
 - [x] Kernel-smoothed conditional covariance estimation
 - [x] Analytical SE from EIF sample variance
-- [ ] Cluster bootstrap SE option (recommended for small samples)
+- [x] Cluster-robust SE option (analytical from EIF + cluster-level multiplier bootstrap)
 - [x] Event-study aggregation ES(e) with cohort-size weights
-- [ ] Hausman-type pre-test for PT-All vs PT-Post (Theorem A.1)
+- [x] Hausman-type pre-test for PT-All vs PT-Post (Theorem A.1)
 - [x] Each ATT(g,t) can be estimated independently (parallelizable)
 - [x] Absorbing treatment validation
 - [x] Overlap diagnostics for propensity score ratios
@@ -679,6 +679,9 @@ where `q_{g,e} = pi_g / sum_{g' in G_{trt,e}} pi_{g'}`.
 - **Note:** Outcome regressions m_hat_{g',t,tpre}(X) use linear OLS working models. The paper's Section 4 describes flexible nonparametric nuisance estimation (sieve regression, kernel smoothing, or ML methods). The DR property ensures consistency if either the OLS outcome model or the sieve propensity ratio is correctly specified, but the linear OLS specification does not generically guarantee attainment of the semiparametric efficiency bound unless the conditional mean is linear in the covariates.
 - **Note:** EfficientDiD bootstrap with survey weights deferred to Phase 5
 - **Note:** EfficientDiD covariates (DR path) with survey weights deferred — the doubly robust nuisance estimation does not yet thread survey weights through sieve/kernel steps
+- **Note:** Cluster-robust SEs use the standard Liang-Zeger clustered sandwich estimator applied to EIF values: aggregate EIF within clusters, center, and compute variance with G/(G-1) small-sample correction. Cluster bootstrap generates multiplier weights at the cluster level (all units in a cluster share the same weight). Analytical clustered SEs are the default when `cluster` is set; cluster bootstrap is opt-in via `n_bootstrap > 0`.
+- **Note:** Hausman pretest uses the full cross-(g,t) covariance matrix from EIF values (Theorem A.1), not a diagonal approximation. The variance-difference matrix V = Cov(ATT_post) - Cov(ATT_all) is inverted via Moore-Penrose pseudoinverse to handle finite-sample non-positive-definiteness. Effective rank of V (number of positive eigenvalues) is used as degrees of freedom. Substantially negative eigenvalues trigger a warning.
+- **Note:** Last-cohort-as-control (`control_group="last_cohort"`) reclassifies the latest treatment cohort as pseudo-never-treated and drops time periods at/after that cohort's treatment start. This is distinct from CallawaySantAnna's `not_yet_treated` option which dynamically selects not-yet-treated units per (g,t) pair.
 
 ---
 

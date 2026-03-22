@@ -60,6 +60,8 @@ class EfficientDiDBootstrapMixin:
         balance_e: Optional[int],
         treatment_groups: List[Any],
         cohort_fractions: Dict[float, float],
+        cluster_indices: Optional[np.ndarray] = None,
+        n_clusters: Optional[int] = None,
     ) -> EDiDBootstrapResults:
         """Run multiplier bootstrap on stored EIF values.
 
@@ -68,6 +70,8 @@ class EfficientDiDBootstrapMixin:
             ATT_b(g,t) = ATT(g,t) + (1/n) * xi_b @ eif_gt
 
         where ``xi_b`` is an i.i.d. weight vector of length ``n_units``.
+        When ``cluster_indices`` is provided, weights are generated at the
+        cluster level and expanded to units.
 
         Aggregations (overall, event study, group) are recomputed from
         the perturbed ATT(g,t) values.
@@ -91,10 +95,17 @@ class EfficientDiDBootstrapMixin:
         gt_pairs = list(group_time_effects.keys())
         n_gt = len(gt_pairs)
 
-        # Generate all bootstrap weights upfront: (n_bootstrap, n_units)
-        all_weights = _generate_bootstrap_weights_batch(
-            self.n_bootstrap, n_units, self.bootstrap_weights, rng
-        )
+        # Generate bootstrap weights — at cluster level if clustered
+        if cluster_indices is not None and n_clusters is not None:
+            cluster_weights = _generate_bootstrap_weights_batch(
+                self.n_bootstrap, n_clusters, self.bootstrap_weights, rng
+            )
+            # Expand cluster weights to unit level
+            all_weights = cluster_weights[:, cluster_indices]
+        else:
+            all_weights = _generate_bootstrap_weights_batch(
+                self.n_bootstrap, n_units, self.bootstrap_weights, rng
+            )
 
         # Original ATTs
         original_atts = np.array([group_time_effects[gt]["effect"] for gt in gt_pairs])

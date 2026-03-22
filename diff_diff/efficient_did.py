@@ -1438,15 +1438,17 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         row_finite = np.all(np.isfinite(eif_all_mat), axis=1) & np.all(
             np.isfinite(eif_post_mat), axis=1
         )
+        cl_idx = edid_all._cluster_indices
         if not np.all(row_finite):
             eif_all_mat = eif_all_mat[row_finite]
             eif_post_mat = eif_post_mat[row_finite]
             n_units = int(np.sum(row_finite))
+            if cl_idx is not None:
+                cl_idx = cl_idx[row_finite]
 
         # Compute full covariance matrices
-        if edid_all._cluster_indices is not None:
+        if cl_idx is not None:
             n_cl = edid_all._n_clusters
-            cl_idx = edid_all._cluster_indices
 
             def _cluster_cov(eif_mat: np.ndarray) -> np.ndarray:
                 s_mat = np.column_stack(

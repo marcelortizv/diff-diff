@@ -664,6 +664,45 @@ class TestHausmanPretest:
         assert "HausmanPretestResult" in r
         assert "recommend=" in r
 
+    def test_hausman_clustered(self):
+        """Hausman pretest with cluster-robust covariance should produce finite output."""
+        rng = np.random.default_rng(42)
+        n_clusters = 40
+        units_per_cluster = 5
+        n_units = n_clusters * units_per_cluster
+        n_periods = 7
+        n_per_group = n_units // 4
+
+        cluster_ids = np.repeat(np.arange(n_clusters), units_per_cluster)
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(1, n_periods + 1), n_units)
+        ft = np.full(n_units, np.inf)
+        ft[:n_per_group] = 3
+        ft[n_per_group : 2 * n_per_group] = 5
+        ft_col = np.repeat(ft, n_periods)
+
+        unit_fe = np.repeat(rng.normal(0, 0.3, n_units), n_periods)
+        cluster_fe = np.repeat(rng.normal(0, 0.5, n_clusters)[cluster_ids], n_periods)
+        eps = rng.normal(0, 0.3, len(units))
+        tau = np.where((ft_col < np.inf) & (times >= ft_col), 2.0, 0.0)
+        y = unit_fe + cluster_fe + tau + eps
+
+        df = pd.DataFrame(
+            {
+                "unit": units,
+                "time": times,
+                "first_treat": ft_col,
+                "y": y,
+                "cluster_id": np.repeat(cluster_ids, n_periods),
+            }
+        )
+
+        pretest = EfficientDiD.hausman_pretest(
+            df, "y", "unit", "time", "first_treat", cluster="cluster_id"
+        )
+        assert pretest.recommendation in ("pt_all", "pt_post")
+        assert pretest.df >= 0
+
 
 class TestClusterRobustSE:
     """Cluster-robust standard errors for EfficientDiD."""

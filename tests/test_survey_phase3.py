@@ -425,6 +425,21 @@ class TestBaconDecompositionSurvey:
         diffs = [abs(exact_weights[k] - approx_weights[k]) for k in common_keys]
         assert max(diffs) > 1e-10, "Exact and approximate weights should differ"
 
+    def test_convenience_function(self, staggered_survey_data):
+        """bacon_decompose() convenience function threads survey_design."""
+        from diff_diff.bacon import bacon_decompose
+
+        sd = SurveyDesign(weights="weight")
+        result = bacon_decompose(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            survey_design=sd,
+        )
+        assert result.survey_metadata is not None
+
 
 # =============================================================================
 # TripleDifference
@@ -554,6 +569,22 @@ class TestTripleDifferenceSurvey:
         assert result.survey_metadata is not None
         # Survey df should be used for inference
         assert result.survey_metadata.df_survey is not None
+
+    def test_convenience_function(self, ddd_survey_data):
+        """triple_difference() convenience function threads survey_design."""
+        from diff_diff.triple_diff import triple_difference
+
+        sd = SurveyDesign(weights="weight")
+        result = triple_difference(
+            ddd_survey_data,
+            "outcome",
+            "group",
+            "partition",
+            "time",
+            estimation_method="reg",
+            survey_design=sd,
+        )
+        assert result.survey_metadata is not None
 
 
 # =============================================================================

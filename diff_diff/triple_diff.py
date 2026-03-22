@@ -1702,6 +1702,7 @@ def triple_difference(
     cluster: Optional[str] = None,
     alpha: float = 0.05,
     rank_deficient_action: str = "warn",
+    survey_design: object = None,
 ) -> TripleDifferenceResults:
     """
     Estimate Triple Difference (DDD) treatment effect.
@@ -1776,4 +1777,5 @@ def triple_difference(
         partition=partition,
         time=time,
         covariates=covariates,
+        survey_design=survey_design,
     )

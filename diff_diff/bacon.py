@@ -1043,6 +1043,7 @@ def bacon_decompose(
     time: str,
     first_treat: str,
     weights: str = "approximate",
+    survey_design: object = None,
 ) -> BaconDecompositionResults:
     """
     Convenience function for Goodman-Bacon decomposition.
@@ -1119,4 +1120,4 @@ def bacon_decompose(
     CallawaySantAnna : Robust estimator that avoids forbidden comparisons
     """
     decomp = BaconDecomposition(weights=weights)
-    return decomp.fit(data, outcome, unit, time, first_treat)
+    return decomp.fit(data, outcome, unit, time, first_treat, survey_design=survey_design)

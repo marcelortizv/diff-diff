@@ -715,6 +715,94 @@ class TestTripleDifferenceIPWSurvey:
         assert np.isfinite(result.se)
         assert result.survey_metadata is not None
 
+    def test_ipw_nonuniform_weights_change_att(self, ddd_survey_data):
+        """Non-uniform survey weights should change IPW ATT vs unweighted."""
+        sd = SurveyDesign(weights="weight")
+        r_no = TripleDifference(estimation_method="ipw").fit(
+            ddd_survey_data,
+            "outcome",
+            "group",
+            "partition",
+            "time",
+        )
+        r_sv = TripleDifference(estimation_method="ipw").fit(
+            ddd_survey_data,
+            "outcome",
+            "group",
+            "partition",
+            "time",
+            survey_design=sd,
+        )
+        assert not np.isclose(
+            r_no.att, r_sv.att, atol=1e-6
+        ), "Non-uniform survey weights should change IPW ATT"
+
+    def test_dr_nonuniform_weights_change_att(self, ddd_survey_data):
+        """Non-uniform survey weights should change DR ATT vs unweighted."""
+        sd = SurveyDesign(weights="weight")
+        r_no = TripleDifference(estimation_method="dr").fit(
+            ddd_survey_data,
+            "outcome",
+            "group",
+            "partition",
+            "time",
+        )
+        r_sv = TripleDifference(estimation_method="dr").fit(
+            ddd_survey_data,
+            "outcome",
+            "group",
+            "partition",
+            "time",
+            survey_design=sd,
+        )
+        assert not np.isclose(
+            r_no.att, r_sv.att, atol=1e-6
+        ), "Non-uniform survey weights should change DR ATT"
+
+    def test_ipw_uniform_weights_match_unweighted(self, ddd_survey_data):
+        """Uniform survey weights should match unweighted IPW result."""
+        data = ddd_survey_data.copy()
+        data["uw"] = 1.0
+        sd = SurveyDesign(weights="uw")
+        r_no = TripleDifference(estimation_method="ipw").fit(
+            data,
+            "outcome",
+            "group",
+            "partition",
+            "time",
+        )
+        r_sv = TripleDifference(estimation_method="ipw").fit(
+            data,
+            "outcome",
+            "group",
+            "partition",
+            "time",
+            survey_design=sd,
+        )
+        assert np.isclose(r_no.att, r_sv.att, atol=1e-6)
+
+    def test_dr_uniform_weights_match_unweighted(self, ddd_survey_data):
+        """Uniform survey weights should match unweighted DR result."""
+        data = ddd_survey_data.copy()
+        data["uw"] = 1.0
+        sd = SurveyDesign(weights="uw")
+        r_no = TripleDifference(estimation_method="dr").fit(
+            data,
+            "outcome",
+            "group",
+            "partition",
+            "time",
+        )
+        r_sv = TripleDifference(estimation_method="dr").fit(
+            data,
+            "outcome",
+            "group",
+            "partition",
+            "time",
+            survey_design=sd,
+        )
+        assert np.isclose(r_no.att, r_sv.att, atol=1e-6)
+
 
 # =============================================================================
 # TestCallawaySantAnnaSurveyInference

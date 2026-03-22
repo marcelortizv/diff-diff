@@ -1245,8 +1245,7 @@ has no additional effect.
 - [x] Influence function SE: std(w3·IF_3 + w2·IF_2 - w1·IF_1) / sqrt(n)
 - [x] Cluster-robust SE via Liang-Zeger variance on influence function
 - [x] ATT and SE match R within <0.001% for all methods and DGP types
-- [x] Survey design support (Phase 3): regression method with weighted OLS + TSL on combined influence functions; IPW/DR deferred
-- **Note:** TripleDifference IPW/DR with survey weights deferred until weighted solve_logit() (Phase 5)
+- [x] Survey design support: all methods (reg, IPW, DR) with weighted OLS/logit + TSL on combined influence functions. Weighted solve_logit() for propensity scores in IPW/DR paths.
 
 ---
 

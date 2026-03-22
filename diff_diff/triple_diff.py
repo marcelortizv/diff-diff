@@ -565,9 +565,25 @@ class TripleDifference:
                 resolved_survey=resolved_survey,
             )
         elif self.estimation_method == "ipw":
-            att, se, r_squared, pscore_stats = self._ipw_estimation(y, G, P, T, X)
+            att, se, r_squared, pscore_stats = self._ipw_estimation(
+                y,
+                G,
+                P,
+                T,
+                X,
+                survey_weights=survey_weights,
+                resolved_survey=resolved_survey,
+            )
         else:  # doubly robust
-            att, se, r_squared, pscore_stats = self._doubly_robust(y, G, P, T, X)
+            att, se, r_squared, pscore_stats = self._doubly_robust(
+                y,
+                G,
+                P,
+                T,
+                X,
+                survey_weights=survey_weights,
+                resolved_survey=resolved_survey,
+            )
 
         # Compute inference
         # When survey design is active, use survey df (n_PSU - n_strata)
@@ -758,6 +774,8 @@ class TripleDifference:
         P: np.ndarray,
         T: np.ndarray,
         X: Optional[np.ndarray],
+        survey_weights: Optional[np.ndarray] = None,
+        resolved_survey=None,
     ) -> Tuple[float, float, Optional[float], Optional[Dict[str, float]]]:
         """
         Estimate ATT using inverse probability weighting via three-DiD
@@ -767,7 +785,15 @@ class TripleDifference:
         subgroup membership P(subgroup=4|X) within {j, 4} subset.
         Matches R's triplediff::ddd() with est_method="ipw".
         """
-        return self._estimate_ddd_decomposition(y, G, P, T, X)
+        return self._estimate_ddd_decomposition(
+            y,
+            G,
+            P,
+            T,
+            X,
+            survey_weights=survey_weights,
+            resolved_survey=resolved_survey,
+        )
 
     def _doubly_robust(
         self,
@@ -776,6 +802,8 @@ class TripleDifference:
         P: np.ndarray,
         T: np.ndarray,
         X: Optional[np.ndarray],
+        survey_weights: Optional[np.ndarray] = None,
+        resolved_survey=None,
     ) -> Tuple[float, float, Optional[float], Optional[Dict[str, float]]]:
         """
         Estimate ATT using doubly robust estimation via three-DiD
@@ -786,7 +814,15 @@ class TripleDifference:
         correctly specified. Matches R's triplediff::ddd() with
         est_method="dr".
         """
-        return self._estimate_ddd_decomposition(y, G, P, T, X)
+        return self._estimate_ddd_decomposition(
+            y,
+            G,
+            P,
+            T,
+            X,
+            survey_weights=survey_weights,
+            resolved_survey=resolved_survey,
+        )
 
     def _estimate_ddd_decomposition(
         self,
@@ -1186,7 +1222,17 @@ class TripleDifference:
         Matches R's triplediff::compute_did_rc().
         """
         if est_method == "ipw":
-            return self._compute_did_rc_ipw(y, post, PA4, PAa, pscore, covX, hessian, n)
+            return self._compute_did_rc_ipw(
+                y,
+                post,
+                PA4,
+                PAa,
+                pscore,
+                covX,
+                hessian,
+                n,
+                weights=weights,
+            )
         elif est_method == "reg":
             return self._compute_did_rc_reg(
                 y,
@@ -1215,6 +1261,7 @@ class TripleDifference:
                 or_trt_post,
                 hessian,
                 n,
+                weights=weights,
             )
 
     def _compute_did_rc_ipw(
@@ -1227,6 +1274,7 @@ class TripleDifference:
         covX: np.ndarray,
         hessian: Optional[np.ndarray],
         n: int,
+        weights: Optional[np.ndarray] = None,
     ) -> Tuple[float, np.ndarray]:
         """IPW DiD for a single pairwise comparison (RC)."""
         # Riesz representers (IPW weights * indicators)
@@ -1234,6 +1282,13 @@ class TripleDifference:
         riesz_treat_post = PA4 * post
         riesz_control_pre = pscore * PAa * (1 - post) / (1 - pscore)
         riesz_control_post = pscore * PAa * post / (1 - pscore)
+
+        # Incorporate survey weights into Riesz representers
+        if weights is not None:
+            riesz_treat_pre = riesz_treat_pre * weights
+            riesz_treat_post = riesz_treat_post * weights
+            riesz_control_pre = riesz_control_pre * weights
+            riesz_control_post = riesz_control_post * weights
 
         # Hajek-normalized cell-time means
         def _hajek(riesz, y_vals):
@@ -1393,6 +1448,7 @@ class TripleDifference:
         or_trt_post: np.ndarray,
         hessian: Optional[np.ndarray],
         n: int,
+        weights: Optional[np.ndarray] = None,
     ) -> Tuple[float, np.ndarray]:
         """Doubly robust DiD for a single pairwise comparison (RC)."""
         or_ctrl = post * or_ctrl_post + (1 - post) * or_ctrl_pre
@@ -1405,6 +1461,16 @@ class TripleDifference:
         riesz_d = PA4
         riesz_dt1 = PA4 * post
         riesz_dt0 = PA4 * (1 - post)
+
+        # Incorporate survey weights into Riesz representers
+        if weights is not None:
+            riesz_treat_pre = riesz_treat_pre * weights
+            riesz_treat_post = riesz_treat_post * weights
+            riesz_control_pre = riesz_control_pre * weights
+            riesz_control_post = riesz_control_post * weights
+            riesz_d = riesz_d * weights
+            riesz_dt1 = riesz_dt1 * weights
+            riesz_dt0 = riesz_dt0 * weights
 
         # DR cell-time components
         def _safe_ratio(num, denom):

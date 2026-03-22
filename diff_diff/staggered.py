@@ -715,13 +715,15 @@ class CallawaySantAnna(
                 mu_c = float(np.sum(sw_c_norm * control_change))
                 att = mu_t - mu_c
 
-                var_t = float(np.sum(sw_t_norm * (treated_change - mu_t) ** 2))
-                var_c = float(np.sum(sw_c_norm * (control_change - mu_c) ** 2))
-                se = float(np.sqrt(var_t + var_c)) if (n_t > 0 and n_c > 0) else 0.0
-
                 # Influence function (survey-weighted)
                 inf_treated = sw_t_norm * (treated_change - mu_t)
                 inf_control = -sw_c_norm * (control_change - mu_c)
+                # SE derived from IF: sum(IF_i^2)
+                se = (
+                    float(np.sqrt(np.sum(inf_treated**2) + np.sum(inf_control**2)))
+                    if (n_t > 0 and n_c > 0)
+                    else 0.0
+                )
                 sw_sum = float(np.sum(sw_t))
             else:
                 att = float(np.mean(treated_change) - np.mean(control_change))
@@ -1624,9 +1626,11 @@ class CallawaySantAnna(
                 inf_func = np.concatenate([inf_treated, inf_control])
 
                 # SE from influence function variance
-                var_t = float(np.sum(sw_t_norm * (treated_change - mu_t) ** 2))
-                var_c = float(np.sum(sw_c_norm * (control_change - mu_c) ** 2))
-                se = float(np.sqrt(var_t + var_c)) if (n_t > 0 and n_c > 0) else 0.0
+                se = (
+                    float(np.sqrt(np.sum(inf_treated**2) + np.sum(inf_control**2)))
+                    if (n_t > 0 and n_c > 0)
+                    else 0.0
+                )
             else:
                 att = float(np.mean(treated_change) - np.mean(control_change))
 
@@ -1787,9 +1791,11 @@ class CallawaySantAnna(
                 inf_control = -sw_c_norm * (control_change - mu_c)
                 inf_func = np.concatenate([inf_treated, inf_control])
 
-                var_t = float(np.sum(sw_t_norm * (treated_change - mu_t) ** 2))
-                var_c = float(np.sum(sw_c_norm * (control_change - mu_c) ** 2))
-                se = float(np.sqrt(var_t + var_c)) if (n_t > 0 and n_c > 0) else 0.0
+                se = (
+                    float(np.sqrt(np.sum(inf_treated**2) + np.sum(inf_control**2)))
+                    if (n_t > 0 and n_c > 0)
+                    else 0.0
+                )
             else:
                 p_treat = n_treated / n_total  # unconditional propensity score
 
@@ -1998,9 +2004,11 @@ class CallawaySantAnna(
                 inf_control = -sw_c_norm * (control_change - mu_c)
                 inf_func = np.concatenate([inf_treated, inf_control])
 
-                var_t = float(np.sum(sw_t_norm * (treated_change - mu_t) ** 2))
-                var_c = float(np.sum(sw_c_norm * (control_change - mu_c) ** 2))
-                se = float(np.sqrt(var_t + var_c)) if (n_t > 0 and n_c > 0) else 0.0
+                se = (
+                    float(np.sqrt(np.sum(inf_treated**2) + np.sum(inf_control**2)))
+                    if (n_t > 0 and n_c > 0)
+                    else 0.0
+                )
             else:
                 att = float(np.mean(treated_change) - np.mean(control_change))
 

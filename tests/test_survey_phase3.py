@@ -631,6 +631,24 @@ class TestEfficientDiDSurvey:
                 survey_design=sd,
             )
 
+    def test_covariates_survey_raises(self, staggered_survey_data):
+        """Covariates + survey should raise NotImplementedError."""
+        from diff_diff import EfficientDiD
+
+        # Add a covariate column
+        staggered_survey_data["x1"] = np.random.randn(len(staggered_survey_data))
+        sd = SurveyDesign(weights="weight")
+        with pytest.raises(NotImplementedError, match="covariates"):
+            EfficientDiD(n_bootstrap=0).fit(
+                staggered_survey_data,
+                "outcome",
+                "unit",
+                "time",
+                "first_treat",
+                covariates=["x1"],
+                survey_design=sd,
+            )
+
     def test_survey_metadata_fields(self, staggered_survey_data):
         """survey_metadata has correct fields."""
         from diff_diff import EfficientDiD

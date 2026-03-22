@@ -275,6 +275,16 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 "survey_design for design-based standard errors."
             )
 
+        # Guard covariates + survey (DR path does not yet thread survey weights)
+        if covariates is not None and len(covariates) > 0 and resolved_survey is not None:
+            raise NotImplementedError(
+                "Survey weights with covariates are not yet supported for "
+                "EfficientDiD. The doubly robust covariate path does not "
+                "thread survey weights through nuisance estimation. "
+                "Use covariates=None with survey_design, or drop survey_design "
+                "when using covariates."
+            )
+
         # Normalize empty covariates list to None (use nocov path)
         if covariates is not None and len(covariates) == 0:
             covariates = None

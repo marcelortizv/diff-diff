@@ -36,9 +36,10 @@ Phase 5 infrastructure (weighted `solve_logit()` or bootstrap+survey interaction
 | TripleDifference | IPW and DR methods + survey | Phase 5: weighted `solve_logit()` |
 | ContinuousDiD | Multiplier bootstrap + survey | Phase 5: bootstrap+survey interaction |
 | EfficientDiD | Multiplier bootstrap + survey | Phase 5: bootstrap+survey interaction |
+| EfficientDiD | Covariates (DR path) + survey | DR nuisance estimation needs survey weight threading |
 
-All four estimators raise `NotImplementedError` when the blocked combination is
-attempted, with a message pointing to the planned phase.
+All blocked combinations raise `NotImplementedError` when attempted, with a
+message pointing to the planned phase or describing the limitation.
 
 ## Phase 4: Complex Standalone Estimators
 

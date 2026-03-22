@@ -391,6 +391,9 @@ def parse_review_state(path: str) -> "tuple[list[dict], int]":
             file=sys.stderr,
         )
         return ([], 0)
+    # Filter to dict elements only — non-dict entries (e.g., strings) would
+    # crash downstream code that calls f.get(...)
+    findings = [f for f in findings if isinstance(f, dict)]
 
     review_round = data.get("review_round", 0)
     if not isinstance(review_round, int):
@@ -669,12 +672,14 @@ def merge_findings(
         merged_pass2.append(f)
 
     # 2b: Unconsumed previous findings without file paths → try to match
-    # current findings that DO have file paths (reverse direction)
+    # current findings that DO have file paths (reverse direction).
+    # Track consumed current candidates to ensure one-to-one matching.
     current_by_fallback: dict[tuple, list[dict]] = {}
     for f in merged_pass2:
         _, fallback = _finding_keys(f)
         current_by_fallback.setdefault(fallback, []).append(f)
 
+    consumed_current_ids: set[str] = set()
     for f in previous:
         fid = f.get("id", "")
         if fid in consumed_ids:
@@ -684,9 +689,14 @@ def merge_findings(
         if has_file:
             continue  # Has file path — should have matched in pass 1 if possible
         # Previous finding without file path — try fallback against current
-        candidates = current_by_fallback.get(fallback, [])
+        # Exclude already-consumed current candidates for one-to-one matching
+        candidates = [
+            c for c in current_by_fallback.get(fallback, [])
+            if c.get("id", "") not in consumed_current_ids
+        ]
         if len(candidates) == 1:
             consumed_ids.add(fid)
+            consumed_current_ids.add(candidates[0].get("id", ""))
 
     # Mark unconsumed previous findings as addressed
     for f in previous:

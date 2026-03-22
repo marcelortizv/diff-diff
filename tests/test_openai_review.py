@@ -767,6 +767,20 @@ class TestParseReviewState:
         assert findings == []
         assert round_num == 0
 
+    def test_non_dict_findings_filtered(self, review_mod, tmp_path):
+        """Non-dict elements in findings list are filtered out, not crash."""
+        state_file = tmp_path / "review-state.json"
+        state = {
+            "schema_version": 1,
+            "findings": ["oops", {"id": "R1-P1-1", "severity": "P1"}, 42],
+            "review_round": 1,
+        }
+        state_file.write_text(json.dumps(state))
+        findings, round_num = review_mod.parse_review_state(str(state_file))
+        assert len(findings) == 1
+        assert findings[0]["id"] == "R1-P1-1"
+        assert round_num == 1
+
 
 class TestWriteReviewState:
     def test_writes_valid_json(self, review_mod, tmp_path):
@@ -1067,6 +1081,28 @@ class TestMergeFindings:
         # One should match, one should be addressed
         open_findings = [f for f in merged if f["status"] == "open"]
         addressed = [f for f in merged if f["status"] == "addressed"]
+        assert len(open_findings) == 1
+        assert len(addressed) == 1
+
+    def test_duplicate_no_location_findings_one_to_one(self, review_mod):
+        """Two prior no-location findings should not both match one current finding."""
+        previous = [
+            {"id": "R1-P1-1", "severity": "P1", "location": "",
+             "section": "Code Quality", "summary": "Missing NaN guard",
+             "status": "open"},
+            {"id": "R1-P1-2", "severity": "P1", "location": "",
+             "section": "Methodology", "summary": "Missing NaN guard",
+             "status": "open"},
+        ]
+        current = [
+            {"id": "R2-P1-1", "severity": "P1", "location": "foo.py:L10",
+             "section": "Code Quality", "summary": "Missing NaN guard",
+             "status": "open"},
+        ]
+        merged = review_mod.merge_findings(previous, current)
+        open_findings = [f for f in merged if f["status"] == "open"]
+        addressed = [f for f in merged if f["status"] == "addressed"]
+        # One current + one prior matched = 1 open; one prior unmatched = 1 addressed
         assert len(open_findings) == 1
         assert len(addressed) == 1
 

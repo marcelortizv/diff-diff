@@ -217,44 +217,33 @@ echo "Force-fresh: deleted all prior review state. Fresh review will seed new ba
 # DO still pass --review-state, --commit-sha, --base-ref so the fresh run seeds a new baseline
 ```
 
-**Otherwise**, check for existing review state:
+**Otherwise**, validate existing review state using the Python validator (single-point
+validation that checks schema version, branch/base match, and required finding fields):
 ```bash
 if [ -f .claude/reviews/review-state.json ]; then
-    # Read state fields
-    last_reviewed_commit=$(python3 -c "
-import json, sys
-try:
-    d = json.load(open('.claude/reviews/review-state.json'))
-    print(d.get('last_reviewed_commit', '') if isinstance(d, dict) else '')
-except Exception:
-    print('')
-" 2>/dev/null)
-    stored_branch=$(python3 -c "
-import json
-try:
-    d = json.load(open('.claude/reviews/review-state.json'))
-    print(d.get('branch', '') if isinstance(d, dict) else '')
-except Exception:
-    print('')
-" 2>/dev/null)
-    stored_base=$(python3 -c "
-import json
-try:
-    d = json.load(open('.claude/reviews/review-state.json'))
-    print(d.get('base_ref', '') if isinstance(d, dict) else '')
-except Exception:
-    print('')
-" 2>/dev/null)
+    # Use the script's validate_review_state() for comprehensive validation
+    # Returns: last_reviewed_commit and is_valid flag
+    validation_result=$(python3 -c "
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('openai_review', '.claude/scripts/openai_review.py')
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+_, _, commit, valid = mod.validate_review_state(
+    '.claude/reviews/review-state.json', '$branch_name', '$comparison_ref'
+)
+print(f'{commit}|{valid}')
+" 2>/dev/null || echo "|False")
+    last_reviewed_commit=$(echo "$validation_result" | cut -d'|' -f1)
+    state_valid=$(echo "$validation_result" | cut -d'|' -f2)
 
-    # Validate branch/base match
-    if [ "$stored_branch" != "$branch_name" ] || [ "$stored_base" != "$comparison_ref" ]; then
-        echo "Warning: review-state.json is from branch '$stored_branch' (base: '$stored_base'), but current is '$branch_name' (base: '$comparison_ref'). Discarding stale state."
+    if [ "$state_valid" != "True" ]; then
+        echo "Warning: review-state.json validation failed. Running fresh review."
         rm -f .claude/reviews/review-state.json
         rm -f .claude/reviews/local-review-previous.md
         last_reviewed_commit=""
     fi
 
-    # Validate commit is an ancestor of HEAD (not just that the object exists)
+    # Only generate delta when state is valid AND commit is an ancestor of HEAD
     if [ -n "$last_reviewed_commit" ] && git merge-base --is-ancestor "$last_reviewed_commit" HEAD 2>/dev/null; then
         # SHA is a valid ancestor — generate delta diff
         git diff --unified=5 "${last_reviewed_commit}...HEAD" > /tmp/ai-review-delta-diff.patch

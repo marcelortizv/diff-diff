@@ -718,7 +718,7 @@ class TestParseReviewState:
             "schema_version": 1,
             "last_reviewed_commit": "abc123",
             "review_round": 2,
-            "findings": [{"id": "R1-P1-1", "severity": "P1"}],
+            "findings": [{"id": "R1-P1-1", "severity": "P1", "summary": "Test", "status": "open"}],
         }
         state_file.write_text(json.dumps(state))
         findings, round_num = review_mod.parse_review_state(str(state_file))
@@ -770,9 +770,13 @@ class TestParseReviewState:
     def test_non_dict_findings_filtered(self, review_mod, tmp_path):
         """Non-dict elements in findings list are filtered out, not crash."""
         state_file = tmp_path / "review-state.json"
+        good_finding = {
+            "id": "R1-P1-1", "severity": "P1",
+            "summary": "Test finding", "status": "open",
+        }
         state = {
             "schema_version": 1,
-            "findings": ["oops", {"id": "R1-P1-1", "severity": "P1"}, 42],
+            "findings": ["oops", good_finding, 42],
             "review_round": 1,
         }
         state_file.write_text(json.dumps(state))
@@ -780,6 +784,23 @@ class TestParseReviewState:
         assert len(findings) == 1
         assert findings[0]["id"] == "R1-P1-1"
         assert round_num == 1
+
+    def test_findings_missing_required_keys_filtered(self, review_mod, tmp_path):
+        """Dict findings missing required keys (id, severity, summary, status) filtered."""
+        state_file = tmp_path / "review-state.json"
+        state = {
+            "schema_version": 1,
+            "findings": [
+                {"id": "R1-P1-1", "severity": "P1"},  # missing summary, status
+                {"id": "R1-P1-2", "severity": "P1", "summary": "Good", "status": "open"},
+                {"severity": "P2", "summary": "No id", "status": "open"},  # missing id
+            ],
+            "review_round": 1,
+        }
+        state_file.write_text(json.dumps(state))
+        findings, round_num = review_mod.parse_review_state(str(state_file))
+        assert len(findings) == 1
+        assert findings[0]["id"] == "R1-P1-2"
 
 
 class TestWriteReviewState:
@@ -803,7 +824,7 @@ class TestWriteReviewState:
     def test_round_trips_with_parse(self, review_mod, tmp_path):
         path = str(tmp_path / "review-state.json")
         original_findings = [
-            {"id": "R1-P1-1", "severity": "P1", "summary": "Test finding"}
+            {"id": "R1-P1-1", "severity": "P1", "summary": "Test finding", "status": "open"}
         ]
         review_mod.write_review_state(
             path=path,
@@ -1274,7 +1295,7 @@ class TestParseThenMerge:
             base_ref="main",
             branch="feature/x",
             review_round=1,
-            findings=[{"id": "R1-P1-1", "severity": "P1", "summary": "Test"}],
+            findings=[{"id": "R1-P1-1", "severity": "P1", "summary": "Test", "status": "open"}],
         )
         initial_mtime = os.path.getmtime(state_path)
 
@@ -1293,6 +1314,53 @@ class TestParseThenMerge:
         stored_findings, stored_round = review_mod.parse_review_state(state_path)
         assert stored_round == 1
         assert stored_findings[0]["id"] == "R1-P1-1"
+
+
+# ---------------------------------------------------------------------------
+# validate_review_state — comprehensive validation
+# ---------------------------------------------------------------------------
+
+
+class TestValidateReviewState:
+    def test_valid_state_returns_true(self, review_mod, tmp_path):
+        path = str(tmp_path / "review-state.json")
+        review_mod.write_review_state(
+            path=path, commit_sha="abc123", base_ref="main",
+            branch="feature/test", review_round=1,
+            findings=[{"id": "R1-P1-1", "severity": "P1",
+                       "summary": "Test", "status": "open"}],
+        )
+        findings, rnd, commit, valid = review_mod.validate_review_state(
+            path, "feature/test", "main"
+        )
+        assert valid
+        assert commit == "abc123"
+        assert len(findings) == 1
+
+    def test_branch_mismatch_returns_false(self, review_mod, tmp_path):
+        path = str(tmp_path / "review-state.json")
+        review_mod.write_review_state(
+            path=path, commit_sha="abc123", base_ref="main",
+            branch="feature/old", review_round=1, findings=[],
+        )
+        _, _, _, valid = review_mod.validate_review_state(
+            path, "feature/new", "main"
+        )
+        assert not valid
+
+    def test_schema_mismatch_returns_false(self, review_mod, tmp_path):
+        state_file = tmp_path / "review-state.json"
+        state_file.write_text(json.dumps({"schema_version": 999}))
+        _, _, _, valid = review_mod.validate_review_state(
+            str(state_file), "b", "main"
+        )
+        assert not valid
+
+    def test_missing_file_returns_false(self, review_mod):
+        _, _, _, valid = review_mod.validate_review_state(
+            "/nonexistent.json", "b", "main"
+        )
+        assert not valid
 
 
 # ---------------------------------------------------------------------------

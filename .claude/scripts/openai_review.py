@@ -391,15 +391,63 @@ def parse_review_state(path: str) -> "tuple[list[dict], int]":
             file=sys.stderr,
         )
         return ([], 0)
-    # Filter to dict elements only — non-dict entries (e.g., strings) would
-    # crash downstream code that calls f.get(...)
-    findings = [f for f in findings if isinstance(f, dict)]
+    # Filter to well-formed finding dicts only — require id, severity, summary,
+    # status keys to prevent crashes in merge_findings() and compile_prompt()
+    _REQUIRED_FINDING_KEYS = {"id", "severity", "summary", "status"}
+    findings = [
+        f for f in findings
+        if isinstance(f, dict) and _REQUIRED_FINDING_KEYS.issubset(f.keys())
+    ]
 
     review_round = data.get("review_round", 0)
     if not isinstance(review_round, int):
         review_round = 0
 
     return (findings, review_round)
+
+
+def validate_review_state(
+    path: str, expected_branch: str, expected_base: str
+) -> "tuple[list[dict], int, str, bool]":
+    """Comprehensive review-state.json validation.
+
+    Returns (findings, review_round, last_commit, is_valid) where is_valid
+    means delta mode is safe to use. Checks: file exists, valid JSON,
+    schema version, branch/base match, and required finding fields.
+
+    The skill should call this once and use is_valid to gate ALL delta behavior.
+    """
+    findings, review_round = parse_review_state(path)
+
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return ([], 0, "", False)
+
+    if not isinstance(data, dict):
+        return ([], 0, "", False)
+
+    if data.get("schema_version") != _REVIEW_STATE_SCHEMA_VERSION:
+        return ([], 0, "", False)
+
+    last_commit = data.get("last_reviewed_commit", "")
+    stored_branch = data.get("branch", "")
+    stored_base = data.get("base_ref", "")
+
+    if stored_branch != expected_branch or stored_base != expected_base:
+        print(
+            f"Warning: review-state.json is from branch '{stored_branch}' "
+            f"(base: '{stored_base}'), but current is '{expected_branch}' "
+            f"(base: '{expected_base}'). Delta mode disabled.",
+            file=sys.stderr,
+        )
+        return (findings, review_round, last_commit, False)
+
+    if not last_commit:
+        return (findings, review_round, "", False)
+
+    return (findings, review_round, last_commit, True)
 
 
 def write_review_state(

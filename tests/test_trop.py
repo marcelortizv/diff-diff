@@ -3619,9 +3619,9 @@ class TestTROPBootstrapNaNSE:
 
         # Disable Rust backend so Python fallback path is tested,
         # then patch _fit_global_with_fixed_lambda to always raise
-        trop_module = sys.modules['diff_diff.trop']
-        with patch.object(trop_module, 'HAS_RUST_BACKEND', False), \
-             patch.object(trop_module, '_rust_bootstrap_trop_variance_global', None), \
+        trop_global_module = sys.modules['diff_diff.trop_global']
+        with patch.object(trop_global_module, 'HAS_RUST_BACKEND', False), \
+             patch.object(trop_global_module, '_rust_bootstrap_trop_variance_global', None), \
              patch.object(TROP, '_fit_global_with_fixed_lambda',
                           side_effect=ValueError("forced failure")):
             with warnings.catch_warnings():

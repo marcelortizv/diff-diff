@@ -1,8 +1,7 @@
 # Survey Data Support Roadmap
 
 This document captures planned future work for survey data support in diff-diff.
-Phases 1-2 (core infrastructure + base estimator integration) are implemented.
-Phases 3-5 are deferred for future PRs.
+Phases 1-3 are implemented. Phases 4-5 are deferred for future PRs.
 
 ## Implemented (Phases 1-2)
 
@@ -15,19 +14,32 @@ Phases 3-5 are deferred for future PRs.
 - **Weighted demeaning**: `demean_by_group()` and `within_transform()` with weights
 - **SurveyMetadata** in results objects with effective n, DEFF, weight_range
 
-## Phase 3: OLS-Based Standalone Estimators
+## Implemented (Phase 3): OLS-Based Standalone Estimators
 
-These estimators use `LinearRegression` or `solve_ols()` internally, so weight
-support is largely mechanical (threading `survey_design` through `fit()`).
+| Estimator | File | Survey Support | Notes |
+|-----------|------|----------------|-------|
+| StackedDiD | `stacked_did.py` | pweight only | Q-weights compose multiplicatively with survey weights; TSL vcov on composed weights; fweight/aweight rejected (composition changes weight semantics) |
+| SunAbraham | `sun_abraham.py` | Full | Survey weights in LinearRegression + weighted within-transform; bootstrap+survey deferred |
+| BaconDecomposition | `bacon.py` | Diagnostic | Weighted cell means, weighted within-transform, weighted group shares; no inference (diagnostic only) |
+| TripleDifference | `triple_diff.py` | Reg only | Regression method with weighted OLS + TSL on influence functions; IPW/DR deferred (needs weighted `solve_logit()`) |
+| ContinuousDiD | `continuous_did.py` | Analytical | Weighted B-spline OLS + TSL on influence functions; bootstrap+survey deferred |
+| EfficientDiD | `efficient_did.py` | Analytical | Weighted means/covariances in Omega* + TSL on EIF scores; bootstrap+survey deferred |
 
-| Estimator | File | Complexity | Notes |
-|-----------|------|------------|-------|
-| StackedDiD | `stacked_did.py` | Low | Q-weights compose multiplicatively with survey weights |
-| SunAbraham | `sun_abraham.py` | Low | Single saturated regression via LinearRegression |
-| BaconDecomposition | `bacon.py` | Medium | Weighted demeaning, weighted cell means, effective group sizes |
-| TripleDifference | `triple_diff.py` | Medium-High | Three methods (reg, ipw, dr); weighted cell means, weighted logistic regression (requires Phase 5) |
-| ContinuousDiD | `continuous_did.py` | Low-Medium | Uses LinearRegression internally |
-| EfficientDiD | `efficient_did.py` | Low-Medium | Uses LinearRegression internally |
+### Phase 3 Deferred Work
+
+The following capabilities were deferred from Phase 3 because they depend on
+Phase 5 infrastructure (weighted `solve_logit()` or bootstrap+survey interaction):
+
+| Estimator | Deferred Capability | Blocker |
+|-----------|-------------------|---------|
+| SunAbraham | Pairs bootstrap + survey | Phase 5: bootstrap+survey interaction |
+| TripleDifference | IPW and DR methods + survey | Phase 5: weighted `solve_logit()` |
+| ContinuousDiD | Multiplier bootstrap + survey | Phase 5: bootstrap+survey interaction |
+| EfficientDiD | Multiplier bootstrap + survey | Phase 5: bootstrap+survey interaction |
+| EfficientDiD | Covariates (DR path) + survey | DR nuisance estimation needs survey weight threading |
+
+All blocked combinations raise `NotImplementedError` when attempted, with a
+message pointing to the planned phase or describing the limitation.
 
 ## Phase 4: Complex Standalone Estimators
 

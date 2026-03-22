@@ -30,6 +30,12 @@ from diff_diff.continuous_did_results import (
     DoseResponseCurve,
 )
 from diff_diff.linalg import solve_ols
+from diff_diff.survey import (
+    ResolvedSurveyDesign,
+    _resolve_survey_for_fit,
+    _validate_unit_constant_survey,
+    compute_survey_vcov,
+)
 from diff_diff.utils import safe_inference
 
 __all__ = ["ContinuousDiD", "ContinuousDiDResults", "DoseResponseCurve"]
@@ -159,6 +165,7 @@ class ContinuousDiD:
         first_treat: str,
         dose: str,
         aggregate: Optional[str] = None,
+        survey_design: object = None,
     ) -> ContinuousDiDResults:
         """
         Fit the continuous DiD estimator.
@@ -180,6 +187,10 @@ class ContinuousDiD:
         aggregate : str, optional
             ``"dose"`` for dose-response aggregation, ``"eventstudy"`` for
             binarized event study.
+        survey_design : SurveyDesign, optional
+            Survey design specification for design-based inference.
+            Supports weighted estimation and Taylor series linearization
+            variance with strata, PSU, and FPC.
 
         Returns
         -------
@@ -189,8 +200,23 @@ class ContinuousDiD:
         _VALID_AGGREGATES = (None, "dose", "eventstudy")
         if aggregate not in _VALID_AGGREGATES:
             raise ValueError(
-                f"Invalid aggregate: '{aggregate}'. "
-                f"Must be one of {_VALID_AGGREGATES}."
+                f"Invalid aggregate: '{aggregate}'. " f"Must be one of {_VALID_AGGREGATES}."
+            )
+
+        # Resolve survey design if provided
+        resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, data, "analytical")
+        )
+
+        # Validate within-unit constancy for panel survey designs
+        if resolved_survey is not None:
+            _validate_unit_constant_survey(data, unit, survey_design)
+
+        # Guard: bootstrap + survey not yet supported
+        if self.n_bootstrap > 0 and resolved_survey is not None:
+            raise NotImplementedError(
+                "Multiplier bootstrap with survey weights is planned for Phase 5. "
+                "Use n_bootstrap=0 with survey_design for design-based standard errors."
             )
 
         df = data.copy()
@@ -211,9 +237,7 @@ class ContinuousDiD:
 
         # Drop units with positive first_treat but zero dose (R convention)
         unit_info = df.groupby(unit).first()[[first_treat, dose]]
-        drop_units = unit_info[
-            (unit_info[first_treat] > 0) & (unit_info[dose] == 0)
-        ].index
+        drop_units = unit_info[(unit_info[first_treat] > 0) & (unit_info[dose] == 0)].index
         if len(drop_units) > 0:
             warnings.warn(
                 f"Dropping {len(drop_units)} units with positive first_treat but zero dose.",
@@ -285,9 +309,23 @@ class ContinuousDiD:
                 "Add never-treated units or use a dataset with D=0 observations."
             )
 
+        # Re-resolve survey design on filtered df if rows were dropped
+        # (survey arrays must align with df, not the original data)
+        if resolved_survey is not None and len(df) < len(data):
+            resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
+                _resolve_survey_for_fit(survey_design, df, "analytical")
+            )
+
         # 2. Precompute structures
         precomp = self._precompute_structures(
-            df, outcome, unit, time, first_treat, dose, time_periods
+            df,
+            outcome,
+            unit,
+            time,
+            first_treat,
+            dose,
+            time_periods,
+            survey_weights=survey_weights,
         )
 
         # Compute dvals (evaluation grid)
@@ -309,7 +347,14 @@ class ContinuousDiD:
         for g in treatment_groups:
             for t in time_periods:
                 result = self._compute_dose_response_gt(
-                    precomp, g, t, knots, degree, dvals
+                    precomp,
+                    g,
+                    t,
+                    knots,
+                    degree,
+                    dvals,
+                    survey_weights=precomp.get("unit_survey_weights"),
+                    resolved_survey=resolved_survey,
                 )
                 if result is not None:
                     gt_results[(g, t)] = result
@@ -319,11 +364,7 @@ class ContinuousDiD:
             raise ValueError("No valid (g,t) cells computed.")
 
         # 4. Aggregate
-        post_gt = {
-            (g, t): r
-            for (g, t), r in gt_results.items()
-            if t >= g - self.anticipation
-        }
+        post_gt = {(g, t): r for (g, t), r in gt_results.items() if t >= g - self.anticipation}
 
         # Dose-response aggregation
         n_grid = len(dvals)
@@ -349,7 +390,14 @@ class ContinuousDiD:
         # Event study aggregation (binarized) — runs on ALL (g,t) cells
         event_study_effects = None
         if aggregate == "eventstudy":
-            event_study_effects = self._aggregate_event_study(gt_results)
+            event_study_effects = self._aggregate_event_study(
+                gt_results,
+                gt_bootstrap_info=gt_bootstrap_info,
+                unit_survey_weights=precomp.get("unit_survey_weights"),
+                unit_cohorts=precomp["unit_cohorts"],
+            )
+
+        _survey_df = None  # Set by analytical branch when survey is active
 
         if len(post_gt) == 0:
             warnings.warn(
@@ -366,12 +414,19 @@ class ContinuousDiD:
         else:
             # Compute cell weights: group-proportional (matching R's contdid convention).
             # Each group g gets weight proportional to its number of treated units.
+            # When survey weights present, use sum(w_g) / sum(w) instead of n_g / N.
             # Within each group, weight is divided equally among post-treatment cells.
             group_n_treated = {}
             group_n_post_cells = {}
+            unit_sw = precomp.get("unit_survey_weights")
             for (g, t), r in post_gt.items():
                 if g not in group_n_treated:
-                    group_n_treated[g] = float(r["n_treated"])
+                    if unit_sw is not None:
+                        # Survey-weighted group size: sum of weights for treated units in g
+                        g_mask = precomp["unit_cohorts"] == g
+                        group_n_treated[g] = float(np.sum(unit_sw[g_mask]))
+                    else:
+                        group_n_treated[g] = float(r["n_treated"])
                     group_n_post_cells[g] = 0
                 group_n_post_cells[g] += 1
 
@@ -397,9 +452,18 @@ class ContinuousDiD:
             # 5. Bootstrap / Analytical SE
             if self.n_bootstrap > 0:
                 boot_result = self._run_bootstrap(
-                    precomp, gt_results, gt_bootstrap_info, post_gt, cell_weights,
-                    knots, degree, dvals, overall_att, overall_acrt,
-                    agg_att_d, agg_acrt_d,
+                    precomp,
+                    gt_results,
+                    gt_bootstrap_info,
+                    post_gt,
+                    cell_weights,
+                    knots,
+                    degree,
+                    dvals,
+                    overall_att,
+                    overall_acrt,
+                    agg_att_d,
+                    agg_acrt_d,
                     event_study_effects,
                 )
                 att_d_se = boot_result["att_d_se"]
@@ -411,54 +475,71 @@ class ContinuousDiD:
                 att_d_p = boot_result["att_d_p"]
                 acrt_d_p = boot_result["acrt_d_p"]
                 overall_att_se = boot_result["overall_att_se"]
-                overall_att_t = safe_inference(
-                    overall_att, overall_att_se, self.alpha
-                )[0]
+                overall_att_t = safe_inference(overall_att, overall_att_se, self.alpha)[0]
                 overall_att_p = boot_result["overall_att_p"]
                 overall_att_ci = boot_result["overall_att_ci"]
                 overall_acrt_se = boot_result["overall_acrt_se"]
-                overall_acrt_t = safe_inference(
-                    overall_acrt, overall_acrt_se, self.alpha
-                )[0]
+                overall_acrt_t = safe_inference(overall_acrt, overall_acrt_se, self.alpha)[0]
                 overall_acrt_p = boot_result["overall_acrt_p"]
                 overall_acrt_ci = boot_result["overall_acrt_ci"]
                 if event_study_effects is not None:
                     for e, info in event_study_effects.items():
                         if e in boot_result.get("es_se", {}):
                             info["se"] = boot_result["es_se"][e]
-                            info["t_stat"] = safe_inference(
-                                info["effect"], info["se"], self.alpha
-                            )[0]
+                            info["t_stat"] = safe_inference(info["effect"], info["se"], self.alpha)[
+                                0
+                            ]
                             info["p_value"] = boot_result["es_p"][e]
                             info["conf_int"] = boot_result["es_ci"][e]
             else:
                 # Analytical SEs via influence functions
                 analytic = self._compute_analytical_se(
-                    precomp, gt_results, gt_bootstrap_info, post_gt, cell_weights,
-                    knots, degree, dvals, agg_att_d, agg_acrt_d,
+                    precomp,
+                    gt_results,
+                    gt_bootstrap_info,
+                    post_gt,
+                    cell_weights,
+                    knots,
+                    degree,
+                    dvals,
+                    agg_att_d,
+                    agg_acrt_d,
+                    resolved_survey=resolved_survey,
                 )
                 att_d_se = analytic["att_d_se"]
                 acrt_d_se = analytic["acrt_d_se"]
                 overall_att_se = analytic["overall_att_se"]
                 overall_acrt_se = analytic["overall_acrt_se"]
 
+                # Survey df for t-distribution inference (unit-level, not panel-level)
+                _survey_df = analytic.get("df_survey")
+
+                # Recompute survey_metadata from unit-level design so reported
+                # effective_n/n_psu/df_survey match the inference actually run
+                _unit_resolved = analytic.get("unit_resolved")
+                if _unit_resolved is not None:
+                    from diff_diff.survey import compute_survey_metadata
+
+                    raw_w_unit = _unit_resolved.weights
+                    survey_metadata = compute_survey_metadata(_unit_resolved, raw_w_unit)
+
                 overall_att_t, overall_att_p, overall_att_ci = safe_inference(
-                    overall_att, overall_att_se, self.alpha
+                    overall_att, overall_att_se, self.alpha, df=_survey_df
                 )
                 overall_acrt_t, overall_acrt_p, overall_acrt_ci = safe_inference(
-                    overall_acrt, overall_acrt_se, self.alpha
+                    overall_acrt, overall_acrt_se, self.alpha, df=_survey_df
                 )
 
                 # Per-grid-point inference for dose-response
                 for idx in range(n_grid):
                     _, _, ci = safe_inference(
-                        agg_att_d[idx], att_d_se[idx], self.alpha
+                        agg_att_d[idx], att_d_se[idx], self.alpha, df=_survey_df
                     )
                     att_d_ci_lower[idx] = ci[0]
                     att_d_ci_upper[idx] = ci[1]
 
                     _, _, ci = safe_inference(
-                        agg_acrt_d[idx], acrt_d_se[idx], self.alpha
+                        agg_acrt_d[idx], acrt_d_se[idx], self.alpha, df=_survey_df
                     )
                     acrt_d_ci_lower[idx] = ci[0]
                     acrt_d_ci_upper[idx] = ci[1]
@@ -466,16 +547,62 @@ class ContinuousDiD:
                 # Event study analytical SEs
                 if event_study_effects is not None:
                     n_units = precomp["n_units"]
+                    unit_sw = precomp.get("unit_survey_weights")
+
+                    # Build unit-level ResolvedSurveyDesign once (reused per bin)
+                    unit_resolved_es = None
+                    if resolved_survey is not None:
+                        row_idx = precomp["unit_first_panel_row"]
+                        uw = (
+                            precomp.get("unit_survey_weights")
+                            if precomp.get("unit_survey_weights") is not None
+                            else np.ones(n_units)
+                        )
+                        us = (
+                            resolved_survey.strata[row_idx]
+                            if resolved_survey.strata is not None
+                            else None
+                        )
+                        up = (
+                            resolved_survey.psu[row_idx]
+                            if resolved_survey.psu is not None
+                            else None
+                        )
+                        uf = (
+                            resolved_survey.fpc[row_idx]
+                            if resolved_survey.fpc is not None
+                            else None
+                        )
+                        n_strata_u = len(np.unique(us)) if us is not None else 0
+                        n_psu_u = len(np.unique(up)) if up is not None else 0
+                        unit_resolved_es = ResolvedSurveyDesign(
+                            weights=uw,
+                            weight_type=resolved_survey.weight_type,
+                            strata=us,
+                            psu=up,
+                            fpc=uf,
+                            n_strata=n_strata_u,
+                            n_psu=n_psu_u,
+                            lonely_psu=resolved_survey.lonely_psu,
+                        )
+
                     for e_val, info_e in event_study_effects.items():
                         # Collect (g,t) cells for this event-time bin
                         e_gts = [gt for gt in gt_results if gt[1] - gt[0] == e_val]
                         if not e_gts:
                             continue
-                        # n_treated-proportional weights within this bin
-                        ns = np.array(
-                            [gt_results[gt]["n_treated"] for gt in e_gts],
-                            dtype=float,
-                        )
+                        # Weights within this bin: survey-weighted mass or n_treated
+                        if unit_sw is not None:
+                            unit_cohorts = precomp["unit_cohorts"]
+                            ns = np.array(
+                                [float(np.sum(unit_sw[unit_cohorts == gt[0]])) for gt in e_gts],
+                                dtype=float,
+                            )
+                        else:
+                            ns = np.array(
+                                [gt_results[gt]["n_treated"] for gt in e_gts],
+                                dtype=float,
+                            )
                         total_n = ns.sum()
                         if total_n == 0:
                             continue
@@ -492,6 +619,10 @@ class ContinuousDiD:
                             control_idx = b_info["control_indices"]
                             n_t = b_info["n_treated"]
                             n_c = b_info["n_control"]
+                            # Use survey-weighted masses when available
+                            if "w_treated" in b_info:
+                                n_t = b_info["w_treated"]
+                                n_c = b_info["w_control"]
                             n_total_gt = n_t + n_c
                             p_1 = n_t / n_total_gt
                             p_0 = n_c / n_total_gt
@@ -502,19 +633,24 @@ class ContinuousDiD:
 
                             for k, uid in enumerate(treated_idx):
                                 if_es[uid] += (
-                                    w
-                                    * (delta_y_treated[k] - att_glob_gt - mu_0)
-                                    / p_1
-                                    / n_total_gt
+                                    w * (delta_y_treated[k] - att_glob_gt - mu_0) / p_1 / n_total_gt
                                 )
                             for k, uid in enumerate(control_idx):
-                                if_es[uid] -= (
-                                    w * ee_control[k] / p_0 / n_total_gt
-                                )
+                                if_es[uid] -= w * ee_control[k] / p_0 / n_total_gt
 
-                        es_se = float(np.sqrt(np.sum(if_es**2)))
+                        # Compute SE: survey-aware TSL or standard sqrt(sum(IF^2))
+                        if unit_resolved_es is not None:
+                            X_ones_es = np.ones((n_units, 1))
+                            # Rescale IFs by total survey mass (not n_units) for fweight support
+                            tsl_scale_es = float(unit_resolved_es.weights.sum())
+                            if_es_tsl = if_es * tsl_scale_es
+                            vcov_es = compute_survey_vcov(X_ones_es, if_es_tsl, unit_resolved_es)
+                            es_se = float(np.sqrt(np.abs(vcov_es[0, 0])))
+                        else:
+                            es_se = float(np.sqrt(np.sum(if_es**2)))
+
                         t_stat, p_val, ci_es = safe_inference(
-                            info_e["effect"], es_se, self.alpha
+                            info_e["effect"], es_se, self.alpha, df=_survey_df
                         )
                         info_e["se"] = es_se
                         info_e["t_stat"] = t_stat
@@ -531,6 +667,7 @@ class ContinuousDiD:
             target="att",
             p_value=att_d_p,
             n_bootstrap=self.n_bootstrap,
+            df_survey=_survey_df,
         )
         dose_response_acrt = DoseResponseCurve(
             dose_grid=dvals,
@@ -541,14 +678,13 @@ class ContinuousDiD:
             target="acrt",
             p_value=acrt_d_p,
             n_bootstrap=self.n_bootstrap,
+            df_survey=_survey_df,
         )
 
         # Strip bootstrap internals from gt_results
         clean_gt = {}
         for gt, r in gt_results.items():
-            clean_gt[gt] = {
-                k: v for k, v in r.items() if not k.startswith("_")
-            }
+            clean_gt[gt] = {k: v for k, v in r.items() if not k.startswith("_")}
 
         return ContinuousDiDResults(
             dose_response_att=dose_response_att,
@@ -581,6 +717,7 @@ class ContinuousDiD:
             seed=self.seed,
             rank_deficient_action=self.rank_deficient_action,
             event_study_effects=event_study_effects,
+            survey_metadata=survey_metadata,
         )
 
     # ------------------------------------------------------------------
@@ -596,6 +733,7 @@ class ContinuousDiD:
         first_treat: str,
         dose: str,
         time_periods: List[Any],
+        survey_weights: Optional[np.ndarray] = None,
     ) -> Dict[str, Any]:
         """Pivot to wide format and build lookup structures."""
         all_units = sorted(df[unit].unique())
@@ -620,6 +758,21 @@ class ContinuousDiD:
             unit_cohorts[i] = unit_first.loc[u, first_treat]
             dose_vector[i] = unit_first.loc[u, dose]
 
+        # Build unit-to-first-panel-row mapping (for subsetting panel-level arrays)
+        # This maps each unit index to the positional index of its first row in df.
+        unit_first_panel_row = np.zeros(n_units, dtype=int)
+        seen_units: set = set()
+        for pos_idx, (_, row) in enumerate(df.iterrows()):
+            u = row[unit]
+            if u not in seen_units:
+                seen_units.add(u)
+                unit_first_panel_row[unit_to_idx[u]] = pos_idx
+
+        # Per-unit survey weights (take first obs per unit from panel data)
+        unit_survey_weights = None
+        if survey_weights is not None:
+            unit_survey_weights = survey_weights[unit_first_panel_row]
+
         # Cohort masks
         cohort_masks = {}
         unique_cohorts = np.unique(unit_cohorts)
@@ -639,6 +792,8 @@ class ContinuousDiD:
             "never_treated_mask": never_treated_mask,
             "time_periods": time_periods,
             "n_units": n_units,
+            "unit_survey_weights": unit_survey_weights,
+            "unit_first_panel_row": unit_first_panel_row,
         }
 
     def _compute_dose_response_gt(
@@ -649,6 +804,8 @@ class ContinuousDiD:
         knots: np.ndarray,
         degree: int,
         dvals: np.ndarray,
+        survey_weights: Optional[np.ndarray] = None,
+        resolved_survey: object = None,
     ) -> Optional[Dict[str, Any]]:
         """Compute dose-response for a single (g,t) cell."""
         period_to_col = precomp["period_to_col"]
@@ -703,11 +860,25 @@ class ContinuousDiD:
             return None
 
         # Outcome changes
-        delta_y_treated = outcome_matrix[treated_mask, col_t] - outcome_matrix[treated_mask, col_base]
-        delta_y_control = outcome_matrix[control_mask, col_t] - outcome_matrix[control_mask, col_base]
+        delta_y_treated = (
+            outcome_matrix[treated_mask, col_t] - outcome_matrix[treated_mask, col_base]
+        )
+        delta_y_control = (
+            outcome_matrix[control_mask, col_t] - outcome_matrix[control_mask, col_base]
+        )
 
-        # Control counterfactual
-        mu_0 = float(np.mean(delta_y_control))
+        # Subset survey weights to the cell
+        w_treated = None
+        w_control = None
+        if survey_weights is not None:
+            w_treated = survey_weights[treated_mask]
+            w_control = survey_weights[control_mask]
+
+        # Control counterfactual (weighted mean when survey weights present)
+        if w_control is not None:
+            mu_0 = float(np.average(delta_y_control, weights=w_control))
+        else:
+            mu_0 = float(np.mean(delta_y_control))
 
         # Demean
         delta_tilde_y = delta_y_treated - mu_0
@@ -722,8 +893,7 @@ class ContinuousDiD:
         # Check for all-same dose
         if np.all(treated_doses == treated_doses[0]):
             warnings.warn(
-                f"All treated doses identical in (g={g}, t={t}). "
-                "ACRT(d) will be 0 everywhere.",
+                f"All treated doses identical in (g={g}, t={t}). " "ACRT(d) will be 0 everywhere.",
                 UserWarning,
                 stacklevel=3,
             )
@@ -738,12 +908,28 @@ class ContinuousDiD:
             )
             return None
 
-        # OLS regression
-        beta_hat, residuals, _ = solve_ols(
-            Psi, delta_tilde_y,
-            return_vcov=False,
-            rank_deficient_action=self.rank_deficient_action,
-        )
+        # OLS or WLS regression
+        if w_treated is not None:
+            # WLS: apply sqrt(w) transformation
+            sqrt_w = np.sqrt(w_treated)
+            Psi_w = Psi * sqrt_w[:, np.newaxis]
+            delta_tilde_y_w = delta_tilde_y * sqrt_w
+            beta_hat, _, _ = solve_ols(
+                Psi_w,
+                delta_tilde_y_w,
+                return_vcov=False,
+                rank_deficient_action=self.rank_deficient_action,
+            )
+            # Residuals on original scale (for influence functions)
+            beta_pred_tmp = np.where(np.isnan(beta_hat), 0.0, beta_hat)
+            residuals = delta_tilde_y - Psi @ beta_pred_tmp
+        else:
+            beta_hat, residuals, _ = solve_ols(
+                Psi,
+                delta_tilde_y,
+                return_vcov=False,
+                rank_deficient_action=self.rank_deficient_action,
+            )
 
         # For prediction: zero out NaN (dropped rank-deficient columns).
         # solve_ols sets dropped-column coefficients to NaN (R convention);
@@ -759,21 +945,37 @@ class ContinuousDiD:
         acrt_d = dPsi_eval @ beta_pred
 
         # Summary parameters
-        att_glob = float(np.mean(delta_y_treated) - mu_0)
+        if w_treated is not None:
+            att_glob = float(np.average(delta_y_treated, weights=w_treated) - mu_0)
+        else:
+            att_glob = float(np.mean(delta_y_treated) - mu_0)
 
         # ACRT^{glob}: plug-in average of ACRT(D_i) for treated
         dPsi_treated = bspline_derivative_design_matrix(
             treated_doses, knots, degree, include_intercept=True
         )
-        acrt_glob = float(np.mean(dPsi_treated @ beta_pred))
+        if w_treated is not None:
+            acrt_glob = float(np.average(dPsi_treated @ beta_pred, weights=w_treated))
+        else:
+            acrt_glob = float(np.mean(dPsi_treated @ beta_pred))
 
         # Store bootstrap info for influence function computation
-        # bread = (Psi'Psi / n_treated)^{-1}
-        PtP = Psi.T @ Psi
-        try:
-            bread = np.linalg.inv(PtP / n_treated)
-        except np.linalg.LinAlgError:
-            bread = np.linalg.pinv(PtP / n_treated)
+        # bread = (Psi'WPsi / n_treated)^{-1} when survey, (Psi'Psi / n_treated)^{-1} otherwise
+        if w_treated is not None:
+            w_treated_sum = float(np.sum(w_treated))
+            PtWP = Psi.T @ (Psi * w_treated[:, np.newaxis])
+            # Normalize bread by weighted mass (not raw count) for consistency
+            # with downstream IF score denominators that also use weighted mass
+            try:
+                bread = np.linalg.inv(PtWP / w_treated_sum)
+            except np.linalg.LinAlgError:
+                bread = np.linalg.pinv(PtWP / w_treated_sum)
+        else:
+            PtP = Psi.T @ Psi
+            try:
+                bread = np.linalg.inv(PtP / n_treated)
+            except np.linalg.LinAlgError:
+                bread = np.linalg.pinv(PtP / n_treated)
 
         # ee_treated: per-unit estimating equation vectors (K-vector per unit)
         ee_treated = Psi * residuals[:, np.newaxis]  # (n_treated, K)
@@ -781,18 +983,28 @@ class ContinuousDiD:
         # ee_control: per-unit deviation from control mean
         ee_control = delta_y_control - mu_0  # (n_control,)
 
-        # psi_bar: mean basis vector for treated
-        psi_bar = np.mean(Psi, axis=0)  # (K,)
+        # psi_bar: mean basis vector for treated (weighted when survey)
+        if w_treated is not None:
+            psi_bar = np.average(Psi, axis=0, weights=w_treated)
+        else:
+            psi_bar = np.mean(Psi, axis=0)  # (K,)
 
         # Unit indices for bootstrap
         treated_indices = np.where(treated_mask)[0]
         control_indices = np.where(control_mask)[0]
+
+        # dpsi_bar: mean derivative basis vector (weighted when survey)
+        if w_treated is not None:
+            dpsi_bar = np.average(dPsi_treated, axis=0, weights=w_treated)
+        else:
+            dpsi_bar = np.mean(dPsi_treated, axis=0)
 
         bootstrap_info = {
             "bread": bread,
             "ee_treated": ee_treated,
             "ee_control": ee_control,
             "psi_bar": psi_bar,
+            "dpsi_bar": dpsi_bar,
             "beta_hat": beta_hat,
             "beta_pred": beta_pred,
             "treated_indices": treated_indices,
@@ -809,6 +1021,11 @@ class ContinuousDiD:
             "acrt_glob": acrt_glob,
         }
 
+        # Store survey-weighted masses for IF linearization
+        if w_treated is not None:
+            bootstrap_info["w_treated"] = float(np.sum(w_treated))
+            bootstrap_info["w_control"] = float(np.sum(w_control))
+
         return {
             "att_d": att_d,
             "acrt_d": acrt_d,
@@ -823,15 +1040,25 @@ class ContinuousDiD:
     def _aggregate_event_study(
         self,
         gt_results: Dict[Tuple, Dict],
+        gt_bootstrap_info: Dict[Tuple, Dict] = None,
+        unit_survey_weights: Optional[np.ndarray] = None,
+        unit_cohorts: Optional[np.ndarray] = None,
     ) -> Dict[int, Dict[str, Any]]:
         """Aggregate binarized ATT_glob by relative period."""
-        effects_by_e: Dict[int, List[Tuple[float, float]]] = {}
+        effects_by_e: Dict[int, List[Tuple[float, float, Tuple]]] = {}
 
         for (g, t), r in gt_results.items():
             e = t - g
             if e not in effects_by_e:
                 effects_by_e[e] = []
-            effects_by_e[e].append((r["att_glob"], float(r["n_treated"])))
+            # Compute weight for this (g,t) cell
+            if unit_survey_weights is not None and unit_cohorts is not None:
+                # Survey-weighted: sum of survey weights for treated units in group g
+                g_mask = unit_cohorts == g
+                cell_weight = float(np.sum(unit_survey_weights[g_mask]))
+            else:
+                cell_weight = float(r["n_treated"])
+            effects_by_e[e].append((r["att_glob"], cell_weight, (g, t)))
 
         result = {}
         for e, entries in sorted(effects_by_e.items()):
@@ -863,6 +1090,7 @@ class ContinuousDiD:
         dvals: np.ndarray,
         agg_att_d: np.ndarray,
         agg_acrt_d: np.ndarray,
+        resolved_survey: object = None,
     ) -> Dict[str, Any]:
         """Compute analytical SEs using influence functions."""
         n_units = precomp["n_units"]
@@ -885,13 +1113,17 @@ class ContinuousDiD:
             control_idx = info["control_indices"]
             n_t = info["n_treated"]
             n_c = info["n_control"]
+            # Use survey-weighted masses when available
+            if "w_treated" in info:
+                n_t = info["w_treated"]
+                n_c = info["w_control"]
             bread = info["bread"]
             ee_treated = info["ee_treated"]
             ee_control = info["ee_control"]
             psi_bar = info["psi_bar"]
+            dpsi_bar = info["dpsi_bar"]
             Psi_eval = info["Psi_eval"]
             dPsi_eval = info["dPsi_eval"]
-            dPsi_treated = info["dPsi_treated"]
             att_glob_gt = info["att_glob"]
             mu_0 = info["mu_0"]
             delta_y_treated = info["delta_y_treated"]
@@ -924,7 +1156,6 @@ class ContinuousDiD:
                 if_acrt_d[idx] += w * (dPsi_eval @ beta_pert)
 
             # ACRT_glob IF: (1/n_t) sum_j dpsi(D_j)' @ beta_pert
-            dpsi_bar = np.mean(dPsi_treated, axis=0)
             for k, idx in enumerate(treated_idx):
                 beta_pert = bread @ ee_treated[k] / n_t
                 if_acrt_glob[idx] += w * float(dpsi_bar @ beta_pert)
@@ -932,19 +1163,91 @@ class ContinuousDiD:
                 beta_pert = -bread @ psi_bar * ee_control[k] / n_c
                 if_acrt_glob[idx] += w * float(dpsi_bar @ beta_pert)
 
-        # SE = sqrt(sum(IF_i^2)), matching CallawaySantAnna's convention
-        # (per-unit IFs already contain 1/n_t, 1/n_c scaling)
-        overall_att_se = float(np.sqrt(np.sum(if_att_glob**2)))
-        overall_acrt_se = float(np.sqrt(np.sum(if_acrt_glob**2)))
+        # Compute SEs from influence functions
+        if resolved_survey is not None:
+            # Survey design: use TSL variance on the aggregate influence functions.
+            # The IFs serve as "residuals" in the TSL sandwich; X is a column of ones
+            # (the estimand is a scalar/vector mean of the IFs).
+            #
+            # The resolved_survey has panel-level arrays (n_obs = n_units * n_periods),
+            # but influence functions are unit-level (n_units). Build a unit-level
+            # ResolvedSurveyDesign by subsetting to one obs per unit.
+            row_idx = precomp["unit_first_panel_row"]
+            unit_weights = precomp.get("unit_survey_weights")
+            if unit_weights is None:
+                unit_weights = np.ones(n_units)
 
-        att_d_se = np.sqrt(np.sum(if_att_d**2, axis=0))
-        acrt_d_se = np.sqrt(np.sum(if_acrt_d**2, axis=0))
+            unit_strata = (
+                resolved_survey.strata[row_idx] if resolved_survey.strata is not None else None
+            )
+            unit_psu = resolved_survey.psu[row_idx] if resolved_survey.psu is not None else None
+            unit_fpc = resolved_survey.fpc[row_idx] if resolved_survey.fpc is not None else None
+
+            # Count unique strata/PSU in the unit-level subset
+            n_strata_unit = len(np.unique(unit_strata)) if unit_strata is not None else 0
+            n_psu_unit = len(np.unique(unit_psu)) if unit_psu is not None else 0
+
+            unit_resolved = ResolvedSurveyDesign(
+                weights=unit_weights,
+                weight_type=resolved_survey.weight_type,
+                strata=unit_strata,
+                psu=unit_psu,
+                fpc=unit_fpc,
+                n_strata=n_strata_unit,
+                n_psu=n_psu_unit,
+                lonely_psu=resolved_survey.lonely_psu,
+            )
+
+            X_ones = np.ones((n_units, 1))
+
+            # Rescale IFs from 1/n convention to score scale for TSL sandwich.
+            # The per-unit IFs contain internal 1/n_t, 1/n_c scaling (for the
+            # unweighted SE = sqrt(sum(IF^2)) convention). compute_survey_vcov
+            # applies its own (X'WX)^{-1} bread, which would double-count.
+            # Rescale by the unit-level total survey mass (= n_units for
+            # pweight/aweight, but can differ for fweight).
+            tsl_scale = float(unit_resolved.weights.sum())
+            if_att_glob_tsl = if_att_glob * tsl_scale
+            if_acrt_glob_tsl = if_acrt_glob * tsl_scale
+            if_att_d_tsl = if_att_d * tsl_scale
+            if_acrt_d_tsl = if_acrt_d * tsl_scale
+
+            # Overall ATT SE via compute_survey_vcov
+            vcov_att = compute_survey_vcov(X_ones, if_att_glob_tsl, unit_resolved)
+            overall_att_se = float(np.sqrt(np.abs(vcov_att[0, 0])))
+
+            # Overall ACRT SE via compute_survey_vcov
+            vcov_acrt = compute_survey_vcov(X_ones, if_acrt_glob_tsl, unit_resolved)
+            overall_acrt_se = float(np.sqrt(np.abs(vcov_acrt[0, 0])))
+
+            # Per-grid-point SEs for dose-response curves
+            att_d_se = np.zeros(n_grid)
+            acrt_d_se = np.zeros(n_grid)
+            for d_idx in range(n_grid):
+                vcov_d = compute_survey_vcov(X_ones, if_att_d_tsl[:, d_idx], unit_resolved)
+                att_d_se[d_idx] = float(np.sqrt(np.abs(vcov_d[0, 0])))
+
+                vcov_d = compute_survey_vcov(X_ones, if_acrt_d_tsl[:, d_idx], unit_resolved)
+                acrt_d_se[d_idx] = float(np.sqrt(np.abs(vcov_d[0, 0])))
+        else:
+            # SE = sqrt(sum(IF_i^2)), matching CallawaySantAnna's convention
+            # (per-unit IFs already contain 1/n_t, 1/n_c scaling)
+            overall_att_se = float(np.sqrt(np.sum(if_att_glob**2)))
+            overall_acrt_se = float(np.sqrt(np.sum(if_acrt_glob**2)))
+
+            att_d_se = np.sqrt(np.sum(if_att_d**2, axis=0))
+            acrt_d_se = np.sqrt(np.sum(if_acrt_d**2, axis=0))
+
+        # Return unit-level survey df and resolved design for metadata recomputation
+        unit_df_survey = unit_resolved.df_survey if resolved_survey is not None else None
 
         return {
             "overall_att_se": overall_att_se,
             "overall_acrt_se": overall_acrt_se,
             "att_d_se": att_d_se,
             "acrt_d_se": acrt_d_se,
+            "df_survey": unit_df_survey,
+            "unit_resolved": unit_resolved if resolved_survey is not None else None,
         }
 
     def _run_bootstrap(
@@ -994,6 +1297,7 @@ class ContinuousDiD:
         if event_study_effects is not None:
             # Build event-time bin weights from n_treated
             from collections import defaultdict
+
             es_bin_total: Dict[int, float] = defaultdict(float)
             for gt, r in gt_results.items():
                 g_val, t_val = gt
@@ -1027,7 +1331,7 @@ class ContinuousDiD:
             w_treated = all_weights[:, treated_idx]
             w_control = all_weights[:, control_idx]
 
-            with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
                 treated_sum = w_treated @ ee_treated / n_t
                 control_sum = (w_control @ ee_control) / n_c
                 psi_bar_outer = psi_bar[np.newaxis, :]
@@ -1094,8 +1398,10 @@ class ContinuousDiD:
 
         for idx in range(n_grid):
             se, ci, p = compute_effect_bootstrap_stats(
-                original_att_d[idx], boot_att_d[:, idx],
-                alpha=self.alpha, context=f"ATT(d) at grid point {idx}",
+                original_att_d[idx],
+                boot_att_d[:, idx],
+                alpha=self.alpha,
+                context=f"ATT(d) at grid point {idx}",
             )
             att_d_se[idx] = se
             att_d_ci_lower[idx] = ci[0]
@@ -1103,8 +1409,10 @@ class ContinuousDiD:
             att_d_p[idx] = p
 
             se, ci, p = compute_effect_bootstrap_stats(
-                original_acrt_d[idx], boot_acrt_d[:, idx],
-                alpha=self.alpha, context=f"ACRT(d) at grid point {idx}",
+                original_acrt_d[idx],
+                boot_acrt_d[:, idx],
+                alpha=self.alpha,
+                context=f"ACRT(d) at grid point {idx}",
             )
             acrt_d_se[idx] = se
             acrt_d_ci_lower[idx] = ci[0]
@@ -1122,14 +1430,20 @@ class ContinuousDiD:
 
         # Overall
         se, ci, p = compute_effect_bootstrap_stats(
-            original_att, boot_att_glob, alpha=self.alpha, context="overall ATT_glob",
+            original_att,
+            boot_att_glob,
+            alpha=self.alpha,
+            context="overall ATT_glob",
         )
         result["overall_att_se"] = se
         result["overall_att_ci"] = ci
         result["overall_att_p"] = p
 
         se, ci, p = compute_effect_bootstrap_stats(
-            original_acrt, boot_acrt_glob, alpha=self.alpha, context="overall ACRT_glob",
+            original_acrt,
+            boot_acrt_glob,
+            alpha=self.alpha,
+            context="overall ACRT_glob",
         )
         result["overall_acrt_se"] = se
         result["overall_acrt_ci"] = ci
@@ -1142,8 +1456,10 @@ class ContinuousDiD:
             es_p = {}
             for e in es_keys:
                 se_e, ci_e, p_e = compute_effect_bootstrap_stats(
-                    event_study_effects[e]["effect"], boot_es[e],
-                    alpha=self.alpha, context=f"event study e={e}",
+                    event_study_effects[e]["effect"],
+                    boot_es[e],
+                    alpha=self.alpha,
+                    context=f"event study e={e}",
                 )
                 es_se[e] = se_e
                 es_ci[e] = ci_e

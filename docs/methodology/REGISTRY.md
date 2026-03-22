@@ -494,6 +494,8 @@ See `docs/methodology/continuous-did.md` Section 4 for full details.
 - [ ] Covariate support (deferred, matching R v0.1.0)
 - [ ] Discrete treatment saturated regression
 - [ ] Lowest-dose-as-control (Remark 3.1)
+- [x] Survey design support (Phase 3): weighted B-spline OLS, TSL on influence functions; bootstrap+survey deferred
+- **Note:** ContinuousDiD bootstrap with survey weights deferred to Phase 5
 
 ---
 
@@ -670,10 +672,13 @@ where `q_{g,e} = pi_g / sum_{g' in G_{trt,e}} pi_{g'}`.
 - [x] Each ATT(g,t) can be estimated independently (parallelizable)
 - [x] Absorbing treatment validation
 - [x] Overlap diagnostics for propensity score ratios
+- [x] Survey design support (Phase 3): survey-weighted means/covariances in Omega*, TSL on EIF scores; bootstrap+survey deferred
 - **Note:** Sieve ratio estimation uses polynomial basis functions (total degree up to K) with AIC/BIC model selection. The paper describes sieve estimators generally without specifying a particular basis family; polynomial sieves are a standard choice (Section 4, Eq 4.2). Negative sieve ratio predictions are clipped to a small positive value since the population ratio p_g(X)/p_{g'}(X) is non-negative.
 - **Note:** Kernel-smoothed conditional covariance Omega*(X) uses Gaussian kernel with Silverman's rule-of-thumb bandwidth by default. The paper specifies kernel smoothing (step 5, Section 4) without mandating a particular kernel or bandwidth selection method.
 - **Note:** Conditional covariance Omega*(X) scales each term by per-unit sieve-estimated inverse propensities s_hat_{g'}(X) = 1/p_{g'}(X) (algorithm step 4), matching Eq 3.12. The inverse propensity estimation uses the same polynomial sieve convex minimization as the ratio estimator. Estimated s_hat values are clipped to [1, n] with a UserWarning when clipping binds, mirroring the ratio path's overlap diagnostics.
 - **Note:** Outcome regressions m_hat_{g',t,tpre}(X) use linear OLS working models. The paper's Section 4 describes flexible nonparametric nuisance estimation (sieve regression, kernel smoothing, or ML methods). The DR property ensures consistency if either the OLS outcome model or the sieve propensity ratio is correctly specified, but the linear OLS specification does not generically guarantee attainment of the semiparametric efficiency bound unless the conditional mean is linear in the covariates.
+- **Note:** EfficientDiD bootstrap with survey weights deferred to Phase 5
+- **Note:** EfficientDiD covariates (DR path) with survey weights deferred — the doubly robust nuisance estimation does not yet thread survey weights through sieve/kernel steps
 
 ---
 
@@ -744,6 +749,7 @@ where weights ŵ_{g,e} = n_{g,e} / Σ_g n_{g,e} (sample share of cohort g at eve
 - [x] R comparison: ATT matches within machine precision (<1e-11)
 - [x] R comparison: SE matches within 0.3% (well within 1% threshold)
 - [x] R comparison: Event study effects match perfectly (correlation 1.0)
+- [x] Survey design support (Phase 3): weighted within-transform, survey weights in LinearRegression with TSL vcov; bootstrap+survey deferred
 
 ---
 
@@ -1014,6 +1020,8 @@ The paper text states a stricter bound (T_min + 1) but the R code by the co-auth
 - [x] Overall ATT as average of post-treatment delta_h with delta-method SE
 - [x] Anticipation parameter support
 - [x] Never-treated encoding (0 and inf)
+- [x] Survey design support (Phase 3): Q-weights compose multiplicatively with survey weights; TSL vcov on composed weights; survey design columns propagated through sub-experiments
+- **Note:** Survey weights compose multiplicatively with Q-weights for StackedDiD; only `weight_type="pweight"` (default) is supported — `fweight` and `aweight` are rejected because Q-weight composition changes weight semantics (non-integer for fweight, non-inverse-variance for aweight)
 
 ---
 
@@ -1230,6 +1238,8 @@ has no additional effect.
 - [x] Influence function SE: std(w3·IF_3 + w2·IF_2 - w1·IF_1) / sqrt(n)
 - [x] Cluster-robust SE via Liang-Zeger variance on influence function
 - [x] ATT and SE match R within <0.001% for all methods and DGP types
+- [x] Survey design support (Phase 3): regression method with weighted OLS + TSL on combined influence functions; IPW/DR deferred
+- **Note:** TripleDifference IPW/DR with survey weights deferred until weighted solve_logit() (Phase 5)
 
 ---
 
@@ -1565,6 +1575,8 @@ Weights depend on group sizes and variance in treatment timing.
 - [ ] Weights sum to approximately 1 (numerical precision)
 - [ ] TWFE coefficient ≈ weighted sum of 2×2 estimates
 - [ ] Visualization shows weight vs. estimate by comparison type
+- [x] Survey design support (Phase 3): weighted cell means, weighted within-transform, weighted group shares
+- **Note:** Bacon decomposition with survey weights is diagnostic; exact-sum guarantee is approximate; `weights="exact"` requires within-unit-constant survey columns (approximate path accepts time-varying weights)
 
 ---
 

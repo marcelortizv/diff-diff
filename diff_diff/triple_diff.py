@@ -28,7 +28,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from diff_diff.linalg import solve_ols, solve_logit
+
+from diff_diff.linalg import solve_logit, solve_ols
 from diff_diff.results import _get_significance_stars
 from diff_diff.utils import safe_inference
 
@@ -102,6 +103,8 @@ class TripleDifferenceResults:
     inference_method: str = field(default="analytical")
     n_bootstrap: Optional[int] = field(default=None)
     n_clusters: Optional[int] = field(default=None)
+    # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
+    survey_metadata: Optional[Any] = field(default=None)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -145,6 +148,28 @@ class TripleDifferenceResults:
 
         if self.r_squared is not None:
             lines.append(f"{'R-squared:':<30} {self.r_squared:>15.4f}")
+
+        # Add survey design info
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            lines.extend(
+                [
+                    "",
+                    "-" * 75,
+                    "Survey Design".center(75),
+                    "-" * 75,
+                    f"{'Weight type:':<30} {sm.weight_type:>15}",
+                ]
+            )
+            if sm.n_strata is not None:
+                lines.append(f"{'Strata:':<30} {sm.n_strata:>15}")
+            if sm.n_psu is not None:
+                lines.append(f"{'PSU/Cluster:':<30} {sm.n_psu:>15}")
+            lines.append(f"{'Effective sample size:':<30} {sm.effective_n:>15.1f}")
+            lines.append(f"{'Design effect (DEFF):':<30} {sm.design_effect:>15.2f}")
+            if sm.df_survey is not None:
+                lines.append(f"{'Survey d.f.:':<30} {sm.df_survey:>15}")
+            lines.append("-" * 75)
 
         if self.inference_method != "analytical":
             lines.append(f"{'Inference method:':<30} {self.inference_method:>15}")
@@ -236,6 +261,15 @@ class TripleDifferenceResults:
             result["n_bootstrap"] = self.n_bootstrap
         if self.n_clusters is not None:
             result["n_clusters"] = self.n_clusters
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            result["weight_type"] = sm.weight_type
+            result["effective_n"] = sm.effective_n
+            result["design_effect"] = sm.design_effect
+            result["sum_weights"] = sm.sum_weights
+            result["n_strata"] = sm.n_strata
+            result["n_psu"] = sm.n_psu
+            result["df_survey"] = sm.df_survey
         return result
 
     def to_dataframe(self) -> pd.DataFrame:
@@ -416,6 +450,7 @@ class TripleDifference:
         partition: str,
         time: str,
         covariates: Optional[List[str]] = None,
+        survey_design=None,
     ) -> TripleDifferenceResults:
         """
         Fit the Triple Difference model.
@@ -442,6 +477,11 @@ class TripleDifference:
             List of covariate column names to adjust for.
             These are properly incorporated using the selected estimation
             method (unlike naive DDD implementations).
+        survey_design : SurveyDesign, optional
+            Survey design specification for complex survey data. When
+            provided, uses survey weights for estimation and Taylor Series
+            Linearization (TSL) for variance estimation. Only supported
+            with estimation_method="reg".
 
         Returns
         -------
@@ -452,7 +492,28 @@ class TripleDifference:
         ------
         ValueError
             If required columns are missing or data validation fails.
+        NotImplementedError
+            If survey_design is used with estimation_method="ipw" or "dr".
         """
+        # Resolve survey design if provided
+        from diff_diff.survey import (
+            _inject_cluster_as_psu,
+            _resolve_effective_cluster,
+            _resolve_survey_for_fit,
+            compute_survey_metadata,
+        )
+
+        resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, data, "analytical")
+        )
+
+        # Guard IPW/DR with survey weights
+        if survey_design is not None and self.estimation_method in ("ipw", "dr"):
+            raise NotImplementedError(
+                "IPW and doubly robust methods with survey weights require "
+                "weighted solve_logit(), planned for Phase 5."
+            )
+
         # Validate inputs
         self._validate_data(data, outcome, group, partition, time, covariates)
 
@@ -466,6 +527,21 @@ class TripleDifference:
         self._cluster_ids = data[self.cluster].values if self.cluster is not None else None
         if self._cluster_ids is not None and np.any(pd.isna(data[self.cluster])):
             raise ValueError(f"Cluster column '{self.cluster}' contains missing values")
+
+        # Resolve effective cluster and inject cluster-as-PSU for survey variance
+        if resolved_survey is not None:
+            effective_cluster_ids = _resolve_effective_cluster(
+                resolved_survey, self._cluster_ids, self.cluster
+            )
+            if effective_cluster_ids is not None:
+                resolved_survey = _inject_cluster_as_psu(resolved_survey, effective_cluster_ids)
+                if resolved_survey.psu is not None and survey_metadata is not None:
+                    raw_w = (
+                        data[survey_design.weights].values.astype(np.float64)
+                        if survey_design.weights
+                        else np.ones(len(data), dtype=np.float64)
+                    )
+                    survey_metadata = compute_survey_metadata(resolved_survey, raw_w)
 
         # Get covariates if specified
         X = None
@@ -482,21 +558,33 @@ class TripleDifference:
         n_control_ineligible = int(np.sum((G == 0) & (P == 0)))
 
         # Compute cell means for diagnostics
-        group_means = self._compute_cell_means(y, G, P, T)
+        group_means = self._compute_cell_means(y, G, P, T, weights=survey_weights)
 
         # Estimate ATT based on method
         if self.estimation_method == "reg":
-            att, se, r_squared, pscore_stats = self._regression_adjustment(y, G, P, T, X)
+            att, se, r_squared, pscore_stats = self._regression_adjustment(
+                y,
+                G,
+                P,
+                T,
+                X,
+                survey_weights=survey_weights,
+                resolved_survey=resolved_survey,
+            )
         elif self.estimation_method == "ipw":
             att, se, r_squared, pscore_stats = self._ipw_estimation(y, G, P, T, X)
         else:  # doubly robust
             att, se, r_squared, pscore_stats = self._doubly_robust(y, G, P, T, X)
 
         # Compute inference
-        df = n_obs - 8  # Approximate df (8 cell means)
-        if covariates:
-            df -= len(covariates)
-        df = max(df, 1)
+        # When survey design is active, use survey df (n_PSU - n_strata)
+        if survey_metadata is not None and survey_metadata.df_survey is not None:
+            df = max(survey_metadata.df_survey, 1)
+        else:
+            df = n_obs - 8  # Approximate df (8 cell means)
+            if covariates:
+                df -= len(covariates)
+            df = max(df, 1)
 
         t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha, df=df)
 
@@ -524,6 +612,7 @@ class TripleDifference:
             r_squared=r_squared,
             inference_method="analytical",
             n_clusters=n_clusters,
+            survey_metadata=survey_metadata,
         )
 
         self.is_fitted_ = True
@@ -606,6 +695,7 @@ class TripleDifference:
         G: np.ndarray,
         P: np.ndarray,
         T: np.ndarray,
+        weights: Optional[np.ndarray] = None,
     ) -> Dict[str, float]:
         """Compute mean outcomes for each of the 8 DDD cells."""
         means = {}
@@ -614,7 +704,10 @@ class TripleDifference:
                 for t_val, t_name in [(0, "Pre"), (1, "Post")]:
                     mask = (G == g_val) & (P == p_val) & (T == t_val)
                     cell_name = f"{g_name}, {p_name}, {t_name}"
-                    means[cell_name] = float(np.mean(y[mask]))
+                    if weights is not None:
+                        means[cell_name] = float(np.average(y[mask], weights=weights[mask]))
+                    else:
+                        means[cell_name] = float(np.mean(y[mask]))
         return means
 
     # =========================================================================
@@ -644,6 +737,8 @@ class TripleDifference:
         P: np.ndarray,
         T: np.ndarray,
         X: Optional[np.ndarray],
+        survey_weights: Optional[np.ndarray] = None,
+        resolved_survey=None,
     ) -> Tuple[float, float, Optional[float], Optional[Dict[str, float]]]:
         """
         Estimate ATT using regression adjustment via three-DiD decomposition.
@@ -653,7 +748,15 @@ class TripleDifference:
         imputed counterfactual means. Matches R's triplediff::ddd()
         with est_method="reg".
         """
-        return self._estimate_ddd_decomposition(y, G, P, T, X)
+        return self._estimate_ddd_decomposition(
+            y,
+            G,
+            P,
+            T,
+            X,
+            survey_weights=survey_weights,
+            resolved_survey=resolved_survey,
+        )
 
     def _ipw_estimation(
         self,
@@ -699,6 +802,8 @@ class TripleDifference:
         P: np.ndarray,
         T: np.ndarray,
         X: Optional[np.ndarray],
+        survey_weights: Optional[np.ndarray] = None,
+        resolved_survey=None,
     ) -> Tuple[float, float, Optional[float], Optional[Dict[str, float]]]:
         """
         Core DDD estimation via three-DiD decomposition.
@@ -713,6 +818,9 @@ class TripleDifference:
 
         Standard errors use the efficient influence function:
           SE = std(w3*IF_3 + w2*IF_2 - w1*IF_1) / sqrt(n)
+
+        When resolved_survey is provided, survey-weighted SE is computed
+        using TSL on the combined influence function.
         """
         n = len(y)
         est_method = self.estimation_method
@@ -825,6 +933,9 @@ class TripleDifference:
                         overlap_issues.append((j, frac_trimmed))
                     hessian = None
 
+                # Subset survey weights for this comparison
+                w_sub = survey_weights[mask] if survey_weights is not None else None
+
                 # --- Outcome regression ---
                 if est_method == "ipw":
                     # IPW: no outcome regression
@@ -835,16 +946,36 @@ class TripleDifference:
                 else:
                     # Fit separate OLS per subgroup-time cell, predict for all
                     or_ctrl_pre = self._fit_predict_mu(
-                        y_sub, covX_sub, sg_sub == j, post_sub == 0, n_sub
+                        y_sub,
+                        covX_sub,
+                        sg_sub == j,
+                        post_sub == 0,
+                        n_sub,
+                        weights=w_sub,
                     )
                     or_ctrl_post = self._fit_predict_mu(
-                        y_sub, covX_sub, sg_sub == j, post_sub == 1, n_sub
+                        y_sub,
+                        covX_sub,
+                        sg_sub == j,
+                        post_sub == 1,
+                        n_sub,
+                        weights=w_sub,
                     )
                     or_trt_pre = self._fit_predict_mu(
-                        y_sub, covX_sub, sg_sub == 4, post_sub == 0, n_sub
+                        y_sub,
+                        covX_sub,
+                        sg_sub == 4,
+                        post_sub == 0,
+                        n_sub,
+                        weights=w_sub,
                     )
                     or_trt_post = self._fit_predict_mu(
-                        y_sub, covX_sub, sg_sub == 4, post_sub == 1, n_sub
+                        y_sub,
+                        covX_sub,
+                        sg_sub == 4,
+                        post_sub == 1,
+                        n_sub,
+                        weights=w_sub,
                     )
 
                 # --- Compute DiD ATT and influence function ---
@@ -862,6 +993,7 @@ class TripleDifference:
                     hessian,
                     est_method,
                     n_sub,
+                    weights=w_sub,
                 )
 
                 # Track non-finite IF values (flag for NaN SE later)
@@ -893,18 +1025,33 @@ class TripleDifference:
         )
 
         # Influence function weights (matching R's att_dr_rc)
-        n3 = np.sum((subgroup == 3) | (subgroup == 4))
-        n2 = np.sum((subgroup == 2) | (subgroup == 4))
-        n1 = np.sum((subgroup == 1) | (subgroup == 4))
-        w3 = n / n3
-        w2 = n / n2
-        w1 = n / n1
+        if survey_weights is not None:
+            n3 = np.sum(survey_weights[(subgroup == 3) | (subgroup == 4)])
+            n2 = np.sum(survey_weights[(subgroup == 2) | (subgroup == 4)])
+            n1 = np.sum(survey_weights[(subgroup == 1) | (subgroup == 4)])
+            n_total = np.sum(survey_weights)
+        else:
+            n3 = np.sum((subgroup == 3) | (subgroup == 4))
+            n2 = np.sum((subgroup == 2) | (subgroup == 4))
+            n1 = np.sum((subgroup == 1) | (subgroup == 4))
+            n_total = n
+        w3 = n_total / n3
+        w2 = n_total / n2
+        w1 = n_total / n1
 
         inf_func = (
             w3 * did_results[3]["inf"] + w2 * did_results[2]["inf"] - w1 * did_results[1]["inf"]
         )
 
-        if self._cluster_ids is not None:
+        if resolved_survey is not None:
+            # Survey-weighted SE via TSL on the combined influence function.
+            # Treat the IF as a single-parameter score vector:
+            #   compute_survey_vcov(ones, IF, resolved) gives V(ATT).
+            from diff_diff.survey import compute_survey_vcov
+
+            vcov_survey = compute_survey_vcov(np.ones((n, 1)), inf_func, resolved_survey)
+            se = float(np.sqrt(vcov_survey[0, 0]))
+        elif self._cluster_ids is not None:
             # Cluster-robust SE: sum IF within clusters, then Liang-Zeger variance
             unique_clusters = np.unique(self._cluster_ids)
             n_clusters_val = len(unique_clusters)
@@ -977,8 +1124,9 @@ class TripleDifference:
         subgroup_mask: np.ndarray,
         time_mask: np.ndarray,
         n_total: int,
+        weights: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        """Fit OLS on a subgroup-time cell, predict for all observations."""
+        """Fit OLS (or WLS with survey weights) on a subgroup-time cell, predict for all observations."""
         fit_mask = subgroup_mask & time_mask
         n_fit = int(np.sum(fit_mask))
 
@@ -989,20 +1137,35 @@ class TripleDifference:
         y_fit = y[fit_mask]
 
         try:
-            beta, _, _ = solve_ols(
-                X_fit,
-                y_fit,
-                rank_deficient_action=self.rank_deficient_action,
-            )
+            if weights is not None:
+                # WLS: transform by sqrt(weights) for weighted least squares
+                w_fit = weights[fit_mask]
+                sqrt_w = np.sqrt(w_fit)
+                beta, _, _ = solve_ols(
+                    X_fit * sqrt_w[:, np.newaxis],
+                    y_fit * sqrt_w,
+                    rank_deficient_action=self.rank_deficient_action,
+                )
+            else:
+                beta, _, _ = solve_ols(
+                    X_fit,
+                    y_fit,
+                    rank_deficient_action=self.rank_deficient_action,
+                )
             # Replace NaN coefficients (dropped columns) with 0 for prediction
             beta = np.where(np.isnan(beta), 0.0, beta)
         except ValueError:
             if self.rank_deficient_action == "error":
                 raise
+            if weights is not None:
+                return np.full(n_total, np.average(y_fit, weights=weights[fit_mask]))
             return np.full(n_total, np.mean(y_fit))
         except np.linalg.LinAlgError:
+            if weights is not None:
+                return np.full(n_total, np.average(y_fit, weights=weights[fit_mask]))
             return np.full(n_total, np.mean(y_fit))
 
+        # Prediction uses original-scale X (unchanged)
         return covX @ beta
 
     def _compute_did_rc(
@@ -1020,6 +1183,7 @@ class TripleDifference:
         hessian: Optional[np.ndarray],
         est_method: str,
         n: int,
+        weights: Optional[np.ndarray] = None,
     ) -> Tuple[float, np.ndarray]:
         """
         Compute a single pairwise DiD (subgroup j vs 4) for RC data.
@@ -1031,7 +1195,17 @@ class TripleDifference:
             return self._compute_did_rc_ipw(y, post, PA4, PAa, pscore, covX, hessian, n)
         elif est_method == "reg":
             return self._compute_did_rc_reg(
-                y, post, PA4, PAa, covX, or_ctrl_pre, or_ctrl_post, or_trt_pre, or_trt_post, n
+                y,
+                post,
+                PA4,
+                PAa,
+                covX,
+                or_ctrl_pre,
+                or_ctrl_post,
+                or_trt_pre,
+                or_trt_post,
+                n,
+                weights=weights,
             )
         else:
             return self._compute_did_rc_dr(
@@ -1128,8 +1302,16 @@ class TripleDifference:
         or_trt_pre: np.ndarray,
         or_trt_post: np.ndarray,
         n: int,
+        weights: Optional[np.ndarray] = None,
     ) -> Tuple[float, np.ndarray]:
         """Regression adjustment DiD for a single pairwise comparison (RC)."""
+
+        # Helper: weighted or unweighted mean
+        def _wmean(x):
+            if weights is not None:
+                return np.average(x, weights=weights)
+            return np.mean(x)
+
         # Riesz representers
         riesz_treat_pre = PA4 * (1 - post)
         riesz_treat_post = PA4 * post
@@ -1140,18 +1322,26 @@ class TripleDifference:
         reg_att_treat_post = riesz_treat_post * y
         reg_att_control = riesz_control * (or_ctrl_post - or_ctrl_pre)
 
-        eta_treat_pre = np.mean(reg_att_treat_pre) / np.mean(riesz_treat_pre)
-        eta_treat_post = np.mean(reg_att_treat_post) / np.mean(riesz_treat_post)
-        eta_control = np.mean(reg_att_control) / np.mean(riesz_control)
+        eta_treat_pre = _wmean(reg_att_treat_pre) / _wmean(riesz_treat_pre)
+        eta_treat_post = _wmean(reg_att_treat_post) / _wmean(riesz_treat_post)
+        eta_control = _wmean(reg_att_control) / _wmean(riesz_control)
 
         att = (eta_treat_post - eta_treat_pre) - eta_control
 
         # Influence function
         # OLS asymptotic linear representation for pre/post
+        # When survey weights present, include them in both score and bread
+        # for consistency with the weighted OLS fit
         weights_ols_pre = PAa * (1 - post)
-        wols_x_pre = weights_ols_pre[:, None] * covX
-        wols_eX_pre = (weights_ols_pre * (y - or_ctrl_pre))[:, None] * covX
-        XpX_pre = wols_x_pre.T @ covX / n
+        if weights is not None:
+            w_sum = np.sum(weights)
+            wols_x_pre = (weights_ols_pre * weights)[:, None] * covX
+            wols_eX_pre = (weights_ols_pre * weights * (y - or_ctrl_pre))[:, None] * covX
+            XpX_pre = wols_x_pre.T @ covX / w_sum
+        else:
+            wols_x_pre = weights_ols_pre[:, None] * covX
+            wols_eX_pre = (weights_ols_pre * (y - or_ctrl_pre))[:, None] * covX
+            XpX_pre = wols_x_pre.T @ covX / n
         try:
             XpX_inv_pre = np.linalg.inv(XpX_pre)
         except np.linalg.LinAlgError:
@@ -1159,28 +1349,36 @@ class TripleDifference:
         asy_lin_rep_ols_pre = wols_eX_pre @ XpX_inv_pre
 
         weights_ols_post = PAa * post
-        wols_x_post = weights_ols_post[:, None] * covX
-        wols_eX_post = (weights_ols_post * (y - or_ctrl_post))[:, None] * covX
-        XpX_post = wols_x_post.T @ covX / n
+        if weights is not None:
+            wols_x_post = (weights_ols_post * weights)[:, None] * covX
+            wols_eX_post = (weights_ols_post * weights * (y - or_ctrl_post))[:, None] * covX
+            XpX_post = wols_x_post.T @ covX / w_sum
+        else:
+            wols_x_post = weights_ols_post[:, None] * covX
+            wols_eX_post = (weights_ols_post * (y - or_ctrl_post))[:, None] * covX
+            XpX_post = wols_x_post.T @ covX / n
         try:
             XpX_inv_post = np.linalg.inv(XpX_post)
         except np.linalg.LinAlgError:
             XpX_inv_post = np.linalg.pinv(XpX_post)
         asy_lin_rep_ols_post = wols_eX_post @ XpX_inv_post
 
-        inf_treat_pre = (reg_att_treat_pre - riesz_treat_pre * eta_treat_pre) / np.mean(
+        inf_treat_pre = (reg_att_treat_pre - riesz_treat_pre * eta_treat_pre) / _wmean(
             riesz_treat_pre
         )
-        inf_treat_post = (reg_att_treat_post - riesz_treat_post * eta_treat_post) / np.mean(
+        inf_treat_post = (reg_att_treat_post - riesz_treat_post * eta_treat_post) / _wmean(
             riesz_treat_post
         )
         inf_treat = inf_treat_post - inf_treat_pre
 
         inf_control_1 = reg_att_control - riesz_control * eta_control
-        M1 = np.mean(riesz_control[:, None] * covX, axis=0)
+        if weights is not None:
+            M1 = np.average(riesz_control[:, None] * covX, axis=0, weights=weights)
+        else:
+            M1 = np.mean(riesz_control[:, None] * covX, axis=0)
         inf_control_2_post = asy_lin_rep_ols_post @ M1
         inf_control_2_pre = asy_lin_rep_ols_pre @ M1
-        inf_control = (inf_control_1 + inf_control_2_post - inf_control_2_pre) / np.mean(
+        inf_control = (inf_control_1 + inf_control_2_post - inf_control_2_pre) / _wmean(
             riesz_control
         )
 
@@ -1508,6 +1706,7 @@ def triple_difference(
     cluster: Optional[str] = None,
     alpha: float = 0.05,
     rank_deficient_action: str = "warn",
+    survey_design: object = None,
 ) -> TripleDifferenceResults:
     """
     Estimate Triple Difference (DDD) treatment effect.
@@ -1582,4 +1781,5 @@ def triple_difference(
         partition=partition,
         time=time,
         covariates=covariates,
+        survey_design=survey_design,
     )

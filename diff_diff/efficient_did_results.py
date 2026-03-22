@@ -119,6 +119,8 @@ class EfficientDiDResults:
     sieve_criterion: str = "bic"
     ratio_clip: float = 20.0
     kernel_bandwidth: Optional[float] = None
+    # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
+    survey_metadata: Optional[Any] = field(default=None)
 
     def __repr__(self) -> str:
         sig = _get_significance_stars(self.overall_p_value)
@@ -154,6 +156,27 @@ class EfficientDiDResults:
         if self.n_bootstrap > 0:
             lines.append(f"{'Bootstrap:':<30} {self.n_bootstrap:>10} ({self.bootstrap_weights})")
         lines.append("")
+
+        # Add survey design info
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            lines.extend(
+                [
+                    "-" * 85,
+                    "Survey Design".center(85),
+                    "-" * 85,
+                    f"{'Weight type:':<30} {sm.weight_type:>10}",
+                ]
+            )
+            if sm.n_strata is not None:
+                lines.append(f"{'Strata:':<30} {sm.n_strata:>10}")
+            if sm.n_psu is not None:
+                lines.append(f"{'PSU/Cluster:':<30} {sm.n_psu:>10}")
+            lines.append(f"{'Effective sample size:':<30} {sm.effective_n:>10.1f}")
+            lines.append(f"{'Design effect (DEFF):':<30} {sm.design_effect:>10.2f}")
+            if sm.df_survey is not None:
+                lines.append(f"{'Survey d.f.:':<30} {sm.df_survey:>10}")
+            lines.extend(["-" * 85, ""])
 
         # Overall ATT
         lines.extend(

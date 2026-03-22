@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.bootstrap_utils import compute_effect_bootstrap_stats
-from diff_diff.linalg import LinearRegression, compute_robust_vcov
+from diff_diff.linalg import LinearRegression
 from diff_diff.results import _get_significance_stars
 from diff_diff.utils import (
     safe_inference,
@@ -83,6 +83,8 @@ class SunAbrahamResults:
     cohort_effects: Optional[Dict[Tuple[Any, int], Dict[str, Any]]] = field(
         default=None, repr=False
     )
+    # Survey design metadata (SurveyMetadata instance from diff_diff.survey)
+    survey_metadata: Optional[Any] = field(default=None)
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -125,6 +127,27 @@ class SunAbrahamResults:
             f"{'Control group:':<30} {self.control_group:>10}",
             "",
         ]
+
+        # Add survey design info
+        if self.survey_metadata is not None:
+            sm = self.survey_metadata
+            lines.extend(
+                [
+                    "-" * 85,
+                    "Survey Design".center(85),
+                    "-" * 85,
+                    f"{'Weight type:':<30} {sm.weight_type:>10}",
+                ]
+            )
+            if sm.n_strata is not None:
+                lines.append(f"{'Strata:':<30} {sm.n_strata:>10}")
+            if sm.n_psu is not None:
+                lines.append(f"{'PSU/Cluster:':<30} {sm.n_psu:>10}")
+            lines.append(f"{'Effective sample size:':<30} {sm.effective_n:>10.1f}")
+            lines.append(f"{'Design effect (DEFF):':<30} {sm.design_effect:>10.2f}")
+            if sm.df_survey is not None:
+                lines.append(f"{'Survey d.f.:':<30} {sm.df_survey:>10}")
+            lines.extend(["-" * 85, ""])
 
         # Overall ATT
         lines.extend(
@@ -434,6 +457,7 @@ class SunAbraham:
         time: str,
         first_treat: str,
         covariates: Optional[List[str]] = None,
+        survey_design: object = None,
     ) -> SunAbrahamResults:
         """
         Fit the Sun-Abraham estimator using saturated regression.
@@ -453,6 +477,10 @@ class SunAbraham:
             Use 0 (or np.inf) for never-treated units.
         covariates : list, optional
             List of covariate column names to include in regression.
+        survey_design : SurveyDesign, optional
+            Survey design specification for design-based inference.
+            Supports weighted estimation and Taylor series linearization
+            variance with strata, PSU, and FPC.
 
         Returns
         -------
@@ -472,6 +500,21 @@ class SunAbraham:
         missing = [c for c in required_cols if c not in data.columns]
         if missing:
             raise ValueError(f"Missing columns: {missing}")
+
+        # Resolve survey design if provided
+        from diff_diff.survey import _resolve_effective_cluster, _resolve_survey_for_fit
+
+        resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, data, "analytical")
+        )
+
+        # Reject bootstrap + survey (pairs bootstrap with survey weights needs Phase 5)
+        if self.n_bootstrap > 0 and resolved_survey is not None:
+            raise NotImplementedError(
+                "Bootstrap inference with survey weights is not yet supported "
+                "for SunAbraham. Use analytical inference (n_bootstrap=0) with "
+                "survey_design for design-based standard errors."
+            )
 
         # Create working copy
         df = data.copy()
@@ -544,6 +587,23 @@ class SunAbraham:
             # Keep all units (not_yet_treated will be handled by the regression)
             df_reg = df.copy()
 
+        # Resolve effective cluster and inject cluster-as-PSU
+        cluster_ids_raw = df_reg[cluster_var].values if cluster_var in df_reg.columns else None
+        effective_cluster_ids = _resolve_effective_cluster(
+            resolved_survey, cluster_ids_raw, cluster_var if self.cluster is not None else None
+        )
+        if resolved_survey is not None and effective_cluster_ids is not None:
+            from diff_diff.survey import _inject_cluster_as_psu, compute_survey_metadata
+
+            resolved_survey = _inject_cluster_as_psu(resolved_survey, effective_cluster_ids)
+            if resolved_survey.psu is not None and survey_metadata is not None:
+                raw_w = (
+                    data[survey_design.weights].values.astype(np.float64)
+                    if survey_design.weights
+                    else np.ones(len(data), dtype=np.float64)
+                )
+                survey_metadata = compute_survey_metadata(resolved_survey, raw_w)
+
         # Fit saturated regression
         (
             cohort_effects,
@@ -560,6 +620,25 @@ class SunAbraham:
             rel_periods_to_estimate,
             covariates,
             cluster_var,
+            survey_weights=survey_weights,
+            survey_weight_type=survey_weight_type,
+            resolved_survey=resolved_survey,
+        )
+
+        # Resolve survey weight column name for cohort aggregation
+        survey_weight_col = (
+            survey_design.weights
+            if survey_design is not None
+            and hasattr(survey_design, "weights")
+            and survey_design.weights
+            else None
+        )
+
+        # Survey degrees of freedom for t-distribution inference
+        _sa_survey_df = (
+            max(survey_metadata.df_survey, 1)
+            if survey_metadata is not None and survey_metadata.df_survey is not None
+            else None
         )
 
         # Compute interaction-weighted event study effects
@@ -573,6 +652,8 @@ class SunAbraham:
             cohort_ses,
             vcov_cohort,
             coef_index_map,
+            survey_weight_col=survey_weight_col,
+            survey_df=_sa_survey_df,
         )
 
         # Compute overall ATT (average of post-treatment effects)
@@ -584,9 +665,12 @@ class SunAbraham:
             cohort_weights,
             vcov_cohort,
             coef_index_map,
+            survey_weight_col=survey_weight_col,
         )
 
-        overall_t, overall_p, overall_ci = safe_inference(overall_att, overall_se, alpha=self.alpha)
+        overall_t, overall_p, overall_ci = safe_inference(
+            overall_att, overall_se, alpha=self.alpha, df=_sa_survey_df
+        )
 
         # Run bootstrap if requested
         bootstrap_results = None
@@ -652,6 +736,7 @@ class SunAbraham:
             control_group=self.control_group,
             bootstrap_results=bootstrap_results,
             cohort_effects=cohort_effects_storage,
+            survey_metadata=survey_metadata,
         )
 
         self.is_fitted_ = True
@@ -668,6 +753,9 @@ class SunAbraham:
         rel_periods: List[int],
         covariates: Optional[List[str]],
         cluster_var: str,
+        survey_weights: Optional[np.ndarray] = None,
+        survey_weight_type: str = "pweight",
+        resolved_survey: object = None,
     ) -> Tuple[
         Dict[Tuple[Any, int], float],
         Dict[Tuple[Any, int], float],
@@ -729,7 +817,9 @@ class SunAbraham:
         if covariates:
             variables_to_demean.extend(covariates)
 
-        df_demeaned = self._within_transform(df, variables_to_demean, unit, time)
+        df_demeaned = _within_transform_util(
+            df, variables_to_demean, unit, time, suffix="_dm", weights=survey_weights
+        )
 
         # Build design matrix
         X_cols = [f"{col}_dm" for col in interaction_cols]
@@ -752,9 +842,11 @@ class SunAbraham:
             robust=True,
             cluster_ids=cluster_ids,
             rank_deficient_action=self.rank_deficient_action,
+            weights=survey_weights,
+            weight_type=survey_weight_type,
+            survey_design=resolved_survey,
         ).fit(X, y, df_adjustment=df_adj)
 
-        coefficients = reg.coefficients_
         vcov = reg.vcov_
 
         # Extract cohort effects and standard errors using get_inference
@@ -798,6 +890,8 @@ class SunAbraham:
         cohort_ses: Dict[Tuple[Any, int], float],
         vcov_cohort: np.ndarray,
         coef_index_map: Dict[Tuple[Any, int], int],
+        survey_weight_col: Optional[str] = None,
+        survey_df: Optional[int] = None,
     ) -> Tuple[Dict[int, Dict[str, Any]], Dict[int, Dict[Any, float]]]:
         """
         Compute interaction-weighted event study effects.
@@ -806,6 +900,10 @@ class SunAbraham:
 
         where w_{g,e} = n_{g,e} / Σ_g n_{g,e} is the share of observations from cohort g
         at event-time e among all treated observations at that event-time.
+
+        When survey weights are provided, n_{g,e} is the survey-weighted mass
+        (sum of weights) rather than raw observation counts, so the estimand
+        reflects the survey-weighted cohort composition.
 
         Returns
         -------
@@ -817,8 +915,15 @@ class SunAbraham:
         event_study_effects: Dict[int, Dict[str, Any]] = {}
         cohort_weights: Dict[int, Dict[Any, float]] = {}
 
-        # Pre-compute per-event-time observation counts: n_{g,e}
-        event_time_counts = df[df[first_treat] > 0].groupby([first_treat, "_rel_time"]).size()
+        # Pre-compute per-event-time observation mass: n_{g,e}
+        # With survey weights, use weighted sum; otherwise raw counts.
+        treated_mask = df[first_treat] > 0
+        if survey_weight_col is not None and survey_weight_col in df.columns:
+            event_time_counts = (
+                df[treated_mask].groupby([first_treat, "_rel_time"])[survey_weight_col].sum()
+            )
+        else:
+            event_time_counts = df[treated_mask].groupby([first_treat, "_rel_time"]).size()
 
         for e in rel_periods:
             # Get cohorts that have observations at this relative time
@@ -858,7 +963,7 @@ class SunAbraham:
             agg_var = float(weight_vec @ vcov_subset @ weight_vec)
             agg_se = np.sqrt(max(agg_var, 0))
 
-            t_stat, p_val, ci = safe_inference(agg_effect, agg_se, alpha=self.alpha)
+            t_stat, p_val, ci = safe_inference(agg_effect, agg_se, alpha=self.alpha, df=survey_df)
 
             event_study_effects[e] = {
                 "effect": agg_effect,
@@ -880,9 +985,13 @@ class SunAbraham:
         cohort_weights: Dict[int, Dict[Any, float]],
         vcov_cohort: np.ndarray,
         coef_index_map: Dict[Tuple[Any, int], int],
+        survey_weight_col: Optional[str] = None,
     ) -> Tuple[float, float]:
         """
         Compute overall ATT as weighted average of post-treatment effects.
+
+        When survey weights are provided, the per-period weights use
+        survey-weighted mass rather than raw observation counts.
 
         Returns (att, se) tuple.
         """
@@ -891,13 +1000,19 @@ class SunAbraham:
         if not post_effects:
             return np.nan, np.nan
 
-        # Weight by number of treated observations at each relative time
+        # Weight by (survey-weighted) mass of treated observations at each relative time
         post_weights = []
         post_estimates = []
 
         for e, eff in post_effects:
-            n_at_e = len(df[(df["_rel_time"] == e) & (df[first_treat] > 0)])
-            post_weights.append(max(n_at_e, 1))
+            mask = (df["_rel_time"] == e) & (df[first_treat] > 0)
+            if survey_weight_col is not None and survey_weight_col in df.columns:
+                # No floor for survey weights — valid masses can be < 1
+                n_at_e = df.loc[mask, survey_weight_col].sum()
+                post_weights.append(n_at_e if n_at_e > 0 else 0.0)
+            else:
+                n_at_e = len(df[mask])
+                post_weights.append(max(n_at_e, 1))
             post_estimates.append(eff["effect"])
 
         post_weights_arr = np.array(post_weights, dtype=float)

@@ -177,6 +177,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         covariates: Optional[List[str]] = None,
         aggregate: Optional[str] = None,
         balance_e: Optional[int] = None,
+        survey_design: object = None,
     ) -> ImputationDiDResults:
         """
         Fit the imputation DiD estimator.
@@ -224,6 +225,29 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
 
         # Create working copy
         df = data.copy()
+
+        # Resolve survey design if provided
+        from diff_diff.survey import (
+            _inject_cluster_as_psu,
+            _resolve_effective_cluster,
+            _resolve_survey_for_fit,
+            _validate_unit_constant_survey,
+        )
+
+        resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, data, "analytical")
+        )
+
+        # Validate within-unit constancy for panel survey designs
+        if resolved_survey is not None:
+            _validate_unit_constant_survey(data, unit, survey_design)
+
+        # Guard bootstrap + survey
+        if self.n_bootstrap > 0 and resolved_survey is not None:
+            raise NotImplementedError(
+                "Bootstrap inference with survey weights is not yet supported "
+                "for ImputationDiD. Use analytical inference (n_bootstrap=0)."
+            )
 
         # Ensure numeric types
         df[time] = pd.to_numeric(df[time])
@@ -312,6 +336,26 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 f"Available columns: {list(df.columns)}"
             )
 
+        # Resolve effective cluster and inject cluster-as-PSU for survey variance
+        if resolved_survey is not None:
+            cluster_ids_raw = df[cluster_var].values if cluster_var in df.columns else None
+            effective_cluster_ids = _resolve_effective_cluster(
+                resolved_survey,
+                cluster_ids_raw,
+                cluster_var if self.cluster is not None else None,
+            )
+            resolved_survey = _inject_cluster_as_psu(resolved_survey, effective_cluster_ids)
+            # Recompute metadata after PSU injection
+            if resolved_survey.psu is not None and survey_metadata is not None:
+                from diff_diff.survey import compute_survey_metadata
+
+                raw_w = (
+                    data[survey_design.weights].values.astype(np.float64)
+                    if survey_design.weights
+                    else np.ones(len(data), dtype=np.float64)
+                )
+                survey_metadata = compute_survey_metadata(resolved_survey, raw_w)
+
         # Compute relative time
         df["_rel_time"] = np.where(
             ~df["_never_treated"],
@@ -321,7 +365,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
 
         # ---- Step 1: OLS on untreated observations ----
         unit_fe, time_fe, grand_mean, delta_hat, kept_cov_mask = self._fit_untreated_model(
-            df, outcome, unit, time, covariates, omega_0_mask
+            df, outcome, unit, time, covariates, omega_0_mask, weights=survey_weights
         )
 
         # ---- Rank condition checks ----
@@ -382,20 +426,31 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
 
         # ---- Step 3: Aggregate ----
         # Always compute overall ATT (simple aggregation)
-        valid_tau = tau_hat[np.isfinite(tau_hat)]
+        finite_mask = np.isfinite(tau_hat)
+        valid_tau = tau_hat[finite_mask]
 
         if len(valid_tau) == 0:
             overall_att = np.nan
+        elif survey_weights is not None:
+            # Survey-weighted ATT: use treated obs' survey weights
+            treated_survey_w = survey_weights[omega_1_mask.values]
+            w_finite = treated_survey_w[finite_mask]
+            overall_att = float(np.average(valid_tau, weights=w_finite))
         else:
             overall_att = float(np.mean(valid_tau))
 
         # ---- Conservative variance (Theorem 3) ----
-        # Build weights matching the ATT: uniform over finite tau_hat, zero for NaN
+        # Build weights matching the ATT: proportional to survey weights for
+        # finite tau_hat, uniform when no survey
         overall_weights = np.zeros(n_omega_1)
-        finite_mask = np.isfinite(tau_hat)
         n_valid = int(finite_mask.sum())
         if n_valid > 0:
-            overall_weights[finite_mask] = 1.0 / n_valid
+            if survey_weights is not None:
+                treated_sw = survey_weights[omega_1_mask.values]
+                sw_finite = treated_sw[finite_mask]
+                overall_weights[finite_mask] = sw_finite / sw_finite.sum()
+            else:
+                overall_weights[finite_mask] = 1.0 / n_valid
 
         if n_valid == 0:
             overall_se = np.nan
@@ -418,7 +473,12 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 kept_cov_mask=kept_cov_mask,
             )
 
-        overall_t, overall_p, overall_ci = safe_inference(overall_att, overall_se, alpha=self.alpha)
+        # Survey degrees of freedom for t-distribution inference
+        _survey_df = resolved_survey.df_survey if resolved_survey is not None else None
+
+        overall_t, overall_p, overall_ci = safe_inference(
+            overall_att, overall_se, alpha=self.alpha, df=_survey_df
+        )
 
         # Event study and group aggregation
         event_study_effects = None
@@ -442,6 +502,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 treatment_groups=treatment_groups,
                 balance_e=balance_e,
                 kept_cov_mask=kept_cov_mask,
+                survey_weights=survey_weights,
+                survey_df=_survey_df,
             )
 
         if aggregate in ("group", "all"):
@@ -461,6 +523,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 cluster_var=cluster_var,
                 treatment_groups=treatment_groups,
                 kept_cov_mask=kept_cov_mask,
+                survey_weights=survey_weights,
+                survey_df=_survey_df,
             )
 
         # Build treatment effects dataframe
@@ -599,6 +663,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             alpha=self.alpha,
             bootstrap_results=bootstrap_results,
             _estimator_ref=self,
+            survey_metadata=survey_metadata,
         )
 
         self.is_fitted_ = True
@@ -616,6 +681,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         idx: pd.Index,
         max_iter: int = 100,
         tol: float = 1e-10,
+        weights: Optional[np.ndarray] = None,
     ) -> Tuple[Dict[Any, float], Dict[Any, float]]:
         """
         Estimate unit and time FE via iterative alternating projection (Gauss-Seidel).
@@ -623,6 +689,12 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         Converges to the exact OLS solution for both balanced and unbalanced panels.
         For balanced panels, converges in 1-2 iterations (identical to one-pass).
         For unbalanced panels, typically 5-20 iterations.
+
+        Parameters
+        ----------
+        weights : np.ndarray, optional
+            Survey weights. When provided, uses weighted group means
+            (sum(w*x)/sum(w)) instead of unweighted means.
 
         Returns
         -------
@@ -635,25 +707,37 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         alpha = np.zeros(n)  # unit FE broadcast to obs level
         beta = np.zeros(n)  # time FE broadcast to obs level
 
+        # Precompute per-group weight sums (invariant across iterations)
+        if weights is not None:
+            w_series = pd.Series(weights, index=idx)
+            wsum_t = w_series.groupby(time_vals).transform("sum").values
+            wsum_u = w_series.groupby(unit_vals).transform("sum").values
+
         with np.errstate(invalid="ignore", divide="ignore"):
             for iteration in range(max_iter):
-                # Update time FE: beta_t = mean_i(y_it - alpha_i)
                 resid_after_alpha = y - alpha
-                beta_new = (
-                    pd.Series(resid_after_alpha, index=idx)
-                    .groupby(time_vals)
-                    .transform("mean")
-                    .values
-                )
+                if weights is not None:
+                    wr_t = pd.Series(resid_after_alpha * weights, index=idx)
+                    beta_new = wr_t.groupby(time_vals).transform("sum").values / wsum_t
+                else:
+                    beta_new = (
+                        pd.Series(resid_after_alpha, index=idx)
+                        .groupby(time_vals)
+                        .transform("mean")
+                        .values
+                    )
 
-                # Update unit FE: alpha_i = mean_t(y_it - beta_t)
                 resid_after_beta = y - beta_new
-                alpha_new = (
-                    pd.Series(resid_after_beta, index=idx)
-                    .groupby(unit_vals)
-                    .transform("mean")
-                    .values
-                )
+                if weights is not None:
+                    wr_u = pd.Series(resid_after_beta * weights, index=idx)
+                    alpha_new = wr_u.groupby(unit_vals).transform("sum").values / wsum_u
+                else:
+                    alpha_new = (
+                        pd.Series(resid_after_beta, index=idx)
+                        .groupby(unit_vals)
+                        .transform("mean")
+                        .values
+                    )
 
                 # Check convergence on FE changes
                 max_change = max(
@@ -677,25 +761,47 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         idx: pd.Index,
         max_iter: int = 100,
         tol: float = 1e-10,
+        weights: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Demean a vector by iterative alternating projection (unit + time FE removal).
 
         Converges to the exact within-transformation for both balanced and
         unbalanced panels. For balanced panels, converges in 1-2 iterations.
+
+        Parameters
+        ----------
+        weights : np.ndarray, optional
+            Survey weights. When provided, uses weighted group means
+            (sum(w*x)/sum(w)) instead of unweighted means.
         """
         result = vals.copy()
+
+        # Precompute per-group weight sums (invariant across iterations)
+        if weights is not None:
+            w_series = pd.Series(weights, index=idx)
+            wsum_t = w_series.groupby(time_vals).transform("sum").values
+            wsum_u = w_series.groupby(unit_vals).transform("sum").values
+
         with np.errstate(invalid="ignore", divide="ignore"):
             for _ in range(max_iter):
-                time_means = (
-                    pd.Series(result, index=idx).groupby(time_vals).transform("mean").values
-                )
+                if weights is not None:
+                    wr_t = pd.Series(result * weights, index=idx)
+                    time_means = wr_t.groupby(time_vals).transform("sum").values / wsum_t
+                else:
+                    time_means = (
+                        pd.Series(result, index=idx).groupby(time_vals).transform("mean").values
+                    )
                 result_after_time = result - time_means
-                unit_means = (
-                    pd.Series(result_after_time, index=idx)
-                    .groupby(unit_vals)
-                    .transform("mean")
-                    .values
-                )
+                if weights is not None:
+                    wr_u = pd.Series(result_after_time * weights, index=idx)
+                    unit_means = wr_u.groupby(unit_vals).transform("sum").values / wsum_u
+                else:
+                    unit_means = (
+                        pd.Series(result_after_time, index=idx)
+                        .groupby(unit_vals)
+                        .transform("mean")
+                        .values
+                    )
                 result_new = result_after_time - unit_means
                 if np.max(np.abs(result_new - result)) < tol:
                     result = result_new
@@ -773,6 +879,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         time: str,
         covariates: Optional[List[str]],
         omega_0_mask: pd.Series,
+        weights: Optional[np.ndarray] = None,
     ) -> Tuple[
         Dict[Any, float], Dict[Any, float], float, Optional[np.ndarray], Optional[np.ndarray]
     ]:
@@ -782,6 +889,12 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         Uses iterative alternating projection (Gauss-Seidel) to compute exact
         OLS fixed effects for both balanced and unbalanced panels. For balanced
         panels, converges in 1-2 iterations (identical to one-pass demeaning).
+
+        Parameters
+        ----------
+        weights : np.ndarray, optional
+            Full-panel survey weights (same length as df). The untreated subset
+            is extracted internally via omega_0_mask. When None, unweighted.
 
         Returns
         -------
@@ -798,13 +911,14 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             have finite coefficients. None if no covariates.
         """
         df_0 = df.loc[omega_0_mask]
+        w_0 = weights[omega_0_mask.values] if weights is not None else None
 
         if covariates is None or len(covariates) == 0:
             # No covariates: estimate FE via iterative alternating projection
             # (exact OLS for both balanced and unbalanced panels)
             y = df_0[outcome].values.copy()
             unit_fe, time_fe = self._iterative_fe(
-                y, df_0[unit].values, df_0[time].values, df_0.index
+                y, df_0[unit].values, df_0[time].values, df_0.index, weights=w_0
             )
             # grand_mean = 0: iterative FE absorb the intercept
             return unit_fe, time_fe, 0.0, None, None
@@ -819,10 +933,10 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             n_cov = len(covariates)
 
             # Step A: Iteratively demean Y and all X columns to remove unit+time FE
-            y_dm = self._iterative_demean(y, units, times, df_0.index)
+            y_dm = self._iterative_demean(y, units, times, df_0.index, weights=w_0)
             X_dm = np.column_stack(
                 [
-                    self._iterative_demean(X_raw[:, j], units, times, df_0.index)
+                    self._iterative_demean(X_raw[:, j], units, times, df_0.index, weights=w_0)
                     for j in range(n_cov)
                 ]
             )
@@ -834,6 +948,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 return_vcov=False,
                 rank_deficient_action=self.rank_deficient_action,
                 column_names=covariates,
+                weights=w_0,
             )
             delta_hat = result[0]
 
@@ -847,7 +962,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
 
             # Step C: Recover FE from covariate-adjusted outcome using iterative FE
             y_adj = y - np.dot(X_raw, delta_hat_clean)
-            unit_fe, time_fe = self._iterative_fe(y_adj, units, times, df_0.index)
+            unit_fe, time_fe = self._iterative_fe(y_adj, units, times, df_0.index, weights=w_0)
 
             # grand_mean = 0: iterative FE absorb the intercept
             return unit_fe, time_fe, 0.0, delta_hat_clean, kept_cov_mask
@@ -1281,6 +1396,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         treatment_groups: List[Any],
         balance_e: Optional[int] = None,
         kept_cov_mask: Optional[np.ndarray] = None,
+        survey_weights: Optional[np.ndarray] = None,
+        survey_df: Optional[int] = None,
     ) -> Dict[int, Dict[str, Any]]:
         """Aggregate treatment effects by event-study horizon."""
         df_1 = df.loc[omega_1_mask]
@@ -1355,7 +1472,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 continue
 
             tau_h = tau_hat[h_mask]
-            valid_tau = tau_h[np.isfinite(tau_h)]
+            finite_h = np.isfinite(tau_h)
+            valid_tau = tau_h[finite_h]
 
             if len(valid_tau) == 0:
                 event_study_effects[h] = {
@@ -1368,10 +1486,32 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 }
                 continue
 
-            effect = float(np.mean(valid_tau))
+            # Survey-weighted or simple mean for per-horizon effect
+            if survey_weights is not None:
+                treated_sw = survey_weights[omega_1_mask.values]
+                sw_h = treated_sw[h_mask]
+                sw_valid = sw_h[finite_h]
+                effect = float(np.average(valid_tau, weights=sw_valid))
+            else:
+                effect = float(np.mean(valid_tau))
 
             # Compute SE via conservative variance with horizon-specific weights
-            weights_h, n_valid = _compute_target_weights(tau_hat, h_mask)
+            # When survey, aggregation weights are proportional to survey weights
+            if survey_weights is not None:
+                treated_sw = survey_weights[omega_1_mask.values]
+                n_1 = len(tau_hat)
+                weights_h = np.zeros(n_1)
+                sw_h = treated_sw[h_mask]
+                finite_in_h = np.isfinite(tau_h)
+                sw_finite = sw_h[finite_in_h]
+                # Set weights proportional to survey weights, summing to 1
+                if sw_finite.sum() > 0:
+                    h_indices = np.where(h_mask)[0]
+                    finite_indices = h_indices[finite_in_h]
+                    weights_h[finite_indices] = sw_finite / sw_finite.sum()
+                n_valid = int(finite_in_h.sum())
+            else:
+                weights_h, n_valid = _compute_target_weights(tau_hat, h_mask)
 
             se = self._compute_conservative_variance(
                 df=df,
@@ -1391,7 +1531,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 kept_cov_mask=kept_cov_mask,
             )
 
-            t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha)
+            t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha, df=survey_df)
 
             event_study_effects[h] = {
                 "effect": effect,
@@ -1449,6 +1589,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         cluster_var: str,
         treatment_groups: List[Any],
         kept_cov_mask: Optional[np.ndarray] = None,
+        survey_weights: Optional[np.ndarray] = None,
+        survey_df: Optional[int] = None,
     ) -> Dict[Any, Dict[str, Any]]:
         """Aggregate treatment effects by cohort."""
         df_1 = df.loc[omega_1_mask]
@@ -1465,7 +1607,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 continue
 
             tau_g = tau_hat[g_mask]
-            valid_tau = tau_g[np.isfinite(tau_g)]
+            finite_g = np.isfinite(tau_g)
+            valid_tau = tau_g[finite_g]
 
             if len(valid_tau) == 0:
                 group_effects[g] = {
@@ -1478,10 +1621,29 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 }
                 continue
 
-            effect = float(np.mean(valid_tau))
+            # Survey-weighted or simple mean for per-group effect
+            if survey_weights is not None:
+                treated_sw = survey_weights[omega_1_mask.values]
+                sw_g = treated_sw[g_mask]
+                sw_valid = sw_g[finite_g]
+                effect = float(np.average(valid_tau, weights=sw_valid))
+            else:
+                effect = float(np.mean(valid_tau))
 
             # Compute SE with group-specific weights
-            weights_g, _ = _compute_target_weights(tau_hat, g_mask)
+            # When survey, aggregation weights proportional to survey weights
+            if survey_weights is not None:
+                treated_sw = survey_weights[omega_1_mask.values]
+                n_1 = len(tau_hat)
+                weights_g = np.zeros(n_1)
+                sw_g = treated_sw[g_mask]
+                sw_finite = sw_g[finite_g]
+                if sw_finite.sum() > 0:
+                    g_indices = np.where(g_mask)[0]
+                    finite_indices = g_indices[finite_g]
+                    weights_g[finite_indices] = sw_finite / sw_finite.sum()
+            else:
+                weights_g, _ = _compute_target_weights(tau_hat, g_mask)
 
             se = self._compute_conservative_variance(
                 df=df,
@@ -1501,7 +1663,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 kept_cov_mask=kept_cov_mask,
             )
 
-            t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha)
+            t_stat, p_value, conf_int = safe_inference(effect, se, alpha=self.alpha, df=survey_df)
 
             group_effects[g] = {
                 "effect": effect,

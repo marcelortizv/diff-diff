@@ -1,0 +1,803 @@
+"""Tests for Phase 4 survey support: complex standalone estimators.
+
+Covers: ImputationDiD, TwoStageDiD, CallawaySantAnna, weighted solve_logit(),
+TripleDifference IPW/DR unblock, and cross-estimator scale invariance.
+"""
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from diff_diff import (
+    CallawaySantAnna,
+    ImputationDiD,
+    SurveyDesign,
+    TripleDifference,
+    TwoStageDiD,
+    generate_staggered_data,
+)
+from diff_diff.linalg import solve_logit
+
+# =============================================================================
+# Shared Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def staggered_survey_data():
+    """Staggered treatment panel with survey design columns.
+
+    200 units via generate_staggered_data, then add unit-level survey columns
+    (weights, stratum, psu, fpc) that are constant within each unit.
+    """
+    data = generate_staggered_data(n_units=200, seed=42)
+
+    # Add unit-level survey columns (constant within unit)
+    unit_ids = data["unit"].unique()
+    n_units = len(unit_ids)
+    np.random.RandomState(42)
+
+    unit_weight = 1.0 + 0.5 * (np.arange(n_units) % 5)
+    unit_stratum = np.arange(n_units) // 40  # 5 strata
+    unit_psu = np.arange(n_units) // 10  # 20 PSUs
+    unit_fpc = np.full(n_units, 400.0)  # population per stratum
+
+    unit_map = {uid: i for i, uid in enumerate(unit_ids)}
+    idx = data["unit"].map(unit_map).values
+
+    data["weight"] = unit_weight[idx]
+    data["stratum"] = unit_stratum[idx]
+    data["psu"] = unit_psu[idx]
+    data["fpc"] = unit_fpc[idx]
+
+    return data
+
+
+@pytest.fixture
+def survey_design_weights_only():
+    """SurveyDesign with weights only."""
+    return SurveyDesign(weights="weight")
+
+
+@pytest.fixture
+def survey_design_full():
+    """SurveyDesign with weights, strata, psu."""
+    return SurveyDesign(weights="weight", strata="stratum", psu="psu")
+
+
+@pytest.fixture
+def ddd_survey_data():
+    """Cross-sectional DDD data with survey columns for TripleDifference."""
+    np.random.seed(42)
+    n = 400
+    data = pd.DataFrame(
+        {
+            "outcome": np.random.randn(n) + 0.5,
+            "group": np.random.choice([0, 1], n),
+            "partition": np.random.choice([0, 1], n),
+            "time": np.random.choice([0, 1], n),
+            "weight": np.random.uniform(0.5, 2.0, n),
+            "stratum": np.random.choice([1, 2, 3], n),
+        }
+    )
+    # Add treatment effect for treated+eligible+post
+    mask = (data["group"] == 1) & (data["partition"] == 1) & (data["time"] == 1)
+    data.loc[mask, "outcome"] += 1.5
+    return data
+
+
+# =============================================================================
+# TestWeightedSolveLogit
+# =============================================================================
+
+
+class TestWeightedSolveLogit:
+    """Tests for weighted solve_logit() (IRLS with survey weights)."""
+
+    def test_uniform_weights_match_unweighted(self):
+        """Uniform weights should produce same coefficients as unweighted."""
+        rng = np.random.RandomState(123)
+        n = 200
+        X = rng.randn(n, 2)
+        y = (X @ [1.0, -0.5] + rng.randn(n) > 0).astype(float)
+
+        beta_unw, probs_unw = solve_logit(X, y)
+        beta_w, probs_w = solve_logit(X, y, weights=np.ones(n))
+
+        np.testing.assert_allclose(beta_unw, beta_w, atol=1e-10)
+        np.testing.assert_allclose(probs_unw, probs_w, atol=1e-10)
+
+    def test_convergence_with_weights(self):
+        """solve_logit converges with non-uniform survey weights."""
+        rng = np.random.RandomState(42)
+        n = 200
+        X = rng.randn(n, 2)
+        y = (X @ [0.5, -0.5] + rng.randn(n) * 1.5 > 0).astype(float)
+        weights = rng.uniform(0.5, 3.0, n)
+
+        beta, probs = solve_logit(X, y, weights=weights)
+
+        # Should produce finite coefficients (convergence)
+        assert np.all(np.isfinite(beta))
+        assert np.all(np.isfinite(probs))
+        assert np.all(probs > 0) and np.all(probs < 1)
+
+    def test_separation_detection_with_weights(self):
+        """Separation warning should still fire with survey weights."""
+        rng = np.random.RandomState(789)
+        n = 100
+        # Create near-separation: x1 perfectly predicts y
+        x1 = np.linspace(-5, 5, n)
+        X = x1.reshape(-1, 1)
+        y = (x1 > 0).astype(float)
+        weights = rng.uniform(1.0, 3.0, n)
+
+        with pytest.warns(UserWarning):
+            beta, probs = solve_logit(X, y, weights=weights)
+
+        assert np.all(np.isfinite(beta))
+
+    def test_known_answer_small_dataset(self):
+        """Manual check on a small dataset — weights should shift coefficients."""
+        rng = np.random.RandomState(333)
+        n = 50
+        X = rng.randn(n, 1)
+        prob = 1.0 / (1.0 + np.exp(-(0.5 + 1.0 * X[:, 0])))
+        y = (rng.rand(n) < prob).astype(float)
+
+        # Unweighted fit
+        beta_unw, _ = solve_logit(X, y)
+
+        # Non-uniform weights: upweight observations where y=1
+        weights = np.where(y == 1, 5.0, 1.0)
+        beta_w, _ = solve_logit(X, y, weights=weights)
+
+        # Weighted fit should shift intercept (upweighting y=1 shifts boundary)
+        assert beta_w[0] != pytest.approx(beta_unw[0], abs=0.1)
+
+    def test_rank_deficiency_with_weights(self):
+        """Rank-deficient columns should still be detected with weights."""
+        rng = np.random.RandomState(111)
+        n = 100
+        x1 = rng.randn(n)
+        # x2 is a perfect linear combination of x1
+        X = np.column_stack([x1, 2.0 * x1])
+        y = (x1 > 0).astype(float)
+        weights = rng.uniform(0.5, 2.0, n)
+
+        with pytest.warns(UserWarning, match="[Rr]ank"):
+            beta, probs = solve_logit(X, y, weights=weights)
+
+        assert np.all(np.isfinite(probs))
+
+    def test_weight_scale_invariance(self):
+        """Multiplying weights by a constant should not change beta."""
+        rng = np.random.RandomState(222)
+        n = 200
+        X = rng.randn(n, 2)
+        y = (X @ [0.8, -0.3] + rng.randn(n) > 0).astype(float)
+        weights = rng.uniform(1.0, 4.0, n)
+
+        beta1, _ = solve_logit(X, y, weights=weights)
+        beta2, _ = solve_logit(X, y, weights=weights * 2.0)
+
+        np.testing.assert_allclose(beta1, beta2, atol=1e-10)
+
+
+# =============================================================================
+# TestImputationDiDSurvey
+# =============================================================================
+
+
+class TestImputationDiDSurvey:
+    """Survey design support for ImputationDiD."""
+
+    def test_smoke_weights_only(self, staggered_survey_data, survey_design_weights_only):
+        """ImputationDiD runs with weights-only survey design."""
+        result = ImputationDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=survey_design_weights_only,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.survey_metadata is not None
+
+    def test_uniform_weights_match_unweighted(self, staggered_survey_data):
+        """Uniform survey weights should match unweighted result."""
+        staggered_survey_data["uniform_w"] = 1.0
+        sd = SurveyDesign(weights="uniform_w")
+
+        r_unw = ImputationDiD().fit(
+            staggered_survey_data, "outcome", "unit", "period", "first_treat"
+        )
+        r_w = ImputationDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd,
+        )
+        assert abs(r_unw.overall_att - r_w.overall_att) < 1e-10
+
+    def test_survey_metadata_fields(self, staggered_survey_data, survey_design_full):
+        """survey_metadata has correct fields with full design."""
+        result = ImputationDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=survey_design_full,
+        )
+        sm = result.survey_metadata
+        assert sm is not None
+        assert sm.weight_type == "pweight"
+        assert sm.effective_n > 0
+        assert sm.design_effect > 0
+        assert sm.n_strata is not None
+        assert sm.n_psu is not None
+
+    def test_se_differs_with_design(self, staggered_survey_data):
+        """Weights-only vs full design: same ATT, different inference via survey df."""
+        sd_w = SurveyDesign(weights="weight")
+        sd_full = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+
+        r_w = ImputationDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd_w,
+        )
+        r_full = ImputationDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd_full,
+        )
+        # ATTs should be the same (same weights)
+        assert abs(r_w.overall_att - r_full.overall_att) < 1e-10
+        # Full design should carry survey df (strata/PSU structure)
+        assert r_full.survey_metadata is not None
+        assert r_full.survey_metadata.n_strata is not None
+        assert r_full.survey_metadata.n_psu is not None
+        # P-values should differ due to t-distribution with survey df
+        if np.isfinite(r_w.overall_p_value) and np.isfinite(r_full.overall_p_value):
+            assert r_w.overall_p_value != r_full.overall_p_value
+
+    def test_weighted_att_differs(self, staggered_survey_data, survey_design_weights_only):
+        """Non-uniform survey weights should change the overall ATT."""
+        r_unw = ImputationDiD().fit(
+            staggered_survey_data, "outcome", "unit", "period", "first_treat"
+        )
+        r_w = ImputationDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=survey_design_weights_only,
+        )
+        # ATT should differ because non-uniform weights change aggregation
+        assert r_unw.overall_att != r_w.overall_att
+
+    def test_event_study_with_survey(self, staggered_survey_data, survey_design_weights_only):
+        """Event study effects exist when using survey design."""
+        result = ImputationDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            aggregate="event_study",
+            survey_design=survey_design_weights_only,
+        )
+        assert result.event_study_effects is not None
+        assert len(result.event_study_effects) > 0
+        for h, eff in result.event_study_effects.items():
+            assert np.isfinite(eff["effect"])
+            assert np.isfinite(eff["se"])
+
+    def test_bootstrap_survey_raises(self, staggered_survey_data, survey_design_weights_only):
+        """Bootstrap + survey should raise NotImplementedError."""
+        with pytest.raises(NotImplementedError, match="[Bb]ootstrap"):
+            ImputationDiD(n_bootstrap=99).fit(
+                staggered_survey_data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                survey_design=survey_design_weights_only,
+            )
+
+    def test_summary_includes_survey(self, staggered_survey_data, survey_design_weights_only):
+        """Summary output should include survey design section."""
+        result = ImputationDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=survey_design_weights_only,
+        )
+        summary = result.summary()
+        assert "Survey Design" in summary
+        assert "pweight" in summary
+
+
+# =============================================================================
+# TestTwoStageDiDSurvey
+# =============================================================================
+
+
+class TestTwoStageDiDSurvey:
+    """Survey design support for TwoStageDiD."""
+
+    def test_smoke_weights_only(self, staggered_survey_data, survey_design_weights_only):
+        """TwoStageDiD runs with weights-only survey design."""
+        result = TwoStageDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=survey_design_weights_only,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.survey_metadata is not None
+
+    def test_uniform_weights_match_unweighted(self, staggered_survey_data):
+        """Uniform survey weights should match unweighted result."""
+        staggered_survey_data["uniform_w"] = 1.0
+        sd = SurveyDesign(weights="uniform_w")
+
+        r_unw = TwoStageDiD().fit(staggered_survey_data, "outcome", "unit", "period", "first_treat")
+        r_w = TwoStageDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd,
+        )
+        assert abs(r_unw.overall_att - r_w.overall_att) < 1e-10
+
+    def test_survey_metadata_fields(self, staggered_survey_data, survey_design_full):
+        """survey_metadata has correct fields with full design."""
+        result = TwoStageDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=survey_design_full,
+        )
+        sm = result.survey_metadata
+        assert sm is not None
+        assert sm.weight_type == "pweight"
+        assert sm.effective_n > 0
+        assert sm.design_effect > 0
+        assert sm.n_strata is not None
+        assert sm.n_psu is not None
+
+    def test_se_differs_with_design(self, staggered_survey_data):
+        """Weights-only vs full design: same ATT, different inference via survey df."""
+        sd_w = SurveyDesign(weights="weight")
+        sd_full = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+
+        r_w = TwoStageDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd_w,
+        )
+        r_full = TwoStageDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd_full,
+        )
+        # ATTs should be the same (same weights)
+        assert abs(r_w.overall_att - r_full.overall_att) < 1e-10
+        # Full design should carry survey df (strata/PSU structure)
+        assert r_full.survey_metadata is not None
+        assert r_full.survey_metadata.n_strata is not None
+        assert r_full.survey_metadata.n_psu is not None
+        # P-values should differ due to t-distribution with survey df
+        if np.isfinite(r_w.overall_p_value) and np.isfinite(r_full.overall_p_value):
+            assert r_w.overall_p_value != r_full.overall_p_value
+
+    def test_weighted_gmm_variance(self, staggered_survey_data, survey_design_weights_only):
+        """GMM SE should differ from unweighted (weights affect sandwich)."""
+        r_unw = TwoStageDiD().fit(staggered_survey_data, "outcome", "unit", "period", "first_treat")
+        r_w = TwoStageDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=survey_design_weights_only,
+        )
+        # SE magnitude should differ (not just sign)
+        assert abs(r_unw.overall_se - r_w.overall_se) > 1e-6
+
+    def test_bootstrap_survey_raises(self, staggered_survey_data, survey_design_weights_only):
+        """Bootstrap + survey should raise NotImplementedError."""
+        with pytest.raises(NotImplementedError, match="[Bb]ootstrap"):
+            TwoStageDiD(n_bootstrap=99).fit(
+                staggered_survey_data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                survey_design=survey_design_weights_only,
+            )
+
+    def test_summary_includes_survey(self, staggered_survey_data, survey_design_weights_only):
+        """Summary output should include survey design section."""
+        result = TwoStageDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=survey_design_weights_only,
+        )
+        summary = result.summary()
+        assert "Survey Design" in summary
+        assert "pweight" in summary
+
+
+# =============================================================================
+# TestCallawaySantAnnaSurvey
+# =============================================================================
+
+
+class TestCallawaySantAnnaSurvey:
+    """Survey design support for CallawaySantAnna."""
+
+    def test_smoke_reg_weights_only(self, staggered_survey_data, survey_design_weights_only):
+        """CallawaySantAnna regression method works with survey design."""
+        result = CallawaySantAnna(estimation_method="reg").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=survey_design_weights_only,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.survey_metadata is not None
+
+    def test_smoke_ipw_weights_only(self, staggered_survey_data, survey_design_weights_only):
+        """CallawaySantAnna IPW method works with survey design."""
+        result = CallawaySantAnna(estimation_method="ipw").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=survey_design_weights_only,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.survey_metadata is not None
+
+    def test_smoke_dr_weights_only(self, staggered_survey_data, survey_design_weights_only):
+        """CallawaySantAnna DR method works with survey design."""
+        result = CallawaySantAnna(estimation_method="dr").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=survey_design_weights_only,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.survey_metadata is not None
+
+    def test_uniform_weights_match_unweighted(self, staggered_survey_data):
+        """Uniform survey weights should match unweighted result — all methods."""
+        staggered_survey_data["uniform_w"] = 1.0
+        sd = SurveyDesign(weights="uniform_w")
+
+        for method in ["reg", "ipw", "dr"]:
+            r_unw = CallawaySantAnna(estimation_method=method).fit(
+                staggered_survey_data, "outcome", "unit", "period", "first_treat"
+            )
+            r_w = CallawaySantAnna(estimation_method=method).fit(
+                staggered_survey_data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                survey_design=sd,
+            )
+            assert abs(r_unw.overall_att - r_w.overall_att) < 1e-8, f"method={method}: ATT mismatch"
+
+    def test_survey_metadata_fields(self, staggered_survey_data, survey_design_full):
+        """survey_metadata has correct fields with full design."""
+        result = CallawaySantAnna(estimation_method="reg").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=survey_design_full,
+        )
+        sm = result.survey_metadata
+        assert sm is not None
+        assert sm.weight_type == "pweight"
+        assert sm.effective_n > 0
+        assert sm.design_effect > 0
+        assert sm.n_strata is not None
+        assert sm.n_psu is not None
+
+    def test_se_differs_with_design(self, staggered_survey_data):
+        """Weights-only vs full design: same ATT, different inference via survey df."""
+        sd_w = SurveyDesign(weights="weight")
+        sd_full = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+
+        r_w = CallawaySantAnna(estimation_method="reg").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd_w,
+        )
+        r_full = CallawaySantAnna(estimation_method="reg").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd_full,
+        )
+        # ATTs should be the same (same weights)
+        assert abs(r_w.overall_att - r_full.overall_att) < 1e-10
+        # Full design should carry survey df (strata/PSU structure)
+        assert r_full.survey_metadata is not None
+        assert r_full.survey_metadata.n_strata is not None
+        assert r_full.survey_metadata.n_psu is not None
+        # P-values should differ due to t-distribution with survey df
+        if np.isfinite(r_w.overall_p_value) and np.isfinite(r_full.overall_p_value):
+            assert r_w.overall_p_value != r_full.overall_p_value
+
+    def test_bootstrap_survey_raises(self, staggered_survey_data, survey_design_weights_only):
+        """Bootstrap + survey should raise NotImplementedError."""
+        with pytest.raises(NotImplementedError, match="[Bb]ootstrap"):
+            CallawaySantAnna(estimation_method="reg", n_bootstrap=99).fit(
+                staggered_survey_data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                survey_design=survey_design_weights_only,
+            )
+
+    def test_weighted_logit(self, staggered_survey_data, survey_design_weights_only):
+        """Propensity scores should change with survey weights (IPW path)."""
+        r_unw = CallawaySantAnna(estimation_method="ipw").fit(
+            staggered_survey_data, "outcome", "unit", "period", "first_treat"
+        )
+        r_w = CallawaySantAnna(estimation_method="ipw").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=survey_design_weights_only,
+        )
+        # Non-uniform weights should produce different ATT
+        # (propensity scores change with survey weights)
+        assert r_unw.overall_att != r_w.overall_att
+
+    def test_ipw_survey_weight_composition(self, staggered_survey_data, survey_design_weights_only):
+        """w_survey x w_ipw should compose — ATT differs from unweighted IPW."""
+        r_unw = CallawaySantAnna(estimation_method="ipw").fit(
+            staggered_survey_data, "outcome", "unit", "period", "first_treat"
+        )
+        r_w = CallawaySantAnna(estimation_method="ipw").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=survey_design_weights_only,
+        )
+        # Weighted IPW should produce different ATT than unweighted
+        assert abs(r_unw.overall_att - r_w.overall_att) > 1e-6
+
+    def test_aggregation_with_survey(self, staggered_survey_data, survey_design_weights_only):
+        """Simple aggregation should use survey weights."""
+        r_unw = CallawaySantAnna(estimation_method="reg").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            aggregate="event_study",
+        )
+        r_w = CallawaySantAnna(estimation_method="reg").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            aggregate="event_study",
+            survey_design=survey_design_weights_only,
+        )
+        # Event study ATTs should differ with non-uniform weights
+        assert r_unw.overall_att != r_w.overall_att
+        # Event study effects should exist
+        assert r_w.event_study_effects is not None
+        assert len(r_w.event_study_effects) > 0
+
+    def test_summary_includes_survey(self, staggered_survey_data, survey_design_weights_only):
+        """Summary output should include survey design section."""
+        result = CallawaySantAnna(estimation_method="reg").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=survey_design_weights_only,
+        )
+        summary = result.summary()
+        assert "Survey Design" in summary
+        assert "pweight" in summary
+
+
+# =============================================================================
+# TestTripleDifferenceIPWSurvey
+# =============================================================================
+
+
+class TestTripleDifferenceIPWSurvey:
+    """Verify TripleDifference IPW/DR + survey is unblocked."""
+
+    def test_ipw_survey_no_longer_raises(self, ddd_survey_data):
+        """IPW + survey should no longer raise NotImplementedError."""
+        sd = SurveyDesign(weights="weight")
+        # Should not raise
+        result = TripleDifference(estimation_method="ipw").fit(
+            ddd_survey_data,
+            "outcome",
+            "group",
+            "partition",
+            "time",
+            survey_design=sd,
+        )
+        assert result is not None
+
+    def test_dr_survey_no_longer_raises(self, ddd_survey_data):
+        """DR + survey should no longer raise NotImplementedError."""
+        sd = SurveyDesign(weights="weight")
+        # Should not raise
+        result = TripleDifference(estimation_method="dr").fit(
+            ddd_survey_data,
+            "outcome",
+            "group",
+            "partition",
+            "time",
+            survey_design=sd,
+        )
+        assert result is not None
+
+    def test_ipw_survey_results_finite(self, ddd_survey_data):
+        """IPW + survey should produce finite results."""
+        sd = SurveyDesign(weights="weight")
+        result = TripleDifference(estimation_method="ipw").fit(
+            ddd_survey_data,
+            "outcome",
+            "group",
+            "partition",
+            "time",
+            survey_design=sd,
+        )
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.survey_metadata is not None
+
+
+# =============================================================================
+# TestScaleInvariance
+# =============================================================================
+
+
+class TestScaleInvariance:
+    """Multiplying all survey weights by a constant should not change ATT or SE."""
+
+    def test_weight_scale_invariance_imputation(self, staggered_survey_data):
+        """ImputationDiD: 2*w gives same ATT as w."""
+        sd1 = SurveyDesign(weights="weight")
+        r1 = ImputationDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd1,
+        )
+
+        staggered_survey_data["weight_x2"] = staggered_survey_data["weight"] * 2.0
+        sd2 = SurveyDesign(weights="weight_x2")
+        r2 = ImputationDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd2,
+        )
+
+        assert abs(r1.overall_att - r2.overall_att) < 1e-10
+        assert abs(r1.overall_se - r2.overall_se) < 1e-8
+
+    def test_weight_scale_invariance_two_stage(self, staggered_survey_data):
+        """TwoStageDiD: 2*w gives same ATT as w."""
+        sd1 = SurveyDesign(weights="weight")
+        r1 = TwoStageDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd1,
+        )
+
+        staggered_survey_data["weight_x2"] = staggered_survey_data["weight"] * 2.0
+        sd2 = SurveyDesign(weights="weight_x2")
+        r2 = TwoStageDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd2,
+        )
+
+        assert abs(r1.overall_att - r2.overall_att) < 1e-10
+        assert abs(r1.overall_se - r2.overall_se) < 1e-8
+
+    def test_weight_scale_invariance_callaway_santanna(self, staggered_survey_data):
+        """CallawaySantAnna: 2*w gives same ATT as w."""
+        sd1 = SurveyDesign(weights="weight")
+        r1 = CallawaySantAnna(estimation_method="reg").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd1,
+        )
+
+        staggered_survey_data["weight_x2"] = staggered_survey_data["weight"] * 2.0
+        sd2 = SurveyDesign(weights="weight_x2")
+        r2 = CallawaySantAnna(estimation_method="reg").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd2,
+        )
+
+        assert abs(r1.overall_att - r2.overall_att) < 1e-10
+        assert abs(r1.overall_se - r2.overall_se) < 1e-8

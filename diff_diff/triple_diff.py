@@ -493,7 +493,7 @@ class TripleDifference:
         ValueError
             If required columns are missing or data validation fails.
         NotImplementedError
-            If survey_design is used with estimation_method="ipw" or "dr".
+            If survey_design is used with wild_bootstrap inference.
         """
         # Resolve survey design if provided
         from diff_diff.survey import (
@@ -506,13 +506,6 @@ class TripleDifference:
         resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
             _resolve_survey_for_fit(survey_design, data, "analytical")
         )
-
-        # Guard IPW/DR with survey weights
-        if survey_design is not None and self.estimation_method in ("ipw", "dr"):
-            raise NotImplementedError(
-                "IPW and doubly robust methods with survey weights require "
-                "weighted solve_logit(), planned for Phase 5."
-            )
 
         # Validate inputs
         self._validate_data(data, outcome, group, partition, time, covariates)
@@ -865,6 +858,9 @@ class TripleDifference:
                 PA4 = (sg_sub == 4).astype(float)
                 PAa = (sg_sub == j).astype(float)
 
+                # Subset survey weights for this comparison (needed for logit)
+                w_sub = survey_weights[mask] if survey_weights is not None else None
+
                 # --- Propensity scores ---
                 if est_method == "reg":
                     # RA: no propensity scores needed
@@ -878,6 +874,7 @@ class TripleDifference:
                             covX_sub[:, 1:],
                             PA4,
                             rank_deficient_action=self.rank_deficient_action,
+                            weights=w_sub,
                         )
                     except Exception:
                         if self.rank_deficient_action == "error":
@@ -932,9 +929,6 @@ class TripleDifference:
                     if frac_trimmed > 0.05:
                         overlap_issues.append((j, frac_trimmed))
                     hessian = None
-
-                # Subset survey weights for this comparison
-                w_sub = survey_weights[mask] if survey_weights is not None else None
 
                 # --- Outcome regression ---
                 if est_method == "ipw":

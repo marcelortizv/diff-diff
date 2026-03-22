@@ -881,7 +881,27 @@ class TestParseReviewFindings:
         review_text = "**P1** Missing NaN guard in `foo.py:L10`\n"
         findings, _ = review_mod.parse_review_findings(review_text, 1)
         assert len(findings) == 1
+
+    def test_parses_numbered_list_severity(self, review_mod):
+        """1. Severity: P1 format should be parsed."""
+        review_text = "1. Severity: P1 — Missing NaN guard in `foo.py:L10`\n"
+        findings, _ = review_mod.parse_review_findings(review_text, 1)
+        assert len(findings) == 1
         assert findings[0]["severity"] == "P1"
+
+    def test_parses_starred_bold_severity(self, review_mod):
+        """* **Severity:** P1 format should be parsed."""
+        review_text = "* **Severity:** P1 — Missing NaN guard in `bar.py:L5`\n"
+        findings, _ = review_mod.parse_review_findings(review_text, 1)
+        assert len(findings) == 1
+        assert findings[0]["severity"] == "P1"
+
+    def test_numbered_bold_severity_triggers_uncertainty(self, review_mod):
+        """1. **Severity:** P1 with no parseable summary → uncertain=True."""
+        review_text = "1. **Severity:** P1\n"
+        findings, uncertain = review_mod.parse_review_findings(review_text, 1)
+        assert findings == []
+        assert uncertain
 
     def test_parses_bold_label_format(self, review_mod):
         """**Severity:** P1 format should be parsed."""

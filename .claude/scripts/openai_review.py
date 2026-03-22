@@ -489,11 +489,14 @@ def write_review_state(
         json.dump(state, f, indent=2)
 
 
+# Match optional Markdown list prefix: -, *, +, or numbered (1., 2., etc.)
+_LP = r"^(?:[-*+]|\d+\.?)?\s*"
+
 _BLOCK_START = re.compile(
-    r"^-?\s*\*\*(P[0-3])\*\*"              # - **P1** summary
-    r"|^-?\s*\*\*Severity:\*\*\s*(P[0-3])"  # - **Severity:** P1
-    r"|^-?\s*\*\*Severity:\s*(P[0-3])\*\*"  # - **Severity: P1**
-    r"|^-?\s*Severity:\s*`?(P[0-3])`?"      # - Severity: P1
+    _LP + r"\*\*(P[0-3])\*\*"              # - **P1**, 1. **P1**, * **P1**
+    r"|" + _LP + r"\*\*Severity:\*\*\s*(P[0-3])"  # - **Severity:** P1
+    r"|" + _LP + r"\*\*Severity:\s*(P[0-3])\*\*"  # - **Severity: P1**
+    r"|" + _LP + r"Severity:\s*`?(P[0-3])`?"      # 1. Severity: P1
 )
 
 _IMPACT_PATTERN = re.compile(r"(?:\*\*)?Impact:(?:\*\*)?\s*(.+)")

@@ -172,12 +172,19 @@ if [ "$context_level" = "deep" ]; then
     upload_scan_files=$(find diff_diff -name "*.py" -not -path "*/__pycache__/*" 2>/dev/null | sort -u)
 fi
 
-# Category 3: --include-files (resolve paths same as script does)
+# Category 3: --include-files (mirror script's path confinement)
 if [ -n "$include_files" ]; then
+    repo_root_real=$(pwd -P)
     for f in $(echo "$include_files" | tr ',' ' '); do
-        if [ -f "diff_diff/$f" ]; then upload_scan_files="$upload_scan_files diff_diff/$f"
-        elif [ -f "$f" ]; then upload_scan_files="$upload_scan_files $f"
+        # Reject absolute paths (mirrors script's os.path.isabs check)
+        case "$f" in /*) continue ;; esac
+        if [ -f "diff_diff/$f" ]; then candidate="diff_diff/$f"
+        elif [ -f "$f" ]; then candidate="$f"
+        else continue
         fi
+        # Verify within repo root (mirrors script's realpath containment)
+        real_candidate=$(cd "$(dirname "$candidate")" && pwd -P)/$(basename "$candidate")
+        case "$real_candidate" in "$repo_root_real"/*) upload_scan_files="$upload_scan_files $candidate" ;; esac
     done
 fi
 

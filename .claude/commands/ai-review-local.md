@@ -207,8 +207,17 @@ Check for existing review state and generate delta diff if applicable. **Validat
 stored state matches the current branch and base** before reusing — stale state from a
 different branch can contaminate re-review context.
 
+**If `--force-fresh` is set**, skip ALL re-review state and run completely fresh:
 ```bash
-# Check for review-state.json
+rm -f .claude/reviews/review-state.json
+rm -f .claude/reviews/local-review-latest.md
+rm -f .claude/reviews/local-review-previous.md
+echo "Force-fresh: deleted all prior review state."
+# Skip to Step 5 — do NOT pass --review-state, --previous-review, --delta-diff
+```
+
+**Otherwise**, check for existing review state:
+```bash
 if [ -f .claude/reviews/review-state.json ]; then
     # Read state fields
     last_reviewed_commit=$(python3 -c "import json; print(json.load(open('.claude/reviews/review-state.json')).get('last_reviewed_commit', ''))")
@@ -222,30 +231,26 @@ if [ -f .claude/reviews/review-state.json ]; then
         last_reviewed_commit=""
     fi
 
-    if [ -n "$last_reviewed_commit" ] && git cat-file -t "$last_reviewed_commit" >/dev/null 2>&1; then
-        # SHA is reachable
-        if [ "--force-fresh" is NOT in the arguments ]; then
-            # Generate delta diff (changes since last review)
-            git diff --unified=5 "${last_reviewed_commit}...HEAD" > /tmp/ai-review-delta-diff.patch
-            git diff --name-status "${last_reviewed_commit}...HEAD" > /tmp/ai-review-delta-files.txt
+    # Validate commit is an ancestor of HEAD (not just that the object exists)
+    if [ -n "$last_reviewed_commit" ] && git merge-base --is-ancestor "$last_reviewed_commit" HEAD 2>/dev/null; then
+        # SHA is a valid ancestor — generate delta diff
+        git diff --unified=5 "${last_reviewed_commit}...HEAD" > /tmp/ai-review-delta-diff.patch
+        git diff --name-status "${last_reviewed_commit}...HEAD" > /tmp/ai-review-delta-files.txt
 
-            # Check if delta is empty
-            if [ ! -s /tmp/ai-review-delta-diff.patch ]; then
-                echo "No changes since last review (commit ${last_reviewed_commit:0:7}). Use --force-fresh to re-review."
-                rm -f /tmp/ai-review-delta-diff.patch /tmp/ai-review-delta-files.txt
-                # Clean up other temp files too
-                rm -f /tmp/ai-review-diff.patch /tmp/ai-review-files.txt
-                # Stop here
-            fi
+        # Check if delta is empty
+        if [ ! -s /tmp/ai-review-delta-diff.patch ]; then
+            echo "No changes since last review (commit ${last_reviewed_commit:0:7}). Use --force-fresh to re-review."
+            rm -f /tmp/ai-review-delta-diff.patch /tmp/ai-review-delta-files.txt
+            rm -f /tmp/ai-review-diff.patch /tmp/ai-review-files.txt
+            # Stop here
         fi
     else
-        echo "Warning: Previous review state references unreachable commit (likely rebase). Running fresh review."
-        # Delete stale state
+        echo "Warning: Previous review commit is not an ancestor of HEAD (likely rebase). Running fresh review."
         rm -f .claude/reviews/review-state.json
     fi
 fi
 
-# Preserve previous review text (existing behavior, kept as fallback)
+# Preserve previous review text (for re-review context)
 if [ -f .claude/reviews/local-review-latest.md ]; then
     cp .claude/reviews/local-review-latest.md .claude/reviews/local-review-previous.md
     echo "Previous review preserved for re-review context."
@@ -255,9 +260,9 @@ fi
 ### Step 5: Run the Review Script
 
 Build and run the command. Include optional arguments only when their conditions are met:
-- `--previous-review`: only if `.claude/reviews/local-review-previous.md` exists
+- `--previous-review`: only if `.claude/reviews/local-review-previous.md` exists AND `--force-fresh` was NOT set
 - `--delta-diff` and `--delta-changed-files`: only if delta files were generated in Step 4
-- `--review-state` and `--commit-sha`: always include (enables finding tracking)
+- `--review-state` and `--commit-sha`: include UNLESS `--force-fresh` was set (forced fresh runs skip state tracking)
 - `--context`, `--include-files`, `--token-budget`: pass through from parsed arguments
 
 ```bash

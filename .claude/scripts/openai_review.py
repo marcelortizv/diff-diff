@@ -410,7 +410,8 @@ _BLOCK_START = re.compile(
     r"|^-?\s*Severity:\s*`?(P[0-3])`?"      # - Severity: P1
 )
 
-_IMPACT_PATTERN = re.compile(r"\*\*Impact:\*\*\s*(.+)")
+_IMPACT_PATTERN = re.compile(r"(?:\*\*)?Impact:(?:\*\*)?\s*(.+)")
+_LOCATION_LABEL_PATTERN = re.compile(r"(?:\*\*)?Location:(?:\*\*)?\s*(.+)")
 
 _LOCATION_PATTERN = re.compile(
     r"(?:`?)([\w/._-]+\.py(?::L?\d+(?:-L?\d+)?)?)(?:`?)"
@@ -522,9 +523,17 @@ def parse_review_findings(
         if len(summary) > 120:
             summary = summary[:117] + "..."
 
-        # Extract location from all block lines
+        # Extract location from all block lines — check labeled Location: first,
+        # then fall back to inline file:line pattern
         location = ""
         for bline in lines:
+            label_match = _LOCATION_LABEL_PATTERN.search(bline)
+            if label_match:
+                # Extract file:line from the label value
+                loc_in_label = _LOCATION_PATTERN.search(label_match.group(1))
+                if loc_in_label:
+                    location = loc_in_label.group(1)
+                    break
             loc_match = _LOCATION_PATTERN.search(bline)
             if loc_match:
                 location = loc_match.group(1)
@@ -542,11 +551,16 @@ def parse_review_findings(
             "status": "open",
         })
 
-    # Fail-safe: check if severity markers exist but we parsed nothing
+    # Fail-safe: check if ANY severity marker exists but we parsed nothing.
+    # Use a broad pattern (not line-anchored) to catch markers anywhere in text.
     parse_uncertain = False
     if not findings:
-        marker_count = len(re.findall(r"\*\*(P[0-3])\*\*", review_text))
-        if marker_count > 0:
+        broad_sev = re.compile(
+            r"\*\*(P[0-3])\*\*"
+            r"|(?:^|\s)Severity:\s*\*?\*?\s*P[0-3]",
+            re.MULTILINE,
+        )
+        if broad_sev.search(review_text):
             parse_uncertain = True
 
     return (findings, parse_uncertain)
@@ -555,17 +569,17 @@ def parse_review_findings(
 def _finding_keys(f: dict) -> "tuple[tuple[str, str, str], tuple[str, str]]":
     """Return (primary_key, fallback_key) for finding matching.
 
-    Primary: (severity, file_basename, summary[:50]) — used when file path is
-    available in both the previous and current finding.
-    Fallback: (severity, summary[:50]) — used when file path is missing or for
-    unique-candidate matching. This prevents false negatives when the model
-    omits a location in one round.
+    Primary: (severity, file_path, summary[:50]) — uses normalized full relative
+    path (not basename) to avoid collisions like __init__.py in different dirs.
+    Fallback: (severity, summary[:50]) — used when either side lacks a file path,
+    with unique-candidate constraint to avoid ambiguous matching.
     """
     summary = f.get("summary", "").lower().strip()[:50]
     severity = f.get("severity", "")
     location = f.get("location", "")
-    file_basename = os.path.basename(location.split(":")[0]) if location else ""
-    primary = (severity, file_basename, summary)
+    # Use full relative path (strip line numbers only, keep directory structure)
+    file_path = location.split(":")[0] if location else ""
+    primary = (severity, file_path, summary)
     fallback = (severity, summary)
     return (primary, fallback)
 
@@ -607,21 +621,21 @@ def merge_findings(
                 continue
         merged.append(f)
 
-    # Pass 2: fallback matching — ONLY for current findings without a file path
-    # that weren't matched in pass 1. Findings with file paths that didn't
-    # match are genuinely different (different file = different finding).
+    # Pass 2: fallback matching — when EITHER the current or previous finding
+    # lacks a file path. This is symmetric: handles both "current has location,
+    # previous doesn't" and "previous has location, current doesn't."
+
+    # 2a: Current findings without file paths → try to match unconsumed previous
     merged_pass2: list[dict] = []
     for f in merged:
         primary, fallback = _finding_keys(f)
         has_file = bool(primary[1])
 
-        # Skip fallback if this finding has a file path — it either matched
-        # in pass 1 or it's a genuinely new finding in a different file
         if has_file:
             merged_pass2.append(f)
             continue
 
-        # No file path — try fallback with exactly one unconsumed candidate
+        # No file path on current — try fallback with unique unconsumed candidate
         unconsumed = [
             p for p in prev_by_fallback.get(fallback, [])
             if p.get("id", "") not in consumed_ids
@@ -629,6 +643,26 @@ def merge_findings(
         if len(unconsumed) == 1:
             consumed_ids.add(unconsumed[0].get("id", ""))
         merged_pass2.append(f)
+
+    # 2b: Unconsumed previous findings without file paths → try to match
+    # current findings that DO have file paths (reverse direction)
+    current_by_fallback: dict[tuple, list[dict]] = {}
+    for f in merged_pass2:
+        _, fallback = _finding_keys(f)
+        current_by_fallback.setdefault(fallback, []).append(f)
+
+    for f in previous:
+        fid = f.get("id", "")
+        if fid in consumed_ids:
+            continue
+        primary, fallback = _finding_keys(f)
+        has_file = bool(primary[1])
+        if has_file:
+            continue  # Has file path — should have matched in pass 1 if possible
+        # Previous finding without file path — try fallback against current
+        candidates = current_by_fallback.get(fallback, [])
+        if len(candidates) == 1:
+            consumed_ids.add(fid)
 
     # Mark unconsumed previous findings as addressed
     for f in previous:

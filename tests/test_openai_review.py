@@ -812,6 +812,33 @@ class TestParseReviewFindings:
         assert "NaN guard" in findings[0]["summary"]
         assert not uncertain
 
+    def test_parses_plain_multiline_block(self, review_mod):
+        """Plain Severity: / Impact: labels (no bold) should be parsed."""
+        review_text = (
+            "## Code Quality\n\n"
+            "Severity: P1\n"
+            "Impact: Missing NaN guard causes silent incorrect output\n"
+            "Location: `diff_diff/staggered.py:L145`\n"
+            "Concrete fix: Use safe_inference()\n"
+        )
+        findings, uncertain = review_mod.parse_review_findings(review_text, 1)
+        assert len(findings) == 1
+        assert findings[0]["severity"] == "P1"
+        assert "NaN guard" in findings[0]["summary"]
+        assert not uncertain
+
+    def test_plain_severity_triggers_uncertainty(self, review_mod):
+        """Plain Severity: markers should trigger uncertainty when no findings parsed."""
+        # This format has severity but in a context the block parser can't extract
+        review_text = (
+            "There is a Severity: P1 issue but the rest of the text\n"
+            "doesn't follow any recognized block structure at all\n"
+        )
+        findings, uncertain = review_mod.parse_review_findings(review_text, 1)
+        # Whether or not it parses, if it fails, uncertain should be True
+        if not findings:
+            assert uncertain
+
     def test_zero_findings_with_markers_sets_uncertain(self, review_mod):
         """When severity markers exist but parsing yields nothing, flag uncertainty."""
         # Markers in code blocks or unusual format the parser can't handle
@@ -964,6 +991,42 @@ class TestMergeFindings:
         # One should match, one should be addressed
         open_findings = [f for f in merged if f["status"] == "open"]
         addressed = [f for f in merged if f["status"] == "addressed"]
+        assert len(open_findings) == 1
+        assert len(addressed) == 1
+
+    def test_previous_missing_location_current_has_location(self, review_mod):
+        """Previous finding with no location, current has one → should match."""
+        previous = [
+            {"id": "R1-P1-1", "severity": "P1", "location": "",
+             "section": "Code Quality", "summary": "Missing NaN guard in staggered",
+             "status": "open"}
+        ]
+        current = [
+            {"id": "R2-P1-1", "severity": "P1", "location": "staggered.py:L10",
+             "section": "Code Quality", "summary": "Missing NaN guard in staggered",
+             "status": "open"}
+        ]
+        merged = review_mod.merge_findings(previous, current)
+        open_findings = [f for f in merged if f["status"] == "open"]
+        addressed = [f for f in merged if f["status"] == "addressed"]
+        # Should match via symmetric fallback — no false "addressed"
+        assert len(open_findings) == 1
+        assert len(addressed) == 0
+
+    def test_same_basename_different_dirs_no_cross_match(self, review_mod):
+        """__init__.py in different dirs with same summary should NOT cross-match."""
+        previous = [
+            {"id": "R1-P1-1", "severity": "P1", "location": "diff_diff/__init__.py:L10",
+             "section": "Code Quality", "summary": "Missing type export", "status": "open"}
+        ]
+        current = [
+            {"id": "R2-P1-1", "severity": "P1", "location": "diff_diff/visualization/__init__.py:L5",
+             "section": "Code Quality", "summary": "Missing type export", "status": "open"}
+        ]
+        merged = review_mod.merge_findings(previous, current)
+        open_findings = [f for f in merged if f["status"] == "open"]
+        addressed = [f for f in merged if f["status"] == "addressed"]
+        # Different full paths: previous should be addressed, current stays open
         assert len(open_findings) == 1
         assert len(addressed) == 1
 

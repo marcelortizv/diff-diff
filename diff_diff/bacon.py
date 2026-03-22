@@ -772,7 +772,24 @@ class BaconDecomposition:
 
             # Exact weight: proportional to sample share * variance
             # Scale by weighted unit share to account for subsample
-            unit_share = (n_k + n_l) / n_total_units
+            # Use survey-weighted unit mass when weights present
+            if weights is not None:
+                # Sum of per-unit weights for treated + control units in this 2x2
+                unit_w_k = (
+                    df_22.loc[treated_mask_22, "_sw"]
+                    .groupby(df_22.loc[treated_mask_22, unit])
+                    .first()
+                    .sum()
+                )
+                unit_w_l = (
+                    df_22.loc[~treated_mask_22, "_sw"]
+                    .groupby(df_22.loc[~treated_mask_22, unit])
+                    .first()
+                    .sum()
+                )
+                unit_share = (unit_w_k + unit_w_l) / w_total
+            else:
+                unit_share = (n_k + n_l) / n_total_units
             comp.weight = sample_share * var_D_22 * unit_share
 
     def _compute_treated_vs_never(

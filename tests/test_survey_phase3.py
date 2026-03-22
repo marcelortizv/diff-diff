@@ -387,6 +387,25 @@ class TestBaconDecompositionSurvey:
         )
         assert "Survey Design" in result.summary()
 
+    def test_exact_weights_survey_weighted(self, staggered_survey_data):
+        """BaconDecomposition exact weights should use survey-weighted shares."""
+        from diff_diff import BaconDecomposition
+
+        sd = SurveyDesign(weights="weight")
+        r = BaconDecomposition(weights="exact").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            survey_design=sd,
+        )
+        assert np.isfinite(r.twfe_estimate)
+        # Exact weights should still produce valid comparisons
+        assert len(r.comparisons) > 0
+        for comp in r.comparisons:
+            assert np.isfinite(comp.weight)
+
 
 # =============================================================================
 # TripleDifference

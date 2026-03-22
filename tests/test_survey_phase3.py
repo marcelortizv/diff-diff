@@ -532,6 +532,29 @@ class TestTripleDifferenceSurvey:
         )
         assert "Survey Design" in result.summary()
 
+    def test_reg_with_covariates_survey(self, ddd_survey_data):
+        """TripleDifference reg method works with covariates + survey."""
+        from diff_diff import TripleDifference
+
+        # Add a covariate that affects the outcome
+        ddd_survey_data["x1"] = np.random.randn(len(ddd_survey_data)) * 0.5
+        ddd_survey_data["outcome"] += 0.3 * ddd_survey_data["x1"]
+        sd = SurveyDesign(weights="weight", strata="stratum")
+        result = TripleDifference(estimation_method="reg").fit(
+            ddd_survey_data,
+            "outcome",
+            "group",
+            "partition",
+            "time",
+            covariates=["x1"],
+            survey_design=sd,
+        )
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se)
+        assert result.survey_metadata is not None
+        # Survey df should be used for inference
+        assert result.survey_metadata.df_survey is not None
+
 
 # =============================================================================
 # ContinuousDiD
@@ -691,6 +714,64 @@ class TestEfficientDiDSurvey:
         )
         assert result.survey_metadata is None
 
+    def test_survey_event_study_aggregation(self, staggered_survey_data):
+        """EfficientDiD survey with aggregate='event_study' produces finite results."""
+        from diff_diff import EfficientDiD
+
+        sd = SurveyDesign(weights="weight")
+        result = EfficientDiD(n_bootstrap=0).fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            aggregate="event_study",
+            survey_design=sd,
+        )
+        assert result.event_study_effects is not None
+        for e, eff in result.event_study_effects.items():
+            assert np.isfinite(eff["effect"])
+            assert np.isfinite(eff["se"])
+            assert eff["se"] > 0
+
+    def test_survey_group_aggregation(self, staggered_survey_data):
+        """EfficientDiD survey with aggregate='group' produces finite results."""
+        from diff_diff import EfficientDiD
+
+        sd = SurveyDesign(weights="weight")
+        result = EfficientDiD(n_bootstrap=0).fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            aggregate="group",
+            survey_design=sd,
+        )
+        assert result.group_effects is not None
+        for g, eff in result.group_effects.items():
+            assert np.isfinite(eff["effect"])
+            assert np.isfinite(eff["se"])
+
+    def test_survey_all_aggregation(self, staggered_survey_data):
+        """EfficientDiD survey with aggregate='all' produces finite results."""
+        from diff_diff import EfficientDiD
+
+        sd = SurveyDesign(weights="weight")
+        result = EfficientDiD(n_bootstrap=0).fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            aggregate="all",
+            survey_design=sd,
+        )
+        assert result.event_study_effects is not None
+        assert result.group_effects is not None
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+
 
 # =============================================================================
 # Scale Invariance (applies to all estimators)
@@ -753,6 +834,31 @@ class TestScaleInvariance:
 
         assert abs(r1.overall_att - r2.overall_att) < 1e-10
         assert abs(r1.overall_se - r2.overall_se) < 1e-8
+
+    def test_triple_diff_scale_invariance(self, ddd_survey_data):
+        from diff_diff import TripleDifference
+
+        sd1 = SurveyDesign(weights="weight")
+        r1 = TripleDifference(estimation_method="reg").fit(
+            ddd_survey_data,
+            "outcome",
+            "group",
+            "partition",
+            "time",
+            survey_design=sd1,
+        )
+        ddd_survey_data["weight_x10"] = ddd_survey_data["weight"] * 10.0
+        sd2 = SurveyDesign(weights="weight_x10")
+        r2 = TripleDifference(estimation_method="reg").fit(
+            ddd_survey_data,
+            "outcome",
+            "group",
+            "partition",
+            "time",
+            survey_design=sd2,
+        )
+        assert abs(r1.att - r2.att) < 1e-10
+        assert abs(r1.se - r2.se) < 1e-8
 
 
 # =============================================================================

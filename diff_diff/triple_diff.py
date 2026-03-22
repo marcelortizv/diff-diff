@@ -1330,14 +1330,17 @@ class TripleDifference:
 
         # Influence function
         # OLS asymptotic linear representation for pre/post
+        # When survey weights present, include them in both score and bread
+        # for consistency with the weighted OLS fit
         weights_ols_pre = PAa * (1 - post)
-        wols_x_pre = weights_ols_pre[:, None] * covX
-        wols_eX_pre = (weights_ols_pre * (y - or_ctrl_pre))[:, None] * covX
-
         if weights is not None:
             w_sum = np.sum(weights)
-            XpX_pre = wols_x_pre.T @ (weights[:, None] * covX) / w_sum
+            wols_x_pre = (weights_ols_pre * weights)[:, None] * covX
+            wols_eX_pre = (weights_ols_pre * weights * (y - or_ctrl_pre))[:, None] * covX
+            XpX_pre = wols_x_pre.T @ covX / w_sum
         else:
+            wols_x_pre = weights_ols_pre[:, None] * covX
+            wols_eX_pre = (weights_ols_pre * (y - or_ctrl_pre))[:, None] * covX
             XpX_pre = wols_x_pre.T @ covX / n
         try:
             XpX_inv_pre = np.linalg.inv(XpX_pre)
@@ -1346,12 +1349,13 @@ class TripleDifference:
         asy_lin_rep_ols_pre = wols_eX_pre @ XpX_inv_pre
 
         weights_ols_post = PAa * post
-        wols_x_post = weights_ols_post[:, None] * covX
-        wols_eX_post = (weights_ols_post * (y - or_ctrl_post))[:, None] * covX
-
         if weights is not None:
-            XpX_post = wols_x_post.T @ (weights[:, None] * covX) / w_sum
+            wols_x_post = (weights_ols_post * weights)[:, None] * covX
+            wols_eX_post = (weights_ols_post * weights * (y - or_ctrl_post))[:, None] * covX
+            XpX_post = wols_x_post.T @ covX / w_sum
         else:
+            wols_x_post = weights_ols_post[:, None] * covX
+            wols_eX_post = (weights_ols_post * (y - or_ctrl_post))[:, None] * covX
             XpX_post = wols_x_post.T @ covX / n
         try:
             XpX_inv_post = np.linalg.inv(XpX_post)

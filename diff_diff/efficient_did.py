@@ -45,6 +45,39 @@ from diff_diff.utils import safe_inference
 __all__ = ["EfficientDiD", "EfficientDiDResults", "EDiDBootstrapResults"]
 
 
+def _cluster_aggregate(
+    eif_mat: np.ndarray,
+    cluster_indices: np.ndarray,
+    n_clusters: int,
+) -> np.ndarray:
+    """Sum EIF values within clusters and center.
+
+    Parameters
+    ----------
+    eif_mat : ndarray, shape (n_units,) or (n_units, k)
+        EIF values — 1-D for a single estimand, 2-D for multiple.
+    cluster_indices : ndarray, shape (n_units,)
+        Integer cluster assignment per unit.
+    n_clusters : int
+        Number of unique clusters.
+
+    Returns
+    -------
+    ndarray, shape (n_clusters,) or (n_clusters, k)
+        Centered cluster-level sums.
+    """
+    if eif_mat.ndim == 1:
+        sums = np.bincount(cluster_indices, weights=eif_mat, minlength=n_clusters).astype(float)
+    else:
+        sums = np.column_stack(
+            [
+                np.bincount(cluster_indices, weights=eif_mat[:, j], minlength=n_clusters)
+                for j in range(eif_mat.shape[1])
+            ]
+        ).astype(float)
+    return sums - sums.mean(axis=0)
+
+
 def _compute_se_from_eif(
     eif: np.ndarray,
     n_units: int,
@@ -58,10 +91,9 @@ def _compute_se_from_eif(
     center, and apply G/(G-1) small-sample correction.
     """
     if cluster_indices is not None and n_clusters is not None:
-        cluster_sums = np.bincount(cluster_indices, weights=eif, minlength=n_clusters)
-        cluster_mean = np.mean(cluster_sums)
+        centered = _cluster_aggregate(eif, cluster_indices, n_clusters)
         correction = n_clusters / (n_clusters - 1) if n_clusters > 1 else 1.0
-        var = correction * np.mean((cluster_sums - cluster_mean) ** 2) / n_units
+        var = correction * np.mean(centered**2) / n_units
         return float(np.sqrt(max(var, 0.0)))
     return float(np.sqrt(np.mean(eif**2) / n_units))
 
@@ -91,8 +123,17 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
     alpha : float, default 0.05
         Significance level.
     cluster : str or None
-        Column name for cluster-robust SEs (not yet implemented —
-        currently only unit-level inference).
+        Column name for cluster-robust SEs.  When set, analytical SEs
+        use the Liang-Zeger clustered sandwich estimator on EIF values.
+        With ``n_bootstrap > 0``, bootstrap weights are generated at the
+        cluster level (all units in a cluster share the same weight).
+    control_group : str, default ``"never_treated"``
+        Which units serve as the comparison group:
+        ``"never_treated"`` requires a never-treated cohort (raises if
+        none exist); ``"last_cohort"`` reclassifies the latest treatment
+        cohort as pseudo-never-treated and drops post-treatment periods
+        for that cohort.  Distinct from CallawaySantAnna's
+        ``"not_yet_treated"`` — see REGISTRY.md for details.
     n_bootstrap : int, default 0
         Number of multiplier bootstrap iterations (0 = analytical only).
     bootstrap_weights : str, default ``"rademacher"``
@@ -230,6 +271,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         aggregate: Optional[str] = None,
         balance_e: Optional[int] = None,
         survey_design: Optional[Any] = None,
+        store_eif: bool = False,
     ) -> EfficientDiDResults:
         """Fit the Efficient DiD estimator.
 
@@ -479,8 +521,6 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         else:
             unit_cluster_indices = None
             n_clusters = None
-        self._cluster_indices = unit_cluster_indices
-        self._n_clusters = n_clusters
 
         period_to_col = {p: i for i, p in enumerate(time_periods)}
         period_1 = time_periods[0]
@@ -819,7 +859,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                     se_gt = self._compute_survey_eif_se(eif_vals)
                 else:
                     se_gt = _compute_se_from_eif(
-                        eif_vals, n_units, self._cluster_indices, self._n_clusters
+                        eif_vals, n_units, unit_cluster_indices, n_clusters
                     )
 
                 t_stat, p_val, ci = safe_inference(
@@ -844,7 +884,13 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
 
         # ----- Aggregation -----
         overall_att, overall_se = self._aggregate_overall(
-            group_time_effects, eif_by_gt, n_units, cohort_fractions, unit_cohorts
+            group_time_effects,
+            eif_by_gt,
+            n_units,
+            cohort_fractions,
+            unit_cohorts,
+            cluster_indices=unit_cluster_indices,
+            n_clusters=n_clusters,
         )
         overall_t, overall_p, overall_ci = safe_inference(
             overall_att, overall_se, alpha=self.alpha, df=self._survey_df
@@ -863,6 +909,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 time_periods,
                 balance_e,
                 unit_cohorts=unit_cohorts,
+                cluster_indices=unit_cluster_indices,
+                n_clusters=n_clusters,
             )
         if aggregate in ("group", "all"):
             group_effects = self._aggregate_by_group(
@@ -872,6 +920,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 cohort_fractions,
                 treatment_groups,
                 unit_cohorts=unit_cohorts,
+                cluster_indices=unit_cluster_indices,
+                n_clusters=n_clusters,
             )
 
         # ----- Bootstrap -----
@@ -885,8 +935,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 balance_e=balance_e,
                 treatment_groups=treatment_groups,
                 cohort_fractions=cohort_fractions,
-                cluster_indices=self._cluster_indices,
-                n_clusters=self._n_clusters,
+                cluster_indices=unit_cluster_indices,
+                n_clusters=n_clusters,
             )
             # Update estimates with bootstrap inference
             overall_se = bootstrap_results.overall_att_se
@@ -963,7 +1013,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             efficient_weights=stored_weights if stored_weights else None,
             omega_condition_numbers=stored_cond if stored_cond else None,
             control_group=self.control_group,
-            influence_functions=eif_by_gt if self._store_eif else None,
+            influence_functions=eif_by_gt if store_eif else None,
             bootstrap_results=bootstrap_results,
             estimation_path="dr" if use_covariates else "nocov",
             sieve_k_max=self.sieve_k_max,
@@ -1074,6 +1124,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         n_units: int,
         cohort_fractions: Dict[float, float],
         unit_cohorts: np.ndarray,
+        cluster_indices: Optional[np.ndarray] = None,
+        n_clusters: Optional[int] = None,
     ) -> Tuple[float, float]:
         """Compute overall ATT with WIF-adjusted SE.
 
@@ -1136,6 +1188,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         time_periods: List[Any],
         balance_e: Optional[int] = None,
         unit_cohorts: Optional[np.ndarray] = None,
+        cluster_indices: Optional[np.ndarray] = None,
+        n_clusters: Optional[int] = None,
     ) -> Dict[int, Dict[str, Any]]:
         """Aggregate ATT(g,t) by relative time e = t - g.
 
@@ -1238,6 +1292,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         cohort_fractions: Dict[float, float],
         treatment_groups: List[Any],
         unit_cohorts: Optional[np.ndarray] = None,
+        cluster_indices: Optional[np.ndarray] = None,
+        n_clusters: Optional[int] = None,
     ) -> Dict[Any, Dict[str, Any]]:
         """Aggregate ATT(g,t) by treatment cohort.
 
@@ -1367,12 +1423,10 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         )
 
         edid_all = cls(pt_assumption="all", alpha=alpha, **common_kwargs)
-        edid_all._store_eif = True
-        result_all = edid_all.fit(**fit_kwargs)
+        result_all = edid_all.fit(**fit_kwargs, store_eif=True)
 
         edid_post = cls(pt_assumption="post", alpha=alpha, **common_kwargs)
-        edid_post._store_eif = True
-        result_post = edid_post.fit(**fit_kwargs)
+        result_post = edid_post.fit(**fit_kwargs, store_eif=True)
 
         # Find common (g,t) pairs — PT-Post pairs are a subset of PT-All
         common_gts = sorted(
@@ -1438,7 +1492,18 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         row_finite = np.all(np.isfinite(eif_all_mat), axis=1) & np.all(
             np.isfinite(eif_post_mat), axis=1
         )
-        cl_idx = edid_all._cluster_indices
+        # Build cluster mapping for covariance if needed
+        cl_idx: Optional[np.ndarray] = None
+        n_cl: Optional[int] = None
+        if cluster is not None:
+            all_units = sorted(data[unit].unique())
+            cluster_col = data.groupby(unit)[cluster].first()
+            cluster_ids = cluster_col.reindex(all_units).values
+            unique_clusters = np.unique(cluster_ids)
+            n_cl = len(unique_clusters)
+            cluster_to_idx = {c: i for i, c in enumerate(unique_clusters)}
+            cl_idx = np.array([cluster_to_idx[c] for c in cluster_ids])
+
         if not np.all(row_finite):
             eif_all_mat = eif_all_mat[row_finite]
             eif_post_mat = eif_post_mat[row_finite]
@@ -1446,23 +1511,16 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             if cl_idx is not None:
                 cl_idx = cl_idx[row_finite]
 
-        # Compute full covariance matrices
-        if cl_idx is not None:
-            n_cl = edid_all._n_clusters
+        # Compute full covariance matrices using shared _cluster_aggregate
+        if cl_idx is not None and n_cl is not None:
 
-            def _cluster_cov(eif_mat: np.ndarray) -> np.ndarray:
-                s_mat = np.column_stack(
-                    [
-                        np.bincount(cl_idx, weights=eif_mat[:, j], minlength=n_cl)
-                        for j in range(eif_mat.shape[1])
-                    ]
-                )
-                s_centered = s_mat - s_mat.mean(axis=0)
+            def _eif_cov(eif_mat: np.ndarray) -> np.ndarray:
+                centered = _cluster_aggregate(eif_mat, cl_idx, n_cl)
                 correction = n_cl / (n_cl - 1) if n_cl > 1 else 1.0
-                return correction * (s_centered.T @ s_centered) / (n_units**2)
+                return correction * (centered.T @ centered) / (n_units**2)
 
-            cov_all = _cluster_cov(eif_all_mat)
-            cov_post = _cluster_cov(eif_post_mat)
+            cov_all = _eif_cov(eif_all_mat)
+            cov_post = _eif_cov(eif_post_mat)
         else:
             with np.errstate(over="ignore", invalid="ignore"):
                 cov_all = (eif_all_mat.T @ eif_all_mat) / (n_units**2)

@@ -507,6 +507,13 @@ class TripleDifference:
             _resolve_survey_for_fit(survey_design, data, "analytical")
         )
 
+        if resolved_survey is not None and resolved_survey.weight_type != "pweight":
+            raise ValueError(
+                f"TripleDifference survey support requires weight_type='pweight', "
+                f"got '{resolved_survey.weight_type}'. The survey variance math "
+                f"assumes probability weights (pweight)."
+            )
+
         # Validate inputs
         self._validate_data(data, outcome, group, partition, time, covariates)
 

@@ -237,6 +237,12 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         # Validate within-unit constancy for panel survey designs
         if resolved_survey is not None:
             _validate_unit_constant_survey(data, unit, survey_design)
+            if resolved_survey.weight_type != "pweight":
+                raise ValueError(
+                    f"TwoStageDiD survey support requires weight_type='pweight', "
+                    f"got '{resolved_survey.weight_type}'. The survey variance math "
+                    f"assumes probability weights (pweight)."
+                )
 
         # Guard bootstrap + survey
         if self.n_bootstrap > 0 and resolved_survey is not None:
@@ -530,7 +536,13 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         tau_finite = treated_df["tau_hat"].notna() & np.isfinite(treated_df["tau_hat"].values)
         n_valid_te = int(tau_finite.sum())
         if n_valid_te > 0:
-            treated_df["weight"] = np.where(tau_finite, 1.0 / n_valid_te, 0.0)
+            if survey_weights is not None:
+                treated_sw = survey_weights[omega_1_mask.values]
+                sw_finite = np.where(tau_finite, treated_sw, 0.0)
+                sw_sum = sw_finite.sum()
+                treated_df["weight"] = sw_finite / sw_sum if sw_sum > 0 else 0.0
+            else:
+                treated_df["weight"] = np.where(tau_finite, 1.0 / n_valid_te, 0.0)
         else:
             treated_df["weight"] = 0.0
 

@@ -1191,6 +1191,12 @@ class CallawaySantAnna(
         # Validate within-unit constancy for panel survey designs
         if resolved_survey is not None:
             _validate_unit_constant_survey(data, unit, survey_design)
+            if resolved_survey.weight_type != "pweight":
+                raise ValueError(
+                    f"CallawaySantAnna survey support requires weight_type='pweight', "
+                    f"got '{resolved_survey.weight_type}'. The survey variance math "
+                    f"assumes probability weights (pweight)."
+                )
 
         # Guard bootstrap + survey
         if self.n_bootstrap > 0 and resolved_survey is not None:

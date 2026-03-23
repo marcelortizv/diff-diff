@@ -1180,8 +1180,6 @@ class CallawaySantAnna(
 
         # Resolve survey design if provided
         from diff_diff.survey import (
-            _inject_cluster_as_psu,
-            _resolve_effective_cluster,
             _resolve_survey_for_fit,
             _validate_unit_constant_survey,
         )
@@ -1286,25 +1284,16 @@ class CallawaySantAnna(
                     "cohorts when there are no never-treated units."
                 )
 
-        # Resolve effective cluster and inject cluster-as-PSU for survey variance
-        if resolved_survey is not None:
-            cluster_var = self.cluster if self.cluster is not None else unit
-            cluster_ids_raw = df[cluster_var].values if cluster_var in df.columns else None
-            effective_cluster_ids = _resolve_effective_cluster(
-                resolved_survey,
-                cluster_ids_raw,
-                cluster_var if self.cluster is not None else None,
-            )
-            resolved_survey = _inject_cluster_as_psu(resolved_survey, effective_cluster_ids)
-            # Recompute metadata after PSU injection
-            if resolved_survey.psu is not None and survey_metadata is not None:
+        # Note: CallawaySantAnna uses weights-only survey (strata/PSU/FPC
+        # rejected above). We do NOT inject cluster-as-PSU here because CS
+        # per-cell SEs use IF-based variance, not TSL. The user's cluster=
+        # parameter is handled by the existing non-survey clustering path.
+        if resolved_survey is not None and survey_metadata is not None:
+            # Just recompute metadata with the resolved design (no PSU injection)
+            if survey_design.weights:
                 from diff_diff.survey import compute_survey_metadata
 
-                raw_w = (
-                    data[survey_design.weights].values.astype(np.float64)
-                    if survey_design.weights
-                    else np.ones(len(data), dtype=np.float64)
-                )
+                raw_w = data[survey_design.weights].values.astype(np.float64)
                 survey_metadata = compute_survey_metadata(resolved_survey, raw_w)
 
         # Pre-compute data structures for efficient ATT(g,t) computation

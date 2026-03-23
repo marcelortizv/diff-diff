@@ -829,6 +829,35 @@ class TestCallawaySantAnnaSurvey:
                 survey_design=sd_full,
             )
 
+    def test_aggregate_group_with_survey(self, staggered_survey_data, survey_design_weights_only):
+        """aggregate='group' works with weights-only survey design."""
+        result = CallawaySantAnna(estimation_method="reg").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            aggregate="group",
+            survey_design=survey_design_weights_only,
+        )
+        assert result.group_effects is not None
+        assert len(result.group_effects) > 0
+
+    def test_aggregate_all_with_survey(self, staggered_survey_data, survey_design_weights_only):
+        """aggregate='all' works with weights-only survey design."""
+        result = CallawaySantAnna(estimation_method="reg").fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            aggregate="all",
+            survey_design=survey_design_weights_only,
+        )
+        assert np.isfinite(result.overall_att)
+        assert result.event_study_effects is not None
+        assert result.group_effects is not None
+
     def test_bootstrap_survey_raises(self, staggered_survey_data, survey_design_weights_only):
         """Bootstrap + survey should raise NotImplementedError."""
         with pytest.raises(NotImplementedError, match="[Bb]ootstrap"):

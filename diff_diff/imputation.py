@@ -586,6 +586,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             "grand_mean": grand_mean,
             "delta_hat": delta_hat,
             "kept_cov_mask": kept_cov_mask,
+            "survey_design": survey_design,
         }
 
         # Pre-compute cluster psi sums for bootstrap
@@ -1752,6 +1753,14 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         """
         if self._fit_data is None:
             raise RuntimeError("Must call fit() before pretrend_test().")
+
+        if self._fit_data.get("survey_design") is not None:
+            raise NotImplementedError(
+                "pretrend_test() is not yet survey-aware. The pre-trend F-test "
+                "uses unweighted demeaning and cluster-count degrees of freedom, "
+                "which do not account for survey weights. Survey-weighted "
+                "pretrend_test() is planned for future work."
+            )
 
         fd = self._fit_data
         df = fd["df"]

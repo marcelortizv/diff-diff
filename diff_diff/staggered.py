@@ -1633,7 +1633,7 @@ class CallawaySantAnna(
                 # Influence function (survey-weighted)
                 inf_treated = sw_t_norm * (treated_residuals - att)
                 inf_control = (
-                    -sw_c_norm * (control_change - np.dot(X_c, beta)) + inf_control_reg_corr / n_c
+                    -sw_c_norm * (control_change - np.dot(X_c, beta)) + inf_control_reg_corr
                 )
                 inf_func = np.concatenate([inf_treated, inf_control])
 

@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Phase 4 survey support** for ImputationDiD, TwoStageDiD, and CallawaySantAnna estimators
-  - Taylor-series linearization variance with strata, PSU, and FPC
-  - Weighted influence function (WIF) approach matching R `did::wif()`
+  - ImputationDiD/TwoStageDiD: analytical survey inference with weights, strata, and PSU (FPC not supported; bootstrap+survey deferred)
+  - CallawaySantAnna: weights-only analytical IF/WIF inference matching R `did::wif()` (strata/PSU/FPC deferred)
   - Survey-aware aggregation for group-time, event-study, and overall ATT
 - **EfficientDiD enhancements**: doubly robust covariates path, sieve inverse propensity (Eq 3.12), conditional Omega*
 - **Cluster-robust SEs** for EfficientDiD with last-cohort control and Hausman pretest
@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix CallawaySantAnna reg+cov control IF normalization and survey df calculation
 - Fix TripleDifference TSL double-weighting and RA nuisance linearization with survey weights
 - Fix ContinuousDiD bread normalization, fweight TSL scaling, and weighted-mass IF linearization
-- Fix EfficientDiD clustered SE formula, stale cluster indices in Hausman pretest
+- Fix EfficientDiD clustered SE formula in Hausman pretest
 - Fix BaconDecomposition exact-weight survey unit_share and empty-cell guard
 - Fix SunAbraham survey weight floor in overall ATT aggregation
 - Fix plotly event study for non-numeric periods, heatmap masking, color parser

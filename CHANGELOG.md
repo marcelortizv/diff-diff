@@ -7,14 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.5] - 2026-03-23
+
 ### Added
-- Refactor `visualization.py` into `visualization/` subpackage for better organization
-- Add `plot_synth_weights()` — bar chart of Synthetic DiD unit/time weights
-- Add `plot_staircase()` — treatment adoption visualization for staggered designs
-- Add `plot_dose_response()` — dose-response curve for Continuous DiD
-- Add `plot_group_time_heatmap()` — heatmap of ATT(g,t) from staggered estimators
-- Add interactive plotly backend (`backend="plotly"`) for all visualization functions
+- **Phase 4 survey support** for ImputationDiD, TwoStageDiD, and CallawaySantAnna estimators
+  - Taylor-series linearization variance with strata, PSU, and FPC
+  - Weighted influence function (WIF) approach matching R `did::wif()`
+  - Survey-aware aggregation for group-time, event-study, and overall ATT
+- **EfficientDiD enhancements**: doubly robust covariates path, sieve inverse propensity (Eq 3.12), conditional Omega*
+- **Cluster-robust SEs** for EfficientDiD with last-cohort control and Hausman pretest
+- **Enhanced visualizations**: synth weights, staircase, dose-response, group-time heatmap, plotly backend
+- **Local AI review skill** (`/ai-review-local`) with Responses API, delta-diff re-review, and cost visibility
 - Add `plotly` optional dependency group (`pip install diff-diff[plotly]`)
+
+### Changed
+- Migrate AI local review from Chat Completions to Responses API
+- Split TROP estimator into mixin modules (`trop_local.py`, `trop_global.py`) for maintainability
+- Refactor `visualization.py` into `visualization/` subpackage
+- Improve review script: full-file context, content-first parsing, tiered matching, fingerprint stability
+
+### Fixed
+- Fix CallawaySantAnna reg+cov control IF normalization and survey df calculation
+- Fix TripleDifference TSL double-weighting and RA nuisance linearization with survey weights
+- Fix ContinuousDiD bread normalization, fweight TSL scaling, and weighted-mass IF linearization
+- Fix EfficientDiD clustered SE formula, stale cluster indices in Hausman pretest
+- Fix BaconDecomposition exact-weight survey unit_share and empty-cell guard
+- Fix SunAbraham survey weight floor in overall ATT aggregation
+- Fix plotly event study for non-numeric periods, heatmap masking, color parser
 
 ## [2.7.4] - 2026-03-21
 
@@ -960,6 +979,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.7.5]: https://github.com/igerber/diff-diff/compare/v2.7.4...v2.7.5
 [2.7.4]: https://github.com/igerber/diff-diff/compare/v2.7.3...v2.7.4
 [2.7.3]: https://github.com/igerber/diff-diff/compare/v2.7.2...v2.7.3
 [2.7.2]: https://github.com/igerber/diff-diff/compare/v2.7.1...v2.7.2

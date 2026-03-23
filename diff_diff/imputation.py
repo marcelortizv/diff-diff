@@ -203,6 +203,12 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         balance_e : int, optional
             When computing event study, restrict to cohorts observed at all
             relative times in [-balance_e, max_h].
+        survey_design : SurveyDesign, optional
+            Survey design specification for design-based inference. Supports
+            pweight only (aweight/fweight raise ValueError). FPC raises
+            NotImplementedError. PSU is used as cluster variable for Theorem 3
+            variance. Strata enters survey df for t-distribution inference.
+            Requires analytical inference (n_bootstrap=0).
 
         Returns
         -------
@@ -1951,6 +1957,12 @@ def imputation_did(
         Aggregation mode: None, "simple", "event_study", "group", "all".
     balance_e : int, optional
         Balance event study to cohorts observed at all relative times.
+    survey_design : SurveyDesign, optional
+        Survey design specification for design-based inference. Supports
+        pweight only (aweight/fweight raise ValueError). FPC raises
+        NotImplementedError. PSU is used as cluster variable for Theorem 3
+        variance. Strata enters survey df for t-distribution inference.
+        Requires analytical inference (n_bootstrap=0).
     **kwargs
         Additional keyword arguments passed to ImputationDiD constructor.
 

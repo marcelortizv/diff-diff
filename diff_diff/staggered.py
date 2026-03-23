@@ -1155,8 +1155,10 @@ class CallawaySantAnna(
             For event study, balance the panel at relative time e.
             Ensures all groups contribute to each relative period.
         survey_design : SurveyDesign, optional
-            Survey design specification for design-based inference.
-            Supports weights, strata, PSU, and FPC.
+            Survey design specification. Only weights-only designs are supported
+            (strata/PSU/FPC raise NotImplementedError). Supports pweight only.
+            Covariates + IPW/DR + survey also raises NotImplementedError.
+            Use analytical inference (n_bootstrap=0) with survey_design.
 
         Returns
         -------

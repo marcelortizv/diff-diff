@@ -183,6 +183,37 @@ class TestWeightedSolveLogit:
 
         np.testing.assert_allclose(beta1, beta2, atol=1e-10)
 
+    def test_nan_weights_raises(self):
+        """NaN weights should raise ValueError."""
+        rng = np.random.RandomState(42)
+        n = 50
+        X = rng.randn(n, 2)
+        y = (X @ [0.5, -0.5] + rng.randn(n) > 0).astype(float)
+        weights = np.ones(n)
+        weights[3] = np.nan
+        with pytest.raises(ValueError, match="NaN"):
+            solve_logit(X, y, weights=weights)
+
+    def test_negative_weights_raises(self):
+        """Negative weights should raise ValueError."""
+        rng = np.random.RandomState(42)
+        n = 50
+        X = rng.randn(n, 2)
+        y = (X @ [0.5, -0.5] + rng.randn(n) > 0).astype(float)
+        weights = np.ones(n)
+        weights[0] = -1.0
+        with pytest.raises(ValueError, match="strictly positive"):
+            solve_logit(X, y, weights=weights)
+
+    def test_wrong_shape_weights_raises(self):
+        """Wrong-length weights should raise ValueError."""
+        rng = np.random.RandomState(42)
+        n = 50
+        X = rng.randn(n, 2)
+        y = (X @ [0.5, -0.5] + rng.randn(n) > 0).astype(float)
+        with pytest.raises(ValueError, match="shape"):
+            solve_logit(X, y, weights=np.ones(n + 5))
+
 
 # =============================================================================
 # TestImputationDiDSurvey
@@ -444,6 +475,32 @@ class TestImputationDiDSurvey:
         assert result.event_study_effects is not None
         assert result.group_effects is not None
 
+    def test_aweight_raises(self, staggered_survey_data):
+        """aweight survey design should raise ValueError."""
+        sd = SurveyDesign(weights="weight", weight_type="aweight")
+        with pytest.raises(ValueError, match="pweight"):
+            ImputationDiD().fit(
+                staggered_survey_data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                survey_design=sd,
+            )
+
+    def test_fpc_raises(self, staggered_survey_data):
+        """FPC survey design should raise NotImplementedError."""
+        sd = SurveyDesign(weights="weight", fpc="fpc")
+        with pytest.raises(NotImplementedError, match="FPC"):
+            ImputationDiD().fit(
+                staggered_survey_data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                survey_design=sd,
+            )
+
 
 # =============================================================================
 # TestTwoStageDiDSurvey
@@ -646,6 +703,32 @@ class TestTwoStageDiDSurvey:
         assert np.isfinite(result.overall_att)
         assert np.isfinite(result.overall_se)
         assert result.survey_metadata is not None
+
+    def test_aweight_raises(self, staggered_survey_data):
+        """aweight survey design should raise ValueError."""
+        sd = SurveyDesign(weights="weight", weight_type="aweight")
+        with pytest.raises(ValueError, match="pweight"):
+            TwoStageDiD().fit(
+                staggered_survey_data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                survey_design=sd,
+            )
+
+    def test_fpc_raises(self, staggered_survey_data):
+        """FPC survey design should raise NotImplementedError."""
+        sd = SurveyDesign(weights="weight", fpc="fpc")
+        with pytest.raises(NotImplementedError, match="FPC"):
+            TwoStageDiD().fit(
+                staggered_survey_data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                survey_design=sd,
+            )
 
 
 # =============================================================================

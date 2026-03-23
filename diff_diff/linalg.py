@@ -1157,6 +1157,18 @@ def solve_logit(
     X_with_intercept = np.column_stack([np.ones(n), X])
     k = p + 1  # number of parameters including intercept
 
+    # Validate weights
+    if weights is not None:
+        weights = np.asarray(weights, dtype=np.float64)
+        if weights.shape != (n,):
+            raise ValueError(f"weights must have shape ({n},), got {weights.shape}")
+        if np.any(np.isnan(weights)):
+            raise ValueError("weights contain NaN values")
+        if np.any(~np.isfinite(weights)):
+            raise ValueError("weights contain Inf values")
+        if np.any(weights <= 0):
+            raise ValueError("weights must be strictly positive")
+
     # Validate rank_deficient_action
     valid_actions = {"warn", "error", "silent"}
     if rank_deficient_action not in valid_actions:

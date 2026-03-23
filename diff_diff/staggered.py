@@ -1603,43 +1603,48 @@ class CallawaySantAnna(
             treated_residuals = treated_change - predicted_control
 
             if sw_treated is not None:
-                sw_t_norm = sw_treated / np.sum(sw_treated)
-                sw_c_norm = sw_control / np.sum(sw_control)
+                sw_t_sum = float(np.sum(sw_treated))
+                sw_t_norm = sw_treated / sw_t_sum
                 att = float(np.sum(sw_t_norm * treated_residuals))
 
-                # --- Regression nuisance IF correction ---
-                # Account for uncertainty in beta estimation
+                # --- DRDID panel OR influence function (survey-weighted) ---
+                # Following Sant'Anna & Zhao (2020) Theorem 3.1 for the OR estimator.
+                # All IF terms are scaled by 1/sw_t_sum so that sum(IF^2) gives V(ATT).
                 X_c = np.column_stack([np.ones(n_c), X_control])
                 X_t = np.column_stack([np.ones(n_t), X_treated])
 
-                # Weighted bread: (X'WX)^{-1}
+                # Treated component: w_i * (ΔY_i - m(X_i) - ATT) / sum(w_treated)
+                inf_treated = (sw_treated / sw_t_sum) * (treated_residuals - att)
+
+                # Control outcome-regression component
+                predicted_c = np.dot(X_c, beta)
+                inf_control_or = -(sw_control / sw_t_sum) * (control_change - predicted_c)
+
+                # Regression nuisance IF correction (accounts for beta estimation)
+                # Hessian of WLS: H = X_c' W_c X_c
                 XWX = X_c.T @ (X_c * sw_control[:, None])
                 try:
                     XWX_inv = np.linalg.solve(XWX, np.eye(XWX.shape[0]))
                 except np.linalg.LinAlgError:
                     XWX_inv = np.linalg.lstsq(XWX, np.eye(XWX.shape[0]), rcond=None)[0]
 
-                # Per-control regression score: w_i * x_i * resid_i
-                resid_c = control_change - X_c @ beta
+                # Per-control score: w_i * x_i * (y_i - x_i'beta)
+                resid_c = control_change - predicted_c
                 score_c = X_c * (sw_control * resid_c)[:, None]
-                asy_lin_rep_reg = score_c @ XWX_inv  # shape (n_c, p)
+                asy_lin_rep_reg = score_c @ XWX_inv  # (n_c, p)
 
-                # Weighted treated covariate mean
-                X_treated_mean_w = np.average(X_t, axis=0, weights=sw_treated)
+                # Projection direction: survey-weighted treated covariate mean
+                X_treated_mean_w = np.sum(X_t * sw_treated[:, None], axis=0) / sw_t_sum
 
-                # Regression IF correction for control observations
-                inf_control_reg_corr = asy_lin_rep_reg @ X_treated_mean_w
+                # Correction: how beta uncertainty affects ATT
+                inf_control_reg_corr = (asy_lin_rep_reg @ X_treated_mean_w) / sw_t_sum
 
-                # Influence function (survey-weighted)
-                inf_treated = sw_t_norm * (treated_residuals - att)
-                inf_control = (
-                    -sw_c_norm * (control_change - np.dot(X_c, beta)) + inf_control_reg_corr
-                )
+                inf_control = inf_control_or + inf_control_reg_corr
                 inf_func = np.concatenate([inf_treated, inf_control])
 
                 # SE from influence function variance
-                var_psi = np.sum(inf_treated**2) + np.sum(inf_control**2)
-                se = float(np.sqrt(var_psi)) if var_psi > 0 else 0.0
+                se = float(np.sqrt(np.sum(inf_func**2)))
+                se = se if se > 0 else 0.0
             else:
                 att = float(np.mean(treated_residuals))
 

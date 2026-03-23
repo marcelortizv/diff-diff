@@ -1077,11 +1077,18 @@ class TripleDifference:
 
         if resolved_survey is not None:
             # Survey-weighted SE via TSL on the combined influence function.
-            # Treat the IF as a single-parameter score vector:
-            #   compute_survey_vcov(ones, IF, resolved) gives V(ATT).
+            # The pairwise IFs already incorporate survey weights (via weighted
+            # Riesz representers), but compute_survey_vcov multiplies by weights
+            # again internally. Divide out the survey weights to get the
+            # unweighted IF that TSL will correctly re-weight.
             from diff_diff.survey import compute_survey_vcov
 
-            vcov_survey = compute_survey_vcov(np.ones((n, 1)), inf_func, resolved_survey)
+            inf_for_tsl = inf_func.copy()
+            sw = survey_weights
+            if sw is not None:
+                nz = sw > 0
+                inf_for_tsl[nz] = inf_for_tsl[nz] / sw[nz]
+            vcov_survey = compute_survey_vcov(np.ones((n, 1)), inf_for_tsl, resolved_survey)
             se = float(np.sqrt(vcov_survey[0, 0]))
         elif self._cluster_ids is not None:
             # Cluster-robust SE: sum IF within clusters, then Liang-Zeger variance

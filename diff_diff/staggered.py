@@ -1199,6 +1199,22 @@ class CallawaySantAnna(
                 "for CallawaySantAnna. Use analytical inference (n_bootstrap=0)."
             )
 
+        # Guard covariates + survey + IPW/DR (nuisance IF corrections not yet
+        # implemented to match DRDID panel formula)
+        if (
+            resolved_survey is not None
+            and covariates is not None
+            and len(covariates) > 0
+            and self.estimation_method in ("ipw", "dr")
+        ):
+            raise NotImplementedError(
+                f"Survey weights with covariates and estimation_method="
+                f"'{self.estimation_method}' is not yet supported for "
+                f"CallawaySantAnna. The DRDID panel nuisance-estimation IF "
+                f"corrections are not yet implemented. Use estimation_method='reg' "
+                f"with covariates, or use any method without covariates."
+            )
+
         # Validate inputs
         required_cols = [outcome, unit, time, first_treat]
         if covariates:

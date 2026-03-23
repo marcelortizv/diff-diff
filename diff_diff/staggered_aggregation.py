@@ -341,9 +341,11 @@ class CallawaySantAnnaAggregationMixin:
         ).astype(np.float64)
 
         if survey_w is not None:
-            # Survey-weighted WIF for group-share estimator p_g = sum(s_i * 1{G_i=g}) / sum(s_j).
-            # IF_i(p_g) = s_i * (1{G_i=g} - p_g) / sum(s_j)
-            # Build per-unit weight vector aligned to our index space
+            # Survey-weighted WIF matching R's did::wif() / compute.aggte.R.
+            # pg_k = E[w_i * 1{G_i=g}] is the weighted group share.
+            # IF_i(p_g) = (w_i * 1{G_i=g} - pg_k), NOT s_i * (1{G_i=g} - pg_k).
+            # The pg subtraction is NOT weighted by s_i because pg is already
+            # the population-level expected value of w_i * 1{G_i=g}.
             if global_unit_to_idx is not None and precomputed is not None:
                 unit_sw = np.zeros(n_units)
                 precomputed_unit_to_idx_local = precomputed["unit_to_idx"]
@@ -354,12 +356,9 @@ class CallawaySantAnnaAggregationMixin:
             else:
                 unit_sw = np.ones(n_units)
 
-            # s_i * 1{G_i == g_k}
+            # w_i * 1{G_i == g_k} - pg_k  (matches R's did::wif)
             weighted_indicator = indicator_matrix * unit_sw[:, np.newaxis]
-            # s_i * p_g_k  (symmetric weight application)
-            weighted_pg_term = pg_keepers[np.newaxis, :] * unit_sw[:, np.newaxis]
-            # s_i * (1{G_i == g_k} - p_g_k) / sum(s_j)
-            indicator_diff = weighted_indicator - weighted_pg_term
+            indicator_diff = weighted_indicator - pg_keepers
             indicator_sum_w = np.sum(indicator_diff, axis=1)
 
             with np.errstate(divide="ignore", invalid="ignore", over="ignore"):

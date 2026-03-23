@@ -613,6 +613,51 @@ class TestCallawaySantAnnaSurvey:
                 survey_design=survey_design_weights_only,
             )
 
+    def test_ipw_covariates_survey_raises(self, staggered_survey_data, survey_design_weights_only):
+        """IPW + covariates + survey should raise NotImplementedError."""
+        data = staggered_survey_data.copy()
+        data["x1"] = np.random.default_rng(42).normal(0, 1, len(data))
+        with pytest.raises(NotImplementedError, match="covariates"):
+            CallawaySantAnna(estimation_method="ipw").fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                covariates=["x1"],
+                survey_design=survey_design_weights_only,
+            )
+
+    def test_dr_covariates_survey_raises(self, staggered_survey_data, survey_design_weights_only):
+        """DR + covariates + survey should raise NotImplementedError."""
+        data = staggered_survey_data.copy()
+        data["x1"] = np.random.default_rng(42).normal(0, 1, len(data))
+        with pytest.raises(NotImplementedError, match="covariates"):
+            CallawaySantAnna(estimation_method="dr").fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                covariates=["x1"],
+                survey_design=survey_design_weights_only,
+            )
+
+    def test_reg_covariates_survey_works(self, staggered_survey_data, survey_design_weights_only):
+        """Regression + covariates + survey should work (has nuisance IF correction)."""
+        data = staggered_survey_data.copy()
+        data["x1"] = np.random.default_rng(42).normal(0, 1, len(data))
+        result = CallawaySantAnna(estimation_method="reg").fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            covariates=["x1"],
+            survey_design=survey_design_weights_only,
+        )
+        assert np.isfinite(result.overall_att)
+
     def test_weighted_logit(self, staggered_survey_data, survey_design_weights_only):
         """Propensity scores should change with survey weights (IPW path)."""
         r_unw = CallawaySantAnna(estimation_method="ipw").fit(

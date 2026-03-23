@@ -1,11 +1,11 @@
 ---
 description: Run AI code review locally using OpenAI API before opening a PR
-argument-hint: "[--context minimal|standard|deep] [--include-files <files>] [--token-budget <n>] [--force-fresh] [--full-registry] [--model <model>] [--dry-run]"
+argument-hint: "[--context minimal|standard|deep] [--include-files <files>] [--token-budget <n>] [--force-fresh] [--full-registry] [--model <model>] [--timeout <seconds>] [--dry-run]"
 ---
 
 # Local AI Code Review
 
-Run a structured code review using the OpenAI Chat Completions API. Reviews changes
+Run a structured code review using the OpenAI Responses API. Reviews changes
 against the same methodology criteria used by the CI reviewer, but adapted for local
 pre-PR use. Designed for iterative review/revision cycles before submitting a PR.
 
@@ -23,7 +23,14 @@ pre-PR use. Designed for iterative review/revision cycles before submitting a PR
 - `--force-fresh`: Skip delta-diff mode, run a full fresh review even if previous state exists
 - `--full-registry`: Include the entire REGISTRY.md instead of selective sections
 - `--model <name>`: Override the OpenAI model (default: `gpt-5.4`)
+- `--timeout <seconds>`: HTTP request timeout (default: 300). Use 900 for reasoning models.
 - `--dry-run`: Print the compiled prompt without calling the API
+
+**Reasoning models** (`gpt-5.4-pro`, `o3`, `o4-mini`, etc.): Reviews may take 10-15
+minutes. For deep reviews with reasoning models, combine `--token-budget` with `--model`:
+```
+/ai-review-local --model gpt-5.4-pro --token-budget 500000 --context deep
+```
 
 ## Constraints
 
@@ -320,11 +327,18 @@ python3 .claude/scripts/openai_review.py \
     [--token-budget "$token_budget"] \
     [--full-registry] \
     [--model <model>] \
+    [--timeout <seconds>] \
     [--dry-run]
 ```
 
 Note: `--force-fresh` is a skill-only flag — it controls whether delta diffs are
 generated in Step 4 and is NOT passed to the script.
+
+**Reasoning model handling:** If the model contains `-pro` or starts with `o1`/`o3`/`o4`
+(e.g., `gpt-5.4-pro`, `o3`, `o4-mini`):
+- Pass `--timeout 900` to the script (unless the user explicitly specified `--timeout`)
+- Run the Bash command with `run_in_background: true` (bypasses the 600s Bash tool timeout cap)
+- After the background command completes, continue to Step 6
 
 If `--dry-run`: display the prompt output and stop. Report the estimated token count,
 cost estimate, and model that would be used.
@@ -450,6 +464,9 @@ runs `--force-fresh` or when a rebase invalidates the tracked commit.
 
 # Use a different model with full registry
 /ai-review-local --model gpt-4.1 --full-registry
+
+# Deep review with reasoning model (may take 10-15 minutes)
+/ai-review-local --model gpt-5.4-pro --token-budget 500000 --context deep
 
 # Limit token budget for faster/cheaper reviews
 /ai-review-local --token-budget 100000

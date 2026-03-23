@@ -1265,6 +1265,46 @@ class TestTripleDifferenceIPWSurvey:
 class TestCallawaySantAnnaSurveyInference:
     """Validate CS survey inference beyond smoke tests."""
 
+    def test_unbalanced_panel_scale_invariance(self, staggered_survey_data):
+        """Scale invariance should hold on unbalanced panels."""
+        data = staggered_survey_data.copy()
+        # Drop ~10% of observations to create unbalanced panel
+        rng = np.random.default_rng(99)
+        keep = rng.random(len(data)) > 0.1
+        data = data[keep].copy()
+        assert data.groupby("unit")["period"].count().nunique() > 1, "Panel should be unbalanced"
+        data["weight2"] = data["weight"] * 2.9
+        sd1 = SurveyDesign(weights="weight")
+        sd2 = SurveyDesign(weights="weight2")
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            r1 = CallawaySantAnna(estimation_method="reg").fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                aggregate="simple",
+                survey_design=sd1,
+            )
+            r2 = CallawaySantAnna(estimation_method="reg").fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                aggregate="simple",
+                survey_design=sd2,
+            )
+        assert np.isclose(
+            r1.overall_att, r2.overall_att, atol=1e-8
+        ), "ATT not scale-invariant on unbalanced panel"
+        assert np.isclose(
+            r1.overall_se, r2.overall_se, atol=1e-8
+        ), f"SE not scale-invariant on unbalanced panel: {r1.overall_se} vs {r2.overall_se}"
+
     def test_se_scale_invariance_all_methods(self, staggered_survey_data):
         """SE should be invariant under weight rescaling for all methods."""
         data = staggered_survey_data

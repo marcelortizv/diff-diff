@@ -413,6 +413,37 @@ class TestImputationDiDSurvey:
         assert np.isclose(r_wrapper.overall_att, r_direct.overall_att, atol=1e-10)
         assert r_wrapper.survey_metadata is not None
 
+    def test_aggregate_group_with_survey(self, staggered_survey_data, survey_design_weights_only):
+        """aggregate='group' works with survey design."""
+        result = ImputationDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            aggregate="group",
+            survey_design=survey_design_weights_only,
+        )
+        assert result.group_effects is not None
+        assert len(result.group_effects) > 0
+        for g, eff in result.group_effects.items():
+            assert np.isfinite(eff["effect"])
+
+    def test_aggregate_all_with_survey(self, staggered_survey_data, survey_design_weights_only):
+        """aggregate='all' works with survey design."""
+        result = ImputationDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            aggregate="all",
+            survey_design=survey_design_weights_only,
+        )
+        assert np.isfinite(result.overall_att)
+        assert result.event_study_effects is not None
+        assert result.group_effects is not None
+
 
 # =============================================================================
 # TestTwoStageDiDSurvey
@@ -564,6 +595,35 @@ class TestTwoStageDiDSurvey:
         )
         assert np.isclose(r_wrapper.overall_att, r_direct.overall_att, atol=1e-10)
         assert r_wrapper.survey_metadata is not None
+
+    def test_aggregate_group_with_survey(self, staggered_survey_data, survey_design_weights_only):
+        """aggregate='group' works with survey design."""
+        result = TwoStageDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            aggregate="group",
+            survey_design=survey_design_weights_only,
+        )
+        assert result.group_effects is not None
+        assert len(result.group_effects) > 0
+
+    def test_aggregate_all_with_survey(self, staggered_survey_data, survey_design_weights_only):
+        """aggregate='all' works with survey design."""
+        result = TwoStageDiD().fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            aggregate="all",
+            survey_design=survey_design_weights_only,
+        )
+        assert np.isfinite(result.overall_att)
+        assert result.event_study_effects is not None
+        assert result.group_effects is not None
 
     def test_always_treated_with_survey(self, staggered_survey_data):
         """TwoStageDiD with survey + always-treated units should not crash."""

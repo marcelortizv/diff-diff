@@ -328,6 +328,68 @@ class CallawaySantAnna(
         self.is_fitted_ = False
         self.results_: Optional[CallawaySantAnnaResults] = None
 
+    @staticmethod
+    def _collapse_survey_to_unit_level(resolved_survey, df, unit_col, all_units):
+        """Create unit-level ResolvedSurveyDesign for panel IF-based variance.
+
+        Survey design columns are constant within units (validated upstream).
+        This extracts one row per unit, aligned to ``all_units`` ordering.
+        """
+        from diff_diff.survey import ResolvedSurveyDesign
+
+        n_units = len(all_units)
+        # Use groupby().first() to get one value per unit, then reindex
+        unit_groups = df.groupby(unit_col)
+
+        weights_unit = (
+            pd.Series(resolved_survey.weights, index=df.index)
+            .groupby(df[unit_col])
+            .first()
+            .reindex(all_units)
+            .values
+        )
+
+        strata_unit = None
+        if resolved_survey.strata is not None:
+            strata_unit = (
+                pd.Series(resolved_survey.strata, index=df.index)
+                .groupby(df[unit_col])
+                .first()
+                .reindex(all_units)
+                .values
+            )
+
+        psu_unit = None
+        if resolved_survey.psu is not None:
+            psu_unit = (
+                pd.Series(resolved_survey.psu, index=df.index)
+                .groupby(df[unit_col])
+                .first()
+                .reindex(all_units)
+                .values
+            )
+
+        fpc_unit = None
+        if resolved_survey.fpc is not None:
+            fpc_unit = (
+                pd.Series(resolved_survey.fpc, index=df.index)
+                .groupby(df[unit_col])
+                .first()
+                .reindex(all_units)
+                .values
+            )
+
+        return ResolvedSurveyDesign(
+            weights=weights_unit.astype(np.float64),
+            weight_type=resolved_survey.weight_type,
+            strata=strata_unit,
+            psu=psu_unit,
+            fpc=fpc_unit,
+            n_strata=resolved_survey.n_strata,
+            n_psu=resolved_survey.n_psu,
+            lonely_psu=resolved_survey.lonely_psu,
+        )
+
     def _precompute_structures(
         self,
         df: pd.DataFrame,
@@ -411,7 +473,13 @@ class CallawaySantAnna(
             "time_periods": time_periods,
             "is_balanced": is_balanced,
             "survey_weights": survey_weights_arr,
-            "df_survey": (len(all_units) - 1) if resolved_survey is not None else None,
+            "resolved_survey": resolved_survey,
+            "resolved_survey_unit": (
+                self._collapse_survey_to_unit_level(resolved_survey, df, unit, all_units)
+                if resolved_survey is not None
+                else None
+            ),
+            "df_survey": (resolved_survey.df_survey if resolved_survey is not None else None),
         }
 
     def _compute_att_gt_fast(
@@ -1155,10 +1223,10 @@ class CallawaySantAnna(
             For event study, balance the panel at relative time e.
             Ensures all groups contribute to each relative period.
         survey_design : SurveyDesign, optional
-            Survey design specification. Only weights-only designs are supported
-            (strata/PSU/FPC raise NotImplementedError). Supports pweight only.
-            Covariates + IPW/DR + survey also raises NotImplementedError.
-            Use analytical inference (n_bootstrap=0) with survey_design.
+            Survey design specification. Supports pweight with strata/PSU/FPC.
+            Aggregated SEs (overall, event study, group) use design-based
+            variance via compute_survey_if_variance().
+            Covariates + IPW/DR + survey raises NotImplementedError.
 
         Returns
         -------
@@ -1197,25 +1265,10 @@ class CallawaySantAnna(
                     f"got '{resolved_survey.weight_type}'. The survey variance math "
                     f"assumes probability weights (pweight)."
                 )
-            if (
-                resolved_survey.strata is not None
-                or resolved_survey.psu is not None
-                or resolved_survey.fpc is not None
-            ):
-                raise NotImplementedError(
-                    "CallawaySantAnna does not yet support strata/PSU/FPC in "
-                    "SurveyDesign. Per-cell and aggregation SEs use IF-based "
-                    "variance which does not incorporate the full survey design "
-                    "structure. Use SurveyDesign(weights=...) only. Full "
-                    "design-based SEs via compute_survey_vcov() are planned."
-                )
+        # Note: strata/PSU/FPC are now supported — aggregated SEs use
+        # compute_survey_if_variance() for design-based inference.
 
-        # Guard bootstrap + survey
-        if self.n_bootstrap > 0 and resolved_survey is not None:
-            raise NotImplementedError(
-                "Bootstrap inference with survey weights is not yet supported "
-                "for CallawaySantAnna. Use analytical inference (n_bootstrap=0)."
-            )
+        # Bootstrap + survey is now supported via PSU-level multiplier bootstrap.
 
         # Guard covariates + survey + IPW/DR (nuisance IF corrections not yet
         # implemented to match DRDID panel formula)

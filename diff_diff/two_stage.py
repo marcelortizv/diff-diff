@@ -256,12 +256,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                     "and PSU (for cluster-robust variance) are supported."
                 )
 
-        # Guard bootstrap + survey
-        if self.n_bootstrap > 0 and resolved_survey is not None:
-            raise NotImplementedError(
-                "Bootstrap inference with survey weights is not yet supported "
-                "for TwoStageDiD. Use analytical inference (n_bootstrap=0)."
-            )
+        # Bootstrap + survey supported via PSU-level multiplier bootstrap.
 
         df[time] = pd.to_numeric(df[time])
         df[first_treat] = pd.to_numeric(df[first_treat])
@@ -588,6 +583,7 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                     original_event_study=event_study_effects,
                     original_group=group_effects,
                     aggregate=aggregate,
+                    resolved_survey=resolved_survey,
                 )
             except Exception as e:
                 warnings.warn(

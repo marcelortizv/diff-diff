@@ -810,6 +810,7 @@ class TROPLocalMixin:
         control_unit_idx: Optional[np.ndarray] = None,
         survey_design=None,
         unit_weight_arr: Optional[np.ndarray] = None,
+        resolved_survey=None,
     ) -> Tuple[float, np.ndarray]:
         """
         Compute bootstrap standard error using unit-level block bootstrap.
@@ -818,6 +819,9 @@ class TROPLocalMixin:
         (Y, D, control_unit_idx) are provided, uses parallelized Rust
         implementation for 5-15x speedup. Falls back to Python implementation
         if Rust is unavailable or if matrix parameters are not provided.
+
+        When a full survey design (strata/PSU/FPC) is present, uses Rao-Wu
+        rescaled bootstrap instead, which skips the Rust path.
 
         Parameters
         ----------
@@ -844,6 +848,12 @@ class TROPLocalMixin:
         control_unit_idx : np.ndarray, optional
             Array of indices for control units (never-treated). Required for
             Rust backend acceleration.
+        survey_design : SurveyDesign, optional
+            Survey design specification.
+        unit_weight_arr : np.ndarray, optional
+            Unit-level survey weights.
+        resolved_survey : ResolvedSurveyDesign, optional
+            Resolved survey design (observation-level).
 
         Returns
         -------
@@ -861,7 +871,28 @@ class TROPLocalMixin:
         """
         lambda_time, lambda_unit, lambda_nn = optimal_lambda
 
+        # Check for full survey design (strata/PSU/FPC present)
+        _has_full_design = resolved_survey is not None and (
+            resolved_survey.strata is not None
+            or resolved_survey.psu is not None
+            or resolved_survey.fpc is not None
+        )
+
+        # Full survey design: use Python Rao-Wu rescaled bootstrap
+        if _has_full_design:
+            return self._bootstrap_rao_wu_local(
+                data,
+                outcome,
+                treatment,
+                unit,
+                time,
+                optimal_lambda,
+                resolved_survey,
+                survey_design,
+            )
+
         # Try Rust backend for parallel bootstrap (5-15x speedup)
+        # Only used for pweight-only designs (no strata/PSU/FPC)
         if (
             HAS_RUST_BACKEND
             and _rust_bootstrap_trop_variance is not None
@@ -949,6 +980,197 @@ class TROPLocalMixin:
                     optimal_lambda,
                     survey_design=survey_design,
                 )
+                if np.isfinite(att):
+                    bootstrap_estimates_list.append(att)
+            except (ValueError, np.linalg.LinAlgError, KeyError):
+                continue
+
+        bootstrap_estimates = np.array(bootstrap_estimates_list)
+
+        if len(bootstrap_estimates) < 10:
+            warnings.warn(
+                f"Only {len(bootstrap_estimates)} bootstrap iterations succeeded. "
+                "Standard errors may be unreliable.",
+                UserWarning,
+            )
+            if len(bootstrap_estimates) == 0:
+                return np.nan, np.array([])
+
+        se = np.std(bootstrap_estimates, ddof=1)
+        return float(se), bootstrap_estimates
+
+    def _bootstrap_rao_wu_local(
+        self,
+        data: pd.DataFrame,
+        outcome: str,
+        treatment: str,
+        unit: str,
+        time: str,
+        optimal_lambda: Tuple[float, float, float],
+        resolved_survey,
+        survey_design,
+    ) -> Tuple[float, np.ndarray]:
+        """
+        Rao-Wu rescaled bootstrap for local method with full survey design.
+
+        Instead of physically resampling units, each iteration generates
+        rescaled observation weights via Rao-Wu (1988) weight perturbation.
+        Cross-classifies survey strata with treatment group to preserve
+        the stratified resampling structure.
+
+        Parameters
+        ----------
+        data : pd.DataFrame
+            Original data.
+        outcome, treatment, unit, time : str
+            Column names.
+        optimal_lambda : tuple
+            Optimal tuning parameters (lambda_time, lambda_unit, lambda_nn).
+        resolved_survey : ResolvedSurveyDesign
+            Resolved survey design (observation-level).
+        survey_design : SurveyDesign
+            Original survey design specification.
+
+        Returns
+        -------
+        Tuple[float, np.ndarray]
+            (se, bootstrap_estimates).
+        """
+        import warnings
+
+        from diff_diff.bootstrap_utils import generate_rao_wu_weights
+        from diff_diff.linalg import _factorize_cluster_ids
+        from diff_diff.survey import ResolvedSurveyDesign
+
+        lambda_time, lambda_unit, lambda_nn = optimal_lambda
+        rng = np.random.default_rng(self.seed)
+
+        # Build unit-level resolved survey with cross-classified strata
+        all_units = sorted(data[unit].unique())
+        all_periods = sorted(data[time].unique())
+        n_units = len(all_units)
+        n_periods = len(all_periods)
+
+        # Determine treatment status per unit
+        unit_ever_treated = data.groupby(unit)[treatment].max()
+        treatment_group = np.array([int(unit_ever_treated[u]) for u in all_units], dtype=np.int64)
+
+        # Extract unit-level survey design fields
+        first_rows = data.groupby(unit).first().loc[all_units]
+
+        # Weights (unit-level)
+        if survey_design.weights is not None:
+            unit_weights = first_rows[survey_design.weights].values.astype(np.float64)
+        else:
+            unit_weights = np.ones(n_units, dtype=np.float64)
+
+        # Strata: cross-classify survey strata x treatment group
+        if survey_design.strata is not None:
+            survey_strata = first_rows[survey_design.strata].values
+            cross_labels = np.array([f"{s}_{g}" for s, g in zip(survey_strata, treatment_group)])
+            cross_strata = _factorize_cluster_ids(cross_labels)
+        else:
+            # No survey strata: use treatment group as strata
+            cross_strata = treatment_group.copy()
+        n_strata = len(np.unique(cross_strata))
+
+        # PSU (unit-level)
+        psu_arr = None
+        n_psu = 0
+        if survey_design.psu is not None:
+            psu_raw = first_rows[survey_design.psu].values
+            if survey_design.nest and survey_design.strata is not None:
+                combined = np.array([f"{s}_{p}" for s, p in zip(cross_strata, psu_raw)])
+                psu_arr = _factorize_cluster_ids(combined)
+            else:
+                psu_arr = _factorize_cluster_ids(psu_raw)
+            n_psu = len(np.unique(psu_arr))
+        else:
+            # Implicit PSU: each unit is its own PSU
+            psu_arr = np.arange(n_units, dtype=np.int64)
+            n_psu = n_units
+
+        # FPC (unit-level)
+        fpc_arr = None
+        if survey_design.fpc is not None:
+            fpc_arr = first_rows[survey_design.fpc].values.astype(np.float64)
+
+        unit_resolved = ResolvedSurveyDesign(
+            weights=unit_weights,
+            weight_type=resolved_survey.weight_type,
+            strata=cross_strata,
+            psu=psu_arr,
+            fpc=fpc_arr,
+            n_strata=n_strata,
+            n_psu=n_psu,
+            lonely_psu=resolved_survey.lonely_psu,
+        )
+
+        # Setup matrices (same as _fit_with_fixed_lambda)
+        Y = (
+            data.pivot(index=time, columns=unit, values=outcome)
+            .reindex(index=all_periods, columns=all_units)
+            .values
+        )
+        D = (
+            data.pivot(index=time, columns=unit, values=treatment)
+            .reindex(index=all_periods, columns=all_units)
+            .fillna(0)
+            .astype(int)
+            .values
+        )
+
+        control_mask = D == 0
+        unit_ever_treated_arr = np.any(D == 1, axis=0)
+        control_unit_idx = np.where(~unit_ever_treated_arr)[0]
+
+        # Get list of treated observations
+        treated_observations = [
+            (t, i) for t in range(n_periods) for i in range(n_units) if D[t, i] == 1
+        ]
+
+        if not treated_observations:
+            return np.nan, np.array([])
+
+        # Pre-compute per-observation tau values (fixed across bootstrap)
+        # The model fit is deterministic; only the ATT aggregation weights vary.
+        tau_per_obs = []  # (tau_value, unit_idx) pairs
+        for t, i in treated_observations:
+            if not np.isfinite(Y[t, i]):
+                continue
+
+            weight_matrix = self._compute_observation_weights(
+                Y, D, i, t, lambda_time, lambda_unit, control_unit_idx, n_units, n_periods
+            )
+            alpha, beta, L = self._estimate_model(
+                Y, control_mask, weight_matrix, lambda_nn, n_units, n_periods
+            )
+            tau = Y[t, i] - alpha[i] - beta[t] - L[t, i]
+            tau_per_obs.append((tau, i))
+
+        if not tau_per_obs:
+            return np.nan, np.array([])
+
+        tau_values = np.array([tp[0] for tp in tau_per_obs])
+        tau_unit_indices = np.array([tp[1] for tp in tau_per_obs])
+
+        # Bootstrap loop with Rao-Wu rescaled weights
+        bootstrap_estimates_list = []
+
+        for _ in range(self.n_bootstrap):
+            try:
+                # Generate Rao-Wu rescaled weights (unit-level)
+                boot_weights = generate_rao_wu_weights(unit_resolved, rng)
+
+                # Map unit-level weights to per-observation weights
+                obs_weights = boot_weights[tau_unit_indices]
+
+                # Skip if all weights are zero
+                if obs_weights.sum() == 0:
+                    continue
+
+                att = float(np.average(tau_values, weights=obs_weights))
+
                 if np.isfinite(att):
                     bootstrap_estimates_list.append(att)
             except (ValueError, np.linalg.LinAlgError, KeyError):

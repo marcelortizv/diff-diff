@@ -19,6 +19,9 @@ from diff_diff.bootstrap_utils import (
 from diff_diff.bootstrap_utils import (
     generate_bootstrap_weights_batch as _generate_bootstrap_weights_batch,
 )
+from diff_diff.bootstrap_utils import (
+    generate_survey_multiplier_weights_batch as _generate_survey_multiplier_weights_batch,
+)
 from diff_diff.linalg import solve_ols
 from diff_diff.two_stage_results import TwoStageBootstrapResults
 
@@ -51,9 +54,7 @@ class TwoStageDiDBootstrapMixin:
             time: str,
             covariates: Optional[List[str]],
             omega_0_mask: pd.Series,
-        ) -> Tuple[
-            "sparse.csr_matrix", "sparse.csr_matrix", Dict[Any, int], Dict[Any, int]
-        ]: ...
+        ) -> Tuple["sparse.csr_matrix", "sparse.csr_matrix", Dict[Any, int], Dict[Any, int]]: ...
 
         @staticmethod
         def _compute_gmm_scores(
@@ -195,6 +196,7 @@ class TwoStageDiDBootstrapMixin:
         original_event_study: Optional[Dict[int, Dict[str, Any]]],
         original_group: Optional[Dict[Any, Dict[str, Any]]],
         aggregate: Optional[str],
+        resolved_survey: Optional[Any] = None,
     ) -> Optional[TwoStageBootstrapResults]:
         """Run multiplier bootstrap on GMM influence function."""
         if self.n_bootstrap < 50:
@@ -244,9 +246,28 @@ class TwoStageDiDBootstrapMixin:
         )
 
         n_clusters = len(unique_clusters)
-        all_weights = _generate_bootstrap_weights_batch(
-            self.n_bootstrap, n_clusters, self.bootstrap_weights, rng
+
+        # Generate bootstrap weights — PSU-level when survey design is present
+        _use_survey_bootstrap = resolved_survey is not None and (
+            resolved_survey.strata is not None
+            or resolved_survey.psu is not None
+            or resolved_survey.fpc is not None
         )
+
+        if _use_survey_bootstrap:
+            psu_weights, psu_ids = _generate_survey_multiplier_weights_batch(
+                self.n_bootstrap, resolved_survey, self.bootstrap_weights, rng
+            )
+            # Map unique_clusters (PSU values) to PSU weight columns.
+            # When survey+PSU is active, cluster_var == "_survey_cluster" so
+            # unique_clusters are the PSU ids used in S-score aggregation.
+            psu_id_to_col = {int(p): c for c, p in enumerate(psu_ids)}
+            cluster_to_psu_col = np.array([psu_id_to_col[int(cl)] for cl in unique_clusters])
+            all_weights = psu_weights[:, cluster_to_psu_col]
+        else:
+            all_weights = _generate_bootstrap_weights_batch(
+                self.n_bootstrap, n_clusters, self.bootstrap_weights, rng
+            )
 
         # T_b = bread @ (sum_g w_bg * S_g) = bread @ (W @ S)'  per boot
         # IF_b = bread @ S_g for each cluster, then perturb

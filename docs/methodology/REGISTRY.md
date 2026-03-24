@@ -1938,9 +1938,51 @@ unequal selection probabilities).
   Linearization variance estimation, matching the R `survey` package
   convention that clusters are the primary sampling units.
 
+### Survey-Aware Bootstrap (Phase 6)
+
+Two strategies for bootstrap variance under complex survey designs:
+
+**Multiplier Bootstrap at PSU Level** (CallawaySantAnna, ImputationDiD, TwoStageDiD,
+ContinuousDiD, EfficientDiD):
+
+- **Reference**: Standard Taylor linearization bootstrap (Shao 2003, "Impact of the
+  Bootstrap on Sample Surveys", Statistical Science 18(2))
+- **Formula**: Generate multiplier weights independently within strata at the PSU level.
+  Scale by `sqrt(1 - f_h)` for FPC. Perturbation:
+  `ATT_boot[b] = ATT + w_b^T @ psi_psu` where `psi_psu` are PSU-aggregated IF sums.
+- **Note:** When no strata/PSU/FPC, degenerates to standard unit-level multiplier bootstrap.
+
+**Rao-Wu Rescaled Bootstrap** (SunAbraham, SyntheticDiD, TROP):
+
+- **Reference**: Rao & Wu (1988) "Resampling Inference with Complex Survey Data",
+  JASA 83(401); Rao, Wu & Yue (1992) "Some Recent Work on Resampling Methods for
+  Complex Surveys", Survey Methodology 18(2), Section 3.
+- **Formula**: Within each stratum *h* with *n_h* PSUs, draw `m_h` PSUs with replacement.
+  Without FPC: `m_h = n_h - 1`. With FPC: `m_h = max(1, round((1 - f_h) * (n_h - 1)))`.
+  Rescaled weight: `w*_i = w_i * (n_h / m_h) * r_hi` where `r_hi` = count of PSU *i* drawn.
+- **Note:** FPC enters through the resample size `m_h`, not as a post-hoc scaling factor.
+- **Deviation from R:** R `survey::as.svrepdesign(type="subbootstrap")` uses the same
+  formula. Our implementation matches.
+
+**CallawaySantAnna Design-Based Aggregated SEs**:
+
+- **Formula**: `V_design = sum_h (1-f_h) * (n_h/(n_h-1)) * sum_j (psi_hj - psi_h_bar)^2`
+  where `psi_hj = sum_{i in PSU j} psi_i` and `psi_i` is the combined IF (standard + WIF).
+- **Note:** Per-(g,t) cell SEs use the simpler IF-based formula `sqrt(sum(psi^2))` which
+  already incorporates survey weights. Only aggregated SEs (overall, event study, group)
+  use the full design-based variance.
+
+**TROP Cross-Classified Strata**:
+
+- **Note (deviation from R):** When survey strata and treatment groups both exist, TROP
+  creates pseudo-strata as `(survey_stratum x treatment_group)` for Rao-Wu resampling.
+  This preserves both survey variance structure and treatment ratio. Survey df computed
+  from pseudo-strata structure.
+
 ---
 
 # Version History
 
+- **v1.2** (2026-03-24): Added Survey-Aware Bootstrap section (Phase 6)
 - **v1.1** (2026-03-20): Added Survey Data Support section
 - **v1.0** (2025-01-19): Initial registry with 12 estimators

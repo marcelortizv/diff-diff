@@ -443,8 +443,6 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
         ------
         ValueError
             If required columns are missing or non-pweight survey design.
-        NotImplementedError
-            If survey_design includes strata, PSU, or FPC.
         """
         # Validate inputs
         required_cols = [outcome, treatment, unit, time]
@@ -455,7 +453,6 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
         # Resolve survey design
         from diff_diff.survey import (
             _extract_unit_survey_weights,
-            _resolve_pweight_only,
             _resolve_survey_for_fit,
             _validate_unit_constant_survey,
         )
@@ -463,7 +460,13 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
         resolved_survey, _survey_weights, _survey_wt, survey_metadata = _resolve_survey_for_fit(
             survey_design, data, "analytical"
         )
-        _resolve_pweight_only(resolved_survey, "TROP")
+        # Validate weight_type is pweight (keep restriction), but allow
+        # strata/PSU/FPC — those are handled via Rao-Wu rescaled bootstrap.
+        if resolved_survey is not None and resolved_survey.weight_type != "pweight":
+            raise ValueError(
+                "TROP requires pweight survey weights. "
+                f"Got weight_type='{resolved_survey.weight_type}'."
+            )
         if resolved_survey is not None:
             _validate_unit_constant_survey(data, unit, survey_design)
 
@@ -836,6 +839,7 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
             control_unit_idx=control_unit_idx,
             survey_design=survey_design,
             unit_weight_arr=unit_weight_arr,
+            resolved_survey=resolved_survey,
         )
 
         # Compute test statistics

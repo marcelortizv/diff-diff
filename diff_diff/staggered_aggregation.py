@@ -427,6 +427,11 @@ class CallawaySantAnnaAggregationMixin:
         This matches R's `did` package approach for aggregation,
         which accounts for uncertainty in estimating group-size weights.
 
+        When a full survey design (strata/PSU/FPC) is available in
+        ``precomputed['resolved_survey']``, the design-based variance
+        :func:`compute_survey_if_variance` is used instead of the simple
+        ``sum(psi^2)`` formula.
+
         Formula (matching R's did::aggte):
             agg_inf_i = Σ_k w_k × inf_i_k + wif_i × ATT_k
             se = sqrt(mean(agg_inf^2) / n)
@@ -462,6 +467,23 @@ class CallawaySantAnnaAggregationMixin:
         # Check for NaN propagation from non-finite WIF
         if not np.all(np.isfinite(psi_total)):
             return np.nan
+
+        # Use design-based variance when full survey design is available
+        # Use unit-level resolved survey (panel IF is indexed by unit, not obs)
+        resolved_survey = (
+            precomputed.get("resolved_survey_unit") if precomputed is not None else None
+        )
+        if resolved_survey is not None and (
+            resolved_survey.strata is not None
+            or resolved_survey.psu is not None
+            or resolved_survey.fpc is not None
+        ):
+            from diff_diff.survey import compute_survey_if_variance
+
+            variance = compute_survey_if_variance(psi_total, resolved_survey)
+            if np.isnan(variance):
+                return np.nan
+            return np.sqrt(max(variance, 0.0))
 
         variance = np.sum(psi_total**2)
         return np.sqrt(variance)

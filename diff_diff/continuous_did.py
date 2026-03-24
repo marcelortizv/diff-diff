@@ -212,12 +212,7 @@ class ContinuousDiD:
         if resolved_survey is not None:
             _validate_unit_constant_survey(data, unit, survey_design)
 
-        # Guard: bootstrap + survey not yet supported
-        if self.n_bootstrap > 0 and resolved_survey is not None:
-            raise NotImplementedError(
-                "Multiplier bootstrap with survey weights is planned for Phase 5. "
-                "Use n_bootstrap=0 with survey_design for design-based standard errors."
-            )
+        # Bootstrap + survey supported via PSU-level multiplier bootstrap.
 
         df = data.copy()
         for col in [outcome, unit, time, first_treat, dose]:
@@ -465,6 +460,7 @@ class ContinuousDiD:
                     agg_att_d,
                     agg_acrt_d,
                     event_study_effects,
+                    resolved_survey=resolved_survey,
                 )
                 att_d_se = boot_result["att_d_se"]
                 att_d_ci_lower = boot_result["att_d_ci_lower"]
@@ -1265,6 +1261,7 @@ class ContinuousDiD:
         original_att_d: np.ndarray,
         original_acrt_d: np.ndarray,
         event_study_effects: Optional[Dict[int, Dict]],
+        resolved_survey: object = None,
     ) -> Dict[str, Any]:
         """Run multiplier bootstrap inference."""
         if self.n_bootstrap < 50:
@@ -1279,10 +1276,61 @@ class ContinuousDiD:
         n_units = precomp["n_units"]
         n_grid = len(dvals)
 
-        # Generate all weights upfront
-        all_weights = generate_bootstrap_weights_batch(
-            self.n_bootstrap, n_units, self.bootstrap_weights, rng
+        # Build unit-level ResolvedSurveyDesign for survey-aware bootstrap
+        unit_resolved = None
+        if resolved_survey is not None:
+            from diff_diff.survey import ResolvedSurveyDesign
+
+            row_idx = precomp["unit_first_panel_row"]
+            unit_weights = precomp.get("unit_survey_weights")
+            if unit_weights is None:
+                unit_weights = np.ones(n_units)
+            unit_strata = (
+                resolved_survey.strata[row_idx] if resolved_survey.strata is not None else None
+            )
+            unit_psu = resolved_survey.psu[row_idx] if resolved_survey.psu is not None else None
+            unit_fpc = resolved_survey.fpc[row_idx] if resolved_survey.fpc is not None else None
+            n_strata_u = len(np.unique(unit_strata)) if unit_strata is not None else 0
+            n_psu_u = len(np.unique(unit_psu)) if unit_psu is not None else 0
+            unit_resolved = ResolvedSurveyDesign(
+                weights=unit_weights,
+                weight_type=resolved_survey.weight_type,
+                strata=unit_strata,
+                psu=unit_psu,
+                fpc=unit_fpc,
+                n_strata=n_strata_u,
+                n_psu=n_psu_u,
+                lonely_psu=resolved_survey.lonely_psu,
+            )
+
+        # Generate bootstrap weights — PSU-level when survey design is present
+        _use_survey_bootstrap = unit_resolved is not None and (
+            unit_resolved.strata is not None
+            or unit_resolved.psu is not None
+            or unit_resolved.fpc is not None
         )
+
+        if _use_survey_bootstrap:
+            from diff_diff.bootstrap_utils import (
+                generate_survey_multiplier_weights_batch,
+            )
+
+            psu_weights, psu_ids = generate_survey_multiplier_weights_batch(
+                self.n_bootstrap, unit_resolved, self.bootstrap_weights, rng
+            )
+            # Build unit -> PSU column map
+            if unit_resolved.psu is not None:
+                psu_id_to_col = {int(p): c for c, p in enumerate(psu_ids)}
+                unit_to_psu_col = np.array(
+                    [psu_id_to_col[int(unit_resolved.psu[i])] for i in range(n_units)]
+                )
+            else:
+                unit_to_psu_col = np.arange(n_units)
+            all_weights = psu_weights[:, unit_to_psu_col]
+        else:
+            all_weights = generate_bootstrap_weights_batch(
+                self.n_bootstrap, n_units, self.bootstrap_weights, rng
+            )
 
         boot_att_glob = np.zeros(self.n_bootstrap)
         boot_acrt_glob = np.zeros(self.n_bootstrap)

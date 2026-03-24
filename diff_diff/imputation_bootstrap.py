@@ -131,6 +131,7 @@ class ImputationDiDBootstrapMixin:
         tau_hat: np.ndarray,
         balance_e: Optional[int],
         survey_weights_0: Optional[np.ndarray] = None,
+        survey_weights_1: Optional[np.ndarray] = None,
     ) -> Dict[str, Any]:
         """
         Pre-compute cluster-level influence function sums for each bootstrap target.
@@ -199,12 +200,12 @@ class ImputationDiDBootstrapMixin:
                 # When survey weights are provided, build weights proportional
                 # to treated-observation survey weights (matching the analytical
                 # path in _aggregate_event_study).  Otherwise use equal weights.
-                if survey_weights_0 is not None:
+                if survey_weights_1 is not None:
                     finite_target = np.isfinite(tau_hat) & h_mask
                     n_valid_h = int(finite_target.sum())
                     if n_valid_h == 0:
                         continue
-                    treated_sw = survey_weights_0[omega_1_mask.values]
+                    treated_sw = survey_weights_1
                     sw_h = treated_sw[h_mask]
                     finite_in_h = np.isfinite(tau_hat[h_mask])
                     sw_finite = sw_h[finite_in_h]
@@ -237,12 +238,12 @@ class ImputationDiDBootstrapMixin:
                 # When survey weights are provided, build weights proportional
                 # to treated-observation survey weights (matching the analytical
                 # path in _aggregate_group).  Otherwise use equal weights.
-                if survey_weights_0 is not None:
+                if survey_weights_1 is not None:
                     finite_target = np.isfinite(tau_hat) & g_mask
                     n_valid_g = int(finite_target.sum())
                     if n_valid_g == 0:
                         continue
-                    treated_sw = survey_weights_0[omega_1_mask.values]
+                    treated_sw = survey_weights_1
                     sw_g = treated_sw[g_mask]
                     finite_in_g = np.isfinite(tau_hat[g_mask])
                     sw_finite = sw_g[finite_in_g]

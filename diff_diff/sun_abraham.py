@@ -1158,6 +1158,11 @@ class SunAbraham:
             df_b["_never_treated"] = (df_b[first_treat] == 0) | (df_b[first_treat] == np.inf)
 
             try:
+                # Extract survey weights from resampled data if present
+                boot_survey_weights = None
+                if survey_weight_col is not None and survey_weight_col in df_b.columns:
+                    boot_survey_weights = df_b[survey_weight_col].values
+
                 # Re-estimate saturated regression
                 (
                     cohort_effects_b,
@@ -1174,6 +1179,9 @@ class SunAbraham:
                     rel_periods_to_estimate,
                     covariates,
                     cluster_var,
+                    survey_weights=boot_survey_weights,
+                    survey_weight_type=survey_weight_type,
+                    resolved_survey=resolved_survey,
                 )
 
                 # Compute IW effects for this bootstrap sample
@@ -1187,6 +1195,7 @@ class SunAbraham:
                     cohort_ses_b,
                     vcov_b,
                     coef_map_b,
+                    survey_weight_col=survey_weight_col,
                 )
 
                 # Store bootstrap estimates
@@ -1205,6 +1214,7 @@ class SunAbraham:
                     cohort_weights_b,
                     vcov_b,
                     coef_map_b,
+                    survey_weight_col=survey_weight_col,
                 )
                 bootstrap_overall[b] = overall_b
 

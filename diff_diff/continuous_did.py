@@ -626,11 +626,13 @@ class ContinuousDiD:
                             mu_0 = b_info["mu_0"]
                             delta_y_treated = b_info["delta_y_treated"]
                             ee_control = b_info["ee_control"]
+                            sw_treated = b_info.get("w_treated_arr")
 
                             for k, uid in enumerate(treated_idx):
-                                if_es[uid] += (
-                                    w * (delta_y_treated[k] - att_glob_gt - mu_0) / p_1 / n_total_gt
-                                )
+                                score_k = delta_y_treated[k] - att_glob_gt - mu_0
+                                if sw_treated is not None:
+                                    score_k = sw_treated[k] * score_k
+                                if_es[uid] += w * score_k / p_1 / n_total_gt
                             for k, uid in enumerate(control_idx):
                                 if_es[uid] -= w * ee_control[k] / p_0 / n_total_gt
 
@@ -974,10 +976,19 @@ class ContinuousDiD:
                 bread = np.linalg.pinv(PtP / n_treated)
 
         # ee_treated: per-unit estimating equation vectors (K-vector per unit)
-        ee_treated = Psi * residuals[:, np.newaxis]  # (n_treated, K)
+        # For WLS (survey weights), the score is w_i * X_i * u_i to match the
+        # weighted bread inv(X'WX / sum(w)).  Without this factor the sandwich
+        # is inconsistent.  For OLS (no survey weights), the score is X_i * u_i.
+        if w_treated is not None:
+            ee_treated = Psi * (w_treated * residuals)[:, np.newaxis]  # (n_treated, K)
+        else:
+            ee_treated = Psi * residuals[:, np.newaxis]  # (n_treated, K)
 
-        # ee_control: per-unit deviation from control mean
-        ee_control = delta_y_control - mu_0  # (n_control,)
+        # ee_control: per-unit deviation from control mean (weighted for WLS)
+        if w_control is not None:
+            ee_control = w_control * (delta_y_control - mu_0)  # (n_control,)
+        else:
+            ee_control = delta_y_control - mu_0  # (n_control,)
 
         # psi_bar: mean basis vector for treated (weighted when survey)
         if w_treated is not None:
@@ -1017,10 +1028,12 @@ class ContinuousDiD:
             "acrt_glob": acrt_glob,
         }
 
-        # Store survey-weighted masses for IF linearization
+        # Store survey-weighted masses and per-unit arrays for IF linearization
         if w_treated is not None:
             bootstrap_info["w_treated"] = float(np.sum(w_treated))
             bootstrap_info["w_control"] = float(np.sum(w_control))
+            bootstrap_info["w_treated_arr"] = w_treated
+            bootstrap_info["w_control_arr"] = w_control
 
         return {
             "att_d": att_d,
@@ -1123,14 +1136,23 @@ class ContinuousDiD:
             att_glob_gt = info["att_glob"]
             mu_0 = info["mu_0"]
             delta_y_treated = info["delta_y_treated"]
+            # Per-unit survey weight array (None when no survey)
+            sw_treated = info.get("w_treated_arr")
 
             n_total = n_t + n_c
             p_1 = n_t / n_total
             p_0 = n_c / n_total
 
             # IF for ATT_glob (binarized DiD)
+            # When survey weights are present, each unit's score includes its
+            # survey weight w_k so the sandwich is consistent with the weighted
+            # estimand.  ee_control already contains the w_k factor (set in
+            # _compute_dose_response_gt); delta_y_treated needs it here.
             for k, idx in enumerate(treated_idx):
-                if_att_glob[idx] += w * (delta_y_treated[k] - att_glob_gt - mu_0) / p_1 / n_total
+                score_k = delta_y_treated[k] - att_glob_gt - mu_0
+                if sw_treated is not None:
+                    score_k = sw_treated[k] * score_k
+                if_att_glob[idx] += w * score_k / p_1 / n_total
             for k, idx in enumerate(control_idx):
                 if_att_glob[idx] -= w * ee_control[k] / p_0 / n_total
 
@@ -1376,6 +1398,10 @@ class ContinuousDiD:
             control_idx = info["control_indices"]
             n_t = info["n_treated"]
             n_c = info["n_control"]
+            # Use survey-weighted masses when available (matching analytical SE)
+            if "w_treated" in info:
+                n_t = info["w_treated"]
+                n_c = info["w_control"]
             bread = info["bread"]
             ee_treated = info["ee_treated"]
             ee_control = info["ee_control"]
@@ -1387,6 +1413,7 @@ class ContinuousDiD:
             delta_y_treated = info["delta_y_treated"]
             mu_0 = info["mu_0"]
             att_glob_gt = info["att_glob"]
+            sw_treated = info.get("w_treated_arr")
 
             w_treated = all_weights[:, treated_idx]
             w_control = all_weights[:, control_idx]
@@ -1403,7 +1430,12 @@ class ContinuousDiD:
                 acrt_d_b = beta_b @ dPsi_eval.T
 
                 mu_0_pert = (w_control @ ee_control) / n_c
-                mean_dy_treated_pert = (w_treated @ (delta_y_treated - att_glob_gt - mu_0)) / n_t
+                # ATT_glob perturbation: weight scores by survey weight w_k
+                # when present, matching the analytical IF path.
+                att_glob_score = delta_y_treated - att_glob_gt - mu_0
+                if sw_treated is not None:
+                    att_glob_score = sw_treated * att_glob_score
+                mean_dy_treated_pert = (w_treated @ att_glob_score) / n_t
                 att_glob_b = att_glob_gt + mean_dy_treated_pert - mu_0_pert
 
                 dpsi_mean = np.mean(dPsi_treated, axis=0)

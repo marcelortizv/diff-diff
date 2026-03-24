@@ -590,6 +590,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             try:
                 # Extract survey weights for untreated obs (same as analytical path)
                 _sw_0 = survey_weights[omega_0_mask.values] if survey_weights is not None else None
+                # Extract survey weights for treated obs (event-study/group bootstrap paths)
+                _sw_1 = survey_weights[omega_1_mask.values] if survey_weights is not None else None
                 psi_data = self._precompute_bootstrap_psi(
                     df=df,
                     outcome=outcome,
@@ -612,6 +614,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                     tau_hat=tau_hat,
                     balance_e=balance_e,
                     survey_weights_0=_sw_0,
+                    survey_weights_1=_sw_1,
                 )
             except Exception as e:
                 warnings.warn(

@@ -528,6 +528,26 @@ class TestTROPSurvey:
         )
         assert result_survey.att != pytest.approx(result_no.att, abs=1e-6)
 
+    def test_weighted_att_differs_global(self, trop_survey_data, survey_design_weights):
+        """Non-uniform weights change ATT for method='global'."""
+        est = TROP(method="global", n_bootstrap=10, seed=42, max_iter=5)
+        result_no = est.fit(
+            trop_survey_data,
+            outcome="outcome",
+            treatment="D",
+            unit="unit",
+            time="time",
+        )
+        result_survey = est.fit(
+            trop_survey_data,
+            outcome="outcome",
+            treatment="D",
+            unit="unit",
+            time="time",
+            survey_design=survey_design_weights,
+        )
+        assert result_survey.att != pytest.approx(result_no.att, abs=1e-6)
+
     def test_summary_includes_survey(self, trop_survey_data, survey_design_weights):
         """summary() contains survey section."""
         est = TROP(method="local", n_bootstrap=10, seed=42, max_iter=5)

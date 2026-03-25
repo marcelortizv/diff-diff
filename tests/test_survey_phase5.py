@@ -195,20 +195,19 @@ class TestSyntheticDiDSurvey:
         assert result.survey_metadata.n_strata is not None
         assert result.survey_metadata.n_psu is not None
 
-    def test_full_design_placebo_uses_weights_only(self, sdid_survey_data, survey_design_full):
-        """Placebo variance with full design completes (uses weights only)."""
+    def test_full_design_placebo_raises(self, sdid_survey_data, survey_design_full):
+        """Placebo variance with full design raises NotImplementedError."""
         est = SyntheticDiD(variance_method="placebo", n_bootstrap=50, seed=42)
-        result = est.fit(
-            sdid_survey_data,
-            outcome="outcome",
-            treatment="treated",
-            unit="unit",
-            time="time",
-            post_periods=[6, 7, 8, 9],
-            survey_design=survey_design_full,
-        )
-        assert np.isfinite(result.att)
-        assert np.isfinite(result.se)
+        with pytest.raises(NotImplementedError, match="placebo.*does not support strata/PSU/FPC"):
+            est.fit(
+                sdid_survey_data,
+                outcome="outcome",
+                treatment="treated",
+                unit="unit",
+                time="time",
+                post_periods=[6, 7, 8, 9],
+                survey_design=survey_design_full,
+            )
 
     def test_full_design_se_differs_from_weights_only(self, sdid_survey_data):
         """Rao-Wu bootstrap SE differs from pweight-only bootstrap SE."""

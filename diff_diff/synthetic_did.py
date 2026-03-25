@@ -218,7 +218,8 @@ class SyntheticDiD(DifferenceInDifferences):
         survey_design : SurveyDesign, optional
             Survey design specification. Only pweight weight_type is supported.
             Strata/PSU/FPC are supported via Rao-Wu rescaled bootstrap when
-            variance_method='bootstrap'; placebo variance uses weights only.
+            variance_method='bootstrap'. Placebo variance does not support
+            strata/PSU/FPC; use variance_method='bootstrap' for full designs.
 
         Returns
         -------
@@ -260,6 +261,21 @@ class SyntheticDiD(DifferenceInDifferences):
             raise ValueError(
                 "SyntheticDiD survey support requires weight_type='pweight'. "
                 f"Got '{resolved_survey.weight_type}'."
+            )
+
+        # Reject placebo + full survey design (strata/PSU/FPC are silently ignored)
+        if (
+            resolved_survey is not None
+            and (
+                resolved_survey.strata is not None
+                or resolved_survey.psu is not None
+                or resolved_survey.fpc is not None
+            )
+            and self.variance_method == "placebo"
+        ):
+            raise NotImplementedError(
+                "SyntheticDiD with variance_method='placebo' does not support strata/PSU/FPC. "
+                "Use variance_method='bootstrap' for full survey design support."
             )
 
         # Validate treatment is binary

@@ -451,6 +451,12 @@ def generate_survey_multiplier_weights_batch(
     psu = resolved_survey.psu
     strata = resolved_survey.strata
 
+    if resolved_survey.lonely_psu == "adjust":
+        raise NotImplementedError(
+            "lonely_psu='adjust' is not yet supported for survey-aware bootstrap. "
+            "Use lonely_psu='remove' or 'certainty', or use analytical inference."
+        )
+
     if psu is None:
         # Each observation is its own PSU
         n_psu = len(resolved_survey.weights)
@@ -469,9 +475,15 @@ def generate_survey_multiplier_weights_batch(
         # FPC scaling (unstratified)
         if resolved_survey.fpc is not None:
             if psu is not None:
-                f = n_psu / resolved_survey.fpc[0]
+                n_units_for_fpc = n_psu
             else:
-                f = len(resolved_survey.weights) / resolved_survey.fpc[0]
+                n_units_for_fpc = len(resolved_survey.weights)
+            if resolved_survey.fpc[0] < n_units_for_fpc:
+                raise ValueError(
+                    f"FPC ({resolved_survey.fpc[0]}) is less than the number of PSUs "
+                    f"({n_units_for_fpc}). FPC must be >= number of PSUs."
+                )
+            f = n_units_for_fpc / resolved_survey.fpc[0]
             if f < 1.0:
                 weights = weights * np.sqrt(1.0 - f)
             else:
@@ -508,6 +520,11 @@ def generate_survey_multiplier_weights_batch(
             # FPC scaling
             if resolved_survey.fpc is not None:
                 N_h = resolved_survey.fpc[mask_h][0]
+                if N_h < n_h:
+                    raise ValueError(
+                        f"FPC ({N_h}) is less than the number of PSUs "
+                        f"({n_h}) in stratum {h}. FPC must be >= n_PSU."
+                    )
                 f_h = n_h / N_h
                 if f_h < 1.0:
                     stratum_weights = stratum_weights * np.sqrt(1.0 - f_h)
@@ -550,6 +567,12 @@ def generate_rao_wu_weights(
     psu = resolved_survey.psu
     strata = resolved_survey.strata
 
+    if resolved_survey.lonely_psu == "adjust":
+        raise NotImplementedError(
+            "lonely_psu='adjust' is not yet supported for survey-aware bootstrap. "
+            "Use lonely_psu='remove' or 'certainty', or use analytical inference."
+        )
+
     rescaled = np.zeros(n_obs, dtype=np.float64)
 
     if psu is None:
@@ -576,6 +599,11 @@ def generate_rao_wu_weights(
         # Compute resample size
         if resolved_survey.fpc is not None:
             N_h = resolved_survey.fpc[mask_h][0]
+            if N_h < n_h:
+                raise ValueError(
+                    f"FPC ({N_h}) is less than the number of PSUs "
+                    f"({n_h}). FPC must be >= number of PSUs."
+                )
             f_h = n_h / N_h
             m_h = max(1, round((1.0 - f_h) * (n_h - 1)))
         else:

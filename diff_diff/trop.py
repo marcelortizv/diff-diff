@@ -426,9 +426,10 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
         time : str
             Name of the time period column.
         survey_design : SurveyDesign, optional
-            Survey design specification. Only pweight designs are supported
-            (strata/PSU/FPC raise NotImplementedError). Survey weights enter
-            ATT aggregation only.
+            Survey design specification. Supports pweight, strata, PSU, and
+            FPC. Full-design surveys (strata/PSU/FPC) use Rao-Wu rescaled
+            bootstrap; Rust backend is pweight-only (Python fallback for
+            full design). Survey weights enter ATT aggregation only.
 
         Returns
         -------
@@ -955,7 +956,7 @@ def trop(
     time : str
         Time period column name.
     survey_design : SurveyDesign, optional
-        Survey design specification. Only pweight designs are supported.
+        Survey design specification. Supports pweight, strata, PSU, and FPC.
     **kwargs
         Additional arguments passed to TROP constructor.
 

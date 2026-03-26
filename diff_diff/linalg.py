@@ -1166,8 +1166,8 @@ def solve_logit(
             raise ValueError("weights contain NaN values")
         if np.any(~np.isfinite(weights)):
             raise ValueError("weights contain Inf values")
-        if np.any(weights <= 0):
-            raise ValueError("weights must be strictly positive")
+        if np.any(weights < 0):
+            raise ValueError("weights must be non-negative")
 
     # Validate rank_deficient_action
     valid_actions = {"warn", "error", "silent"}

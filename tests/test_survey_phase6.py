@@ -547,3 +547,175 @@ class TestReplicateWeightVariance:
         )
         with pytest.raises(ValueError, match="At least 2"):
             sd.resolve(data)
+
+    def test_jkn_requires_replicate_strata(self):
+        """JKn must have replicate_strata."""
+        with pytest.raises(ValueError, match="replicate_strata is required"):
+            SurveyDesign(
+                weights="w", replicate_weights=["r1", "r2"],
+                replicate_method="JKn",
+            )
+
+    def test_jkn_replicate_strata_length_mismatch(self):
+        """replicate_strata length must match replicate_weights."""
+        with pytest.raises(ValueError, match="length"):
+            SurveyDesign(
+                weights="w", replicate_weights=["r1", "r2"],
+                replicate_method="JKn", replicate_strata=[0],
+            )
+
+    def test_jkn_variance(self, replicate_data):
+        """JKn with per-stratum scaling produces finite results."""
+        from diff_diff.survey import compute_replicate_vcov
+        from diff_diff.linalg import solve_ols
+
+        data, rep_cols = replicate_data
+        # Assign first half of replicates to stratum 0, second half to stratum 1
+        n_rep = len(rep_cols)
+        strata = [0] * (n_rep // 2) + [1] * (n_rep - n_rep // 2)
+
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JKn", replicate_strata=strata,
+        )
+        resolved = sd.resolve(data)
+        y = data["y"].values
+        X = np.column_stack([np.ones(len(data)), data["x"].values])
+
+        coef, _, _ = solve_ols(X, y, weights=resolved.weights)
+        vcov = compute_replicate_vcov(X, y, coef, resolved)
+        assert np.all(np.isfinite(np.diag(vcov)))
+        assert np.all(np.diag(vcov) > 0)
+
+    def test_replicate_if_scale_matches_analytical(self):
+        """Replicate IF variance should match analytical sum(psi^2) for SRS."""
+        from diff_diff.survey import compute_replicate_if_variance
+
+        np.random.seed(42)
+        n = 50
+        psi = np.random.randn(n) * 0.1
+
+        # Build JK1 replicates: delete-1 jackknife
+        w_full = np.ones(n)
+        rep_cols = []
+        data = pd.DataFrame({"w": w_full})
+        for r in range(n):
+            w_r = np.ones(n) * n / (n - 1)
+            w_r[r] = 0.0
+            col = f"rep_{r}"
+            data[col] = w_r
+            rep_cols.append(col)
+
+        sd = SurveyDesign(
+            weights="w", replicate_weights=rep_cols, replicate_method="JK1",
+        )
+        resolved = sd.resolve(data)
+
+        v_rep = compute_replicate_if_variance(psi, resolved)
+        v_analytical = float(np.sum(psi**2))
+
+        # JK1 gives (n-1)/n * sum(...) which should approximate sum(psi^2)
+        assert v_rep == pytest.approx(v_analytical, rel=0.05), (
+            f"Replicate IF variance {v_rep:.6f} does not match analytical "
+            f"{v_analytical:.6f}"
+        )
+
+
+# =============================================================================
+# Estimator-Level Replicate Weight Tests
+# =============================================================================
+
+
+class TestEstimatorReplicateWeights:
+    """End-to-end tests for replicate weights with each estimator."""
+
+    @staticmethod
+    def _make_staggered_replicate_data():
+        """Create staggered panel with replicate weight columns."""
+        np.random.seed(42)
+        n_units, n_periods = 60, 6
+        n_rep = 15
+        rows = []
+        for unit in range(n_units):
+            if unit < 20:
+                ft = 3
+            elif unit < 40:
+                ft = 5
+            else:
+                ft = 0
+            wt = 1.0 + 0.3 * (unit % 5)
+            for t in range(1, n_periods + 1):
+                y = 10.0 + unit * 0.05 + t * 0.2
+                if ft > 0 and t >= ft:
+                    y += 2.0
+                y += np.random.normal(0, 0.5)
+                rows.append({
+                    "unit": unit, "time": t, "first_treat": ft,
+                    "outcome": y, "weight": wt,
+                })
+        data = pd.DataFrame(rows)
+        # Generate JK1 replicates (delete-cluster jackknife)
+        cluster_size = n_units // n_rep
+        rep_cols = []
+        for r in range(n_rep):
+            start = r * cluster_size
+            end = min((r + 1) * cluster_size, n_units)
+            w_r = data["weight"].values.copy()
+            mask = (data["unit"] >= start) & (data["unit"] < end)
+            w_r[mask] = 0.0
+            w_r[~mask] *= n_rep / (n_rep - 1)
+            col = f"rep_{r}"
+            data[col] = w_r
+            rep_cols.append(col)
+        return data, rep_cols
+
+    def test_callaway_santanna_replicate(self):
+        """CallawaySantAnna with replicate weights produces finite results."""
+        from diff_diff import CallawaySantAnna
+
+        data, rep_cols = self._make_staggered_replicate_data()
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JK1",
+        )
+        result = CallawaySantAnna(estimation_method="reg", n_bootstrap=0).fit(
+            data, "outcome", "unit", "time", "first_treat",
+            survey_design=sd,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.survey_metadata is not None
+
+    def test_efficient_did_replicate(self):
+        """EfficientDiD with replicate weights produces finite results."""
+        from diff_diff import EfficientDiD
+
+        data, rep_cols = self._make_staggered_replicate_data()
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JK1",
+        )
+        result = EfficientDiD(n_bootstrap=0).fit(
+            data, "outcome", "unit", "time", "first_treat",
+            survey_design=sd,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.survey_metadata is not None
+
+    def test_subpopulation_preserves_replicate_metadata(self):
+        """subpopulation() should preserve replicate design fields."""
+        data, rep_cols = self._make_staggered_replicate_data()
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JK1",
+        )
+        mask = data["unit"] < 40
+        new_sd, new_data = sd.subpopulation(data, mask)
+
+        assert new_sd.replicate_method == "JK1"
+        assert new_sd.replicate_weights == rep_cols
+        # Excluded obs have zero replicate weights
+        excluded = new_data[~mask.values]
+        for col in rep_cols:
+            assert (excluded[col] == 0.0).all()

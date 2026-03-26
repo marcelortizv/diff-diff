@@ -29,10 +29,15 @@ def _format_survey_block(sm, width: int) -> list:
         "-" * width,
         f"{'Weight type:':<{label_width}} {sm.weight_type:>10}",
     ]
-    if sm.n_strata is not None:
-        lines.append(f"{'Strata:':<{label_width}} {sm.n_strata:>10}")
-    if sm.n_psu is not None:
-        lines.append(f"{'PSU/Cluster:':<{label_width}} {sm.n_psu:>10}")
+    if getattr(sm, "replicate_method", None) is not None:
+        lines.append(f"{'Replicate method:':<{label_width}} {sm.replicate_method:>10}")
+        if getattr(sm, "n_replicates", None) is not None:
+            lines.append(f"{'Replicates:':<{label_width}} {sm.n_replicates:>10}")
+    else:
+        if sm.n_strata is not None:
+            lines.append(f"{'Strata:':<{label_width}} {sm.n_strata:>10}")
+        if sm.n_psu is not None:
+            lines.append(f"{'PSU/Cluster:':<{label_width}} {sm.n_psu:>10}")
     lines.append(f"{'Effective sample size:':<{label_width}} {sm.effective_n:>10.1f}")
     lines.append(f"{'Kish DEFF (weights):':<{label_width}} {sm.design_effect:>10.2f}")
     if sm.df_survey is not None:

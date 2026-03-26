@@ -1076,6 +1076,12 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         once in ``fit()``, ensuring consistent unit-level arrays and
         avoiding repeated subsetting of panel-level survey data.
         """
+        if self._unit_resolved_survey.uses_replicate_variance:
+            from diff_diff.survey import compute_replicate_if_variance
+
+            variance = compute_replicate_if_variance(eif_vals, self._unit_resolved_survey)
+            return float(np.sqrt(max(variance, 0.0))) if np.isfinite(variance) else np.nan
+
         from diff_diff.survey import compute_survey_vcov
 
         X_ones = np.ones((len(eif_vals), 1))

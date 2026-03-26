@@ -65,6 +65,7 @@ class SurveyDesign:
     replicate_weights: Optional[List[str]] = None
     replicate_method: Optional[str] = None
     fay_rho: float = 0.0
+    replicate_strata: Optional[List[int]] = None
 
     def __post_init__(self):
         valid_weight_types = {"pweight", "fweight", "aweight"}
@@ -113,6 +114,18 @@ class SurveyDesign:
             if self.weights is None:
                 raise ValueError(
                     "Full-sample weights must be provided alongside replicate_weights"
+                )
+        # JKn requires replicate_strata
+        if self.replicate_method == "JKn":
+            if self.replicate_strata is None:
+                raise ValueError(
+                    "replicate_strata is required for JKn method. Provide a list "
+                    "of stratum assignments (one per replicate weight column)."
+                )
+            if len(self.replicate_strata) != len(self.replicate_weights):
+                raise ValueError(
+                    f"replicate_strata length ({len(self.replicate_strata)}) must "
+                    f"match replicate_weights length ({len(self.replicate_weights)})"
                 )
 
     def resolve(self, data: pd.DataFrame) -> "ResolvedSurveyDesign":
@@ -204,6 +217,11 @@ class SurveyDesign:
                 replicate_method=self.replicate_method,
                 fay_rho=self.fay_rho,
                 n_replicates=n_rep,
+                replicate_strata=(
+                    np.asarray(self.replicate_strata, dtype=int)
+                    if self.replicate_strata is not None
+                    else None
+                ),
             )
 
         # --- Strata ---
@@ -422,6 +440,12 @@ class SurveyDesign:
         data_out = data.copy()
         data_out["_subpop_weight"] = subpop_weights
 
+        # Zero out replicate weight columns for excluded observations
+        if self.replicate_weights is not None:
+            for col in self.replicate_weights:
+                if col in data.columns:
+                    data_out[col] = np.where(mask_arr, data[col].values, 0.0)
+
         # Return new SurveyDesign using the synthetic column
         new_design = SurveyDesign(
             weights="_subpop_weight",
@@ -431,6 +455,10 @@ class SurveyDesign:
             weight_type=self.weight_type,
             nest=self.nest,
             lonely_psu=self.lonely_psu,
+            replicate_weights=self.replicate_weights,
+            replicate_method=self.replicate_method,
+            fay_rho=self.fay_rho,
+            replicate_strata=self.replicate_strata,
         )
 
         return new_design, data_out
@@ -456,6 +484,7 @@ class ResolvedSurveyDesign:
     replicate_method: Optional[str] = None
     fay_rho: float = 0.0
     n_replicates: int = 0
+    replicate_strata: Optional[np.ndarray] = None  # (R,) for JKn
 
     @property
     def uses_replicate_variance(self) -> bool:
@@ -1192,9 +1221,19 @@ def compute_replicate_vcov(
         return factor * outer_sum
     elif method == "JKn":
         # JKn: V = sum_h ((n_h-1)/n_h) * sum_{r in h} (c_r - c)(c_r - c)^T
-        # Without replicate_strata, fall back to JK1 formula
-        factor = _replicate_variance_factor("JK1", int(np.sum(valid)), 0.0)
-        return factor * outer_sum
+        rep_strata = resolved.replicate_strata
+        if rep_strata is None:
+            raise ValueError("JKn requires replicate_strata")
+        valid_strata = rep_strata[valid]
+        V = np.zeros((k, k))
+        for h in np.unique(valid_strata):
+            mask_h = valid_strata == h
+            n_h = int(np.sum(mask_h))
+            if n_h < 1:
+                continue
+            diffs_h = diffs[mask_h]
+            V += ((n_h - 1.0) / n_h) * (diffs_h.T @ diffs_h)
+        return V
     else:
         raise ValueError(f"Unknown replicate method: {method}")
 
@@ -1225,16 +1264,18 @@ def compute_replicate_if_variance(
     method = resolved.replicate_method
     R = resolved.n_replicates
 
+    # Use weighted sums (not means) — psi is on contribution scale where
+    # V_analytical = sum(psi^2).  Dividing by sum(w_r) would introduce an
+    # extra 1/n factor that understates variance.
     full_weights = resolved.weights
-    theta_full = np.sum(full_weights * psi) / np.sum(full_weights)
+    theta_full = float(np.sum(full_weights * psi))
 
-    # Compute replicate estimates
+    # Compute replicate estimates (weighted sums)
     theta_reps = np.full(R, np.nan)
     for r in range(R):
         w_r = rep_weights[:, r]
-        sw = np.sum(w_r)
-        if sw > 0:
-            theta_reps[r] = np.sum(w_r * psi) / sw
+        if np.any(w_r > 0):
+            theta_reps[r] = np.sum(w_r * psi)
 
     valid = np.isfinite(theta_reps)
     if not np.any(valid):
@@ -1246,8 +1287,20 @@ def compute_replicate_if_variance(
         factor = _replicate_variance_factor(method, int(np.sum(valid)), resolved.fay_rho)
         return factor * ss
     elif method == "JKn":
-        factor = _replicate_variance_factor("JK1", int(np.sum(valid)), 0.0)
-        return factor * ss
+        rep_strata = resolved.replicate_strata
+        if rep_strata is None:
+            raise ValueError("JKn requires replicate_strata")
+        # Filter to valid replicates
+        valid_strata = rep_strata[valid]
+        valid_diffs = diffs
+        result = 0.0
+        for h in np.unique(valid_strata):
+            mask_h = valid_strata == h
+            n_h = int(np.sum(mask_h))
+            if n_h < 1:
+                continue
+            result += ((n_h - 1.0) / n_h) * float(np.sum(valid_diffs[mask_h] ** 2))
+        return result
     else:
         raise ValueError(f"Unknown replicate method: {method}")
 

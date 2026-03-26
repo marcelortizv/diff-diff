@@ -329,6 +329,8 @@ __all__ = [
     # Survey support
     "SurveyDesign",
     "SurveyMetadata",
+    "DEFFDiagnostics",
+    "compute_deff_diagnostics",
     # Rust backend
     "HAS_RUST_BACKEND",
     # Linear algebra helpers

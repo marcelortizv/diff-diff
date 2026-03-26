@@ -1072,15 +1072,22 @@ class TripleDifference:
             # For reg: pairwise IFs are already on the unweighted scale (WLS
             # fits use weights but the IF is residual-based, not Riesz-weighted),
             # so pass directly to TSL without de-weighting.
-            from diff_diff.survey import compute_survey_vcov
-
             inf_for_tsl = inf_func.copy()
             if est_method in ("ipw", "dr") and survey_weights is not None:
                 sw = survey_weights
                 nz = sw > 0
                 inf_for_tsl[nz] = inf_for_tsl[nz] / sw[nz]
-            vcov_survey = compute_survey_vcov(np.ones((n, 1)), inf_for_tsl, resolved_survey)
-            se = float(np.sqrt(vcov_survey[0, 0]))
+
+            if resolved_survey.uses_replicate_variance:
+                from diff_diff.survey import compute_replicate_if_variance
+
+                variance = compute_replicate_if_variance(inf_for_tsl, resolved_survey)
+                se = float(np.sqrt(max(variance, 0.0))) if np.isfinite(variance) else np.nan
+            else:
+                from diff_diff.survey import compute_survey_vcov
+
+                vcov_survey = compute_survey_vcov(np.ones((n, 1)), inf_for_tsl, resolved_survey)
+                se = float(np.sqrt(vcov_survey[0, 0]))
         elif self._cluster_ids is not None:
             # Cluster-robust SE: sum IF within clusters, then Liang-Zeger variance
             unique_clusters = np.unique(self._cluster_ids)

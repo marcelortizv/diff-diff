@@ -1993,10 +1993,75 @@ ContinuousDiD, EfficientDiD):
   tau values once and only varies the ATT aggregation weights across draws. This is
   mathematically equivalent to refitting per draw and avoids redundant computation.
 
+### Replicate Weight Variance (Phase 6)
+
+Alternative to TSL: re-run WLS for each replicate weight column and compute
+variance from the distribution of replicate estimates.
+
+- **Reference**: Wolter (2007) "Introduction to Variance Estimation", 2nd ed.
+  Rao & Wu (1988).
+- **Supported methods**: BRR, Fay's BRR, JK1, JKn
+- **Formulas**:
+  - BRR: `V = (1/R) * sum_r (theta_r - theta)^2`
+  - Fay: `V = 1/(R*(1-rho)^2) * sum_r (theta_r - theta)^2`
+  - JK1: `V = (R-1)/R * sum_r (theta_r - theta)^2`
+  - JKn: `V = sum_h ((n_h-1)/n_h) * sum_{r in h} (theta_r - theta)^2`
+- **IF-based replicate variance**: For influence-function estimators (CS
+  aggregation, ContinuousDiD, EfficientDiD, TripleDifference), replicate
+  contrasts are formed via weight-ratio rescaling:
+  `theta_r = sum((w_r/w_full) * psi)`, `theta_full = sum(psi)`.
+  This matches the `compute_survey_if_variance()` contract where psi is
+  accepted as-is (the combined IF/WIF object) without extra weight
+  multiplication.
+- **Survey df**: `R - 1` for replicate designs (replaces `n_PSU - n_strata`)
+- **Mutual exclusion**: Replicate weights cannot be combined with
+  strata/psu/fpc (the replicates encode design structure implicitly)
+- **Normalization**: Replicate columns normalized to `sum(w_r) = n` for
+  pweight/aweight, matching full-sample normalization convention
+- **Note:** JKn requires explicit `replicate_strata` (per-replicate stratum
+  assignment). Auto-derivation from weight patterns is not supported.
+- **Note:** Invalid replicate solves (singular/degenerate) are dropped with
+  a warning. Variance is computed from valid replicates only.
+
+### DEFF Diagnostics (Phase 6)
+
+Per-coefficient design effect comparing survey variance to SRS variance.
+
+- **Reference**: Kish (1965) "Survey Sampling", Wiley. Chapter 8.
+- **Formula**: `DEFF_k = Var_survey(beta_k) / Var_SRS(beta_k)` where
+  SRS baseline uses HC1 sandwich ignoring design structure
+- **Effective n**: `n_eff_k = n / DEFF_k`
+- **Display**: Existing weight-based DEFF labeled "Kish DEFF (weights)";
+  per-coefficient DEFF available via `compute_deff_diagnostics()` or
+  `LinearRegression.compute_deff()` post-fit
+- **Note:** Opt-in computation — not run automatically. Users call standalone
+  function or post-fit method when diagnostics are needed.
+
+### Subpopulation Analysis (Phase 6)
+
+Domain estimation preserving full design structure.
+
+- **Reference**: Lumley (2004) Section 3.4. Stata `svy: subpop`.
+- **Method**: `SurveyDesign.subpopulation(data, mask)` zeros out weights for
+  excluded observations while retaining strata/PSU layout for correct
+  variance estimation
+- **Note:** Unlike naive subsetting, subpopulation analysis preserves design
+  information (PSU structure, strata counts) that would be lost by dropping
+  observations. This is the methodologically correct approach for domain
+  estimation under complex survey designs.
+- **Note:** Weight validation relaxed from "strictly positive" to
+  "non-negative" to support zero-weight observations. Negative weights
+  still rejected. All-zero weight vectors rejected at solver level.
+- **Note:** For replicate-weight designs, `subpopulation()` zeros out both
+  full-sample and replicate weight columns for excluded observations,
+  preserving all replicate metadata.
+
 ---
 
 # Version History
 
+- **v1.3** (2026-03-26): Added Replicate Weight Variance, DEFF Diagnostics,
+  and Subpopulation Analysis sections (Phase 6 completion)
 - **v1.2** (2026-03-24): Added Survey-Aware Bootstrap section (Phase 6)
 - **v1.1** (2026-03-20): Added Survey Data Support section
 - **v1.0** (2025-01-19): Initial registry with 12 estimators

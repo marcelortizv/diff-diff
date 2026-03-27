@@ -834,11 +834,19 @@ class BaconDecomposition:
         never_post_mask = never_mask & df[time].isin(post_periods)
 
         # Guard against empty cells (unbalanced/filtered panels)
+        # Also check positive weight mass for survey/subpopulation designs
         if not (
             np.any(treated_pre_mask)
             and np.any(treated_post_mask)
             and np.any(never_pre_mask)
             and np.any(never_post_mask)
+        ):
+            return None
+        if (
+            np.sum(w[treated_pre_mask]) <= 0
+            or np.sum(w[treated_post_mask]) <= 0
+            or np.sum(w[never_pre_mask]) <= 0
+            or np.sum(w[never_post_mask]) <= 0
         ):
             return None
 
@@ -951,12 +959,19 @@ class BaconDecomposition:
         control_pre_mask = control_mask & df[time].isin(pre_periods)
         control_post_mask = control_mask & df[time].isin(post_periods)
 
-        # Skip if any cell is empty
+        # Skip if any cell is empty or has zero effective weight
         if (
             treated_pre_mask.sum() == 0
             or treated_post_mask.sum() == 0
             or control_pre_mask.sum() == 0
             or control_post_mask.sum() == 0
+        ):
+            return None
+        if (
+            np.sum(w[treated_pre_mask]) <= 0
+            or np.sum(w[treated_post_mask]) <= 0
+            or np.sum(w[control_pre_mask]) <= 0
+            or np.sum(w[control_post_mask]) <= 0
         ):
             return None
 

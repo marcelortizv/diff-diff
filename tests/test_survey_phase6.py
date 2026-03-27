@@ -983,3 +983,18 @@ class TestSubpopulationMaskValidation:
                 data, "outcome", "unit", "time", "first_treat",
                 survey_design=sd,
             )
+
+    def test_callaway_santanna_replicate_bootstrap_rejected(self):
+        """CallawaySantAnna should reject replicate weights + n_bootstrap > 0."""
+        from diff_diff import CallawaySantAnna
+
+        data, rep_cols = TestEstimatorReplicateWeights._make_staggered_replicate_data()
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JK1",
+        )
+        with pytest.raises(NotImplementedError, match="not supported"):
+            CallawaySantAnna(estimation_method="reg", n_bootstrap=30, seed=42).fit(
+                data, "outcome", "unit", "time", "first_treat",
+                survey_design=sd,
+            )

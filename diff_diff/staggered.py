@@ -1498,6 +1498,20 @@ class CallawaySantAnna(
                 unit=unit,
             )
 
+        # Reject replicate-weight designs for bootstrap — replicate variance
+        # is an analytical alternative, not compatible with bootstrap
+        if (
+            self.n_bootstrap > 0
+            and resolved_survey is not None
+            and hasattr(resolved_survey, "uses_replicate_variance")
+            and resolved_survey.uses_replicate_variance
+        ):
+            raise NotImplementedError(
+                "CallawaySantAnna bootstrap (n_bootstrap > 0) is not supported "
+                "with replicate-weight survey designs. Replicate weights provide "
+                "analytical variance; use n_bootstrap=0 instead."
+            )
+
         # Run bootstrap inference if requested
         bootstrap_results = None
         if self.n_bootstrap > 0 and influence_func_info:

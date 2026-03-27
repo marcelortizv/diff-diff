@@ -1187,6 +1187,9 @@ def compute_survey_vcov(
     # Compute weighted scores per observation: w_i * X_i * u_i
     if resolved.weight_type == "aweight":
         scores = X * residuals[:, np.newaxis]
+        # Zero-weight observations should not contribute to aweight meat
+        if np.any(weights == 0):
+            scores[weights == 0] = 0.0
     else:
         scores = X * (weights * residuals)[:, np.newaxis]
 
@@ -1441,6 +1444,18 @@ def compute_replicate_if_variance(
     # by the ratio w_r/w_full (Rao-Wu reweighting).
     full_weights = resolved.weights
     theta_full = float(np.sum(psi))
+
+    # Validate: combined_weights=True requires w_full > 0 wherever w_r > 0
+    if resolved.combined_weights:
+        for r in range(R):
+            bad = (rep_weights[:, r] > 0) & (full_weights <= 0)
+            if np.any(bad):
+                raise ValueError(
+                    f"Replicate column {r} has positive weight where full-sample "
+                    f"weight is zero. With combined_weights=True, every "
+                    f"replicate-positive observation must have a positive "
+                    f"full-sample weight."
+                )
 
     # Compute replicate estimates via weight-ratio rescaling
     theta_reps = np.full(R, np.nan)

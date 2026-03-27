@@ -685,6 +685,63 @@ class TestReplicateWeightVariance:
         with pytest.raises(ValueError, match="sum to zero"):
             solve_ols(X, y, weights=np.zeros(10))
 
+    def test_solve_logit_rejects_single_class_positive_weight(self):
+        """solve_logit should reject when positive-weight obs have one class."""
+        from diff_diff.linalg import solve_logit
+
+        n = 20
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = np.array([1] * 10 + [0] * 10, dtype=float)
+        w = np.ones(n)
+        # Zero out all class-0 obs — only class 1 remains
+        w[10:] = 0.0
+        with pytest.raises(ValueError, match="outcome class"):
+            solve_logit(X, y, weights=w)
+
+    def test_solve_logit_rejects_too_few_positive_weight_obs(self):
+        """solve_logit should reject when too few positive-weight obs."""
+        from diff_diff.linalg import solve_logit
+
+        n = 20
+        X = np.column_stack([np.ones(n), np.random.randn(n)])
+        y = np.array([1] * 10 + [0] * 10, dtype=float)
+        w = np.zeros(n)
+        # Only 2 positive-weight obs (one per class), but 2 params
+        w[0] = 1.0  # class 1
+        w[10] = 1.0  # class 0
+        with pytest.raises(ValueError, match="Cannot identify"):
+            solve_logit(X, y, weights=w)
+
+    def test_replicate_if_no_divide_by_zero_warning(self):
+        """compute_replicate_if_variance should not warn on zero weights."""
+        from diff_diff.survey import compute_replicate_if_variance, ResolvedSurveyDesign
+
+        n = 20
+        psi = np.random.randn(n)
+        weights = np.ones(n)
+        weights[:5] = 0.0  # Some zero full-sample weights (subpopulation)
+
+        rep_arr = np.ones((n, 5))
+        rep_arr[:5, :] = 0.0  # Match zero pattern
+        for r in range(5):
+            cs = rep_arr[:, r].sum()
+            if cs > 0:
+                rep_arr[:, r] *= n / cs
+
+        resolved = ResolvedSurveyDesign(
+            weights=weights, weight_type="pweight",
+            strata=None, psu=None, fpc=None,
+            n_strata=0, n_psu=0, lonely_psu="remove",
+            replicate_weights=rep_arr,
+            replicate_method="JK1", n_replicates=5,
+        )
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            # Should NOT raise RuntimeWarning for divide by zero
+            v = compute_replicate_if_variance(psi, resolved)
+            assert np.isfinite(v)
+
 
 # =============================================================================
 # Estimator-Level Replicate Weight Tests

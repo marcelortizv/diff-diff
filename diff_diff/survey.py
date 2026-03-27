@@ -1341,7 +1341,11 @@ def compute_replicate_if_variance(
         w_r = rep_weights[:, r]
         if np.any(w_r > 0):
             # Rescale: psi_i * (w_r_i / w_full_i) for each unit
-            ratio = np.where(full_weights > 0, w_r / full_weights, 0.0)
+            ratio = np.divide(
+                w_r, full_weights,
+                out=np.zeros_like(w_r, dtype=np.float64),
+                where=full_weights > 0,
+            )
             theta_reps[r] = np.sum(ratio * psi)
 
     valid = np.isfinite(theta_reps)

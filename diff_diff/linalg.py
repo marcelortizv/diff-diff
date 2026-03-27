@@ -1186,6 +1186,27 @@ def solve_logit(
             f"got '{rank_deficient_action}'"
         )
 
+    # Validate effective weighted sample when weights have zeros
+    if weights is not None and np.any(weights == 0):
+        pos_mask = weights > 0
+        n_pos = int(np.sum(pos_mask))
+        y_pos = y[pos_mask]
+        # Need both outcome classes in the positive-weight subset
+        unique_y = np.unique(y_pos)
+        if len(unique_y) < 2:
+            raise ValueError(
+                f"Positive-weight observations have only {len(unique_y)} "
+                f"outcome class(es). Logistic regression requires both 0 and 1 "
+                f"in the effective (positive-weight) sample."
+            )
+        # Check rank on the effective sample, not the full padded design
+        X_eff = X_with_intercept[pos_mask]
+        if n_pos <= X_eff.shape[1]:
+            raise ValueError(
+                f"Only {n_pos} positive-weight observation(s) for "
+                f"{X_eff.shape[1]} parameters. Cannot identify logistic model."
+            )
+
     # Check rank deficiency once before iterating
     rank_info = _detect_rank_deficiency(X_with_intercept)
     rank, dropped_cols, _ = rank_info

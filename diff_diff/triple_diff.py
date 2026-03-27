@@ -704,7 +704,14 @@ class TripleDifference:
                     mask = (G == g_val) & (P == p_val) & (T == t_val)
                     cell_name = f"{g_name}, {p_name}, {t_name}"
                     if weights is not None:
-                        means[cell_name] = float(np.average(y[mask], weights=weights[mask]))
+                        w_cell = weights[mask]
+                        if np.sum(w_cell) <= 0:
+                            raise ValueError(
+                                f"Cell '{cell_name}' has zero effective survey "
+                                f"weight. Cannot compute weighted cell mean. "
+                                f"Check subpopulation/domain definition."
+                            )
+                        means[cell_name] = float(np.average(y[mask], weights=w_cell))
                     else:
                         means[cell_name] = float(np.mean(y[mask]))
         return means

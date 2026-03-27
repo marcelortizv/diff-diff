@@ -872,6 +872,14 @@ class ContinuousDiD:
         if survey_weights is not None:
             w_treated = survey_weights[treated_mask]
             w_control = survey_weights[control_mask]
+            # Guard against zero effective mass (e.g., after subpopulation)
+            if np.sum(w_treated) <= 0 or np.sum(w_control) <= 0:
+                return {
+                    "att_glob": np.nan, "acrt_glob": np.nan,
+                    "n_treated": 0, "n_control": 0,
+                    "att_d": np.full(len(dvals), np.nan),
+                    "acrt_d": np.full(len(dvals), np.nan),
+                }
 
         # Control counterfactual (weighted mean when survey weights present)
         if w_control is not None:

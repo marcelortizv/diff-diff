@@ -768,6 +768,77 @@ class TestReplicateWeightVariance:
         with pytest.raises(ValueError, match="non-binary"):
             sd.subpopulation(basic_did_data, mask)
 
+    def test_scale_invariance_combined_weights(self):
+        """Multiplying all replicate columns by a constant should not change SE."""
+        from diff_diff.survey import compute_replicate_if_variance, ResolvedSurveyDesign
+
+        np.random.seed(42)
+        n = 40
+        R = 10
+        psi = np.random.randn(n) * 0.1
+        weights = 1.0 + np.random.exponential(0.3, n)
+
+        # Build replicate weights (combined: include full-sample weight)
+        rep_arr = np.zeros((n, R))
+        cluster_size = n // R
+        for r in range(R):
+            w_r = weights.copy()
+            start = r * cluster_size
+            end = min((r + 1) * cluster_size, n)
+            w_r[start:end] = 0.0
+            w_r[w_r > 0] *= R / (R - 1)
+            rep_arr[:, r] = w_r
+
+        resolved1 = ResolvedSurveyDesign(
+            weights=weights, weight_type="pweight",
+            strata=None, psu=None, fpc=None,
+            n_strata=0, n_psu=0, lonely_psu="remove",
+            replicate_weights=rep_arr,
+            replicate_method="JK1", n_replicates=R,
+            combined_weights=True,
+        )
+        v1, _ = compute_replicate_if_variance(psi, resolved1)
+
+        # Scale all replicate columns by 3x
+        resolved2 = ResolvedSurveyDesign(
+            weights=weights * 3, weight_type="pweight",
+            strata=None, psu=None, fpc=None,
+            n_strata=0, n_psu=0, lonely_psu="remove",
+            replicate_weights=rep_arr * 3,
+            replicate_method="JK1", n_replicates=R,
+            combined_weights=True,
+        )
+        v2, _ = compute_replicate_if_variance(psi, resolved2)
+
+        assert v1 == pytest.approx(v2, rel=1e-10), (
+            f"Scale invariance violated: v1={v1:.8f} vs v2={v2:.8f}"
+        )
+
+    def test_combined_weights_false(self):
+        """combined_weights=False treats replicate cols as perturbation factors."""
+        sd = SurveyDesign(
+            weights="w", replicate_weights=["r1", "r2"],
+            replicate_method="BRR", combined_weights=False,
+        )
+        assert sd.combined_weights is False
+
+    def test_custom_scale(self):
+        """Custom replicate_scale overrides default factor."""
+        sd = SurveyDesign(
+            weights="w", replicate_weights=["r1", "r2"],
+            replicate_method="BRR", replicate_scale=0.5,
+        )
+        assert sd.replicate_scale == 0.5
+
+    def test_scale_rscales_exclusive(self):
+        """replicate_scale and replicate_rscales are mutually exclusive."""
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            SurveyDesign(
+                weights="w", replicate_weights=["r1", "r2"],
+                replicate_method="BRR",
+                replicate_scale=0.5, replicate_rscales=[0.3, 0.7],
+            )
+
     def test_replicate_if_no_divide_by_zero_warning(self):
         """compute_replicate_if_variance should not warn on zero weights."""
         from diff_diff.survey import compute_replicate_if_variance, ResolvedSurveyDesign

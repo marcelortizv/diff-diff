@@ -66,6 +66,10 @@ class SurveyDesign:
     replicate_method: Optional[str] = None
     fay_rho: float = 0.0
     replicate_strata: Optional[List[int]] = None
+    combined_weights: bool = True
+    replicate_scale: Optional[float] = None
+    replicate_rscales: Optional[List[float]] = None
+    mse: bool = True
 
     def __post_init__(self):
         valid_weight_types = {"pweight", "fweight", "aweight"}
@@ -125,6 +129,17 @@ class SurveyDesign:
             if len(self.replicate_strata) != len(self.replicate_weights):
                 raise ValueError(
                     f"replicate_strata length ({len(self.replicate_strata)}) must "
+                    f"match replicate_weights length ({len(self.replicate_weights)})"
+                )
+        # Validate scale/rscales
+        if self.replicate_scale is not None and self.replicate_rscales is not None:
+            raise ValueError(
+                "replicate_scale and replicate_rscales are mutually exclusive"
+            )
+        if self.replicate_rscales is not None and self.replicate_weights is not None:
+            if len(self.replicate_rscales) != len(self.replicate_weights):
+                raise ValueError(
+                    f"replicate_rscales length ({len(self.replicate_rscales)}) must "
                     f"match replicate_weights length ({len(self.replicate_weights)})"
                 )
 
@@ -199,13 +214,8 @@ class SurveyDesign:
                 raise ValueError("Replicate weights contain Inf values")
             if np.any(rep_arr < 0):
                 raise ValueError("Replicate weights must be non-negative")
-            # Normalize replicate columns the same way as full-sample weights
-            # so IF-based replicate variance is scale-invariant
-            if self.weight_type in ("pweight", "aweight"):
-                for r_col in range(rep_arr.shape[1]):
-                    col_sum = np.sum(rep_arr[:, r_col])
-                    if col_sum > 0:
-                        rep_arr[:, r_col] = rep_arr[:, r_col] * (n / col_sum)
+            # Do NOT normalize replicate columns — the IF path uses w_r/w_full
+            # ratios that must reflect the true replicate design, not rescaled sums
             n_rep = rep_arr.shape[1]
             if n_rep < 2:
                 raise ValueError(
@@ -229,6 +239,14 @@ class SurveyDesign:
                     if self.replicate_strata is not None
                     else None
                 ),
+                combined_weights=self.combined_weights,
+                replicate_scale=self.replicate_scale,
+                replicate_rscales=(
+                    np.asarray(self.replicate_rscales, dtype=float)
+                    if self.replicate_rscales is not None
+                    else None
+                ),
+                mse=self.mse,
             )
 
         # --- Strata ---
@@ -528,6 +546,10 @@ class ResolvedSurveyDesign:
     fay_rho: float = 0.0
     n_replicates: int = 0
     replicate_strata: Optional[np.ndarray] = None  # (R,) for JKn
+    combined_weights: bool = True
+    replicate_scale: Optional[float] = None
+    replicate_rscales: Optional[np.ndarray] = None  # (R,) per-replicate scales
+    mse: bool = True
 
     @property
     def uses_replicate_variance(self) -> bool:
@@ -1281,6 +1303,9 @@ def compute_replicate_vcov(
     coef_reps = np.full((R, k), np.nan)
     for r in range(R):
         w_r = rep_weights[:, r]
+        # For non-combined weights, multiply by full-sample weights
+        if not resolved.combined_weights:
+            w_r = w_r * resolved.weights
         # Skip replicates where all weights are zero
         if np.sum(w_r) == 0:
             continue
@@ -1325,11 +1350,28 @@ def compute_replicate_vcov(
     c = full_sample_coef
 
     # Compute variance by method
-    diffs = coef_valid - c[np.newaxis, :]
+    # Support mse=False: center on replicate mean instead of full-sample estimate
+    if resolved.mse:
+        center = c
+    else:
+        center = np.mean(coef_valid, axis=0)
+    diffs = coef_valid - center[np.newaxis, :]
+
+    # Use custom scale/rscales if provided, else default method factor
+    if resolved.replicate_rscales is not None:
+        # Per-replicate scaling: sum_r rscales[r] * (c_r - c)(c_r - c)^T
+        valid_rscales = resolved.replicate_rscales[valid]
+        V = np.zeros((k, k))
+        for i in range(len(diffs)):
+            V += valid_rscales[i] * np.outer(diffs[i], diffs[i])
+        return V, n_valid
+    elif resolved.replicate_scale is not None:
+        return resolved.replicate_scale * (diffs.T @ diffs), n_valid
+
     outer_sum = diffs.T @ diffs  # (k, k)
 
     if method in ("BRR", "Fay", "JK1"):
-        factor = _replicate_variance_factor(method, int(np.sum(valid)), resolved.fay_rho)
+        factor = _replicate_variance_factor(method, n_valid, resolved.fay_rho)
         return factor * outer_sum, n_valid
     elif method == "JKn":
         # JKn: V = sum_h ((n_h-1)/n_h) * sum_{r in h} (c_r - c)(c_r - c)^T
@@ -1388,19 +1430,37 @@ def compute_replicate_if_variance(
     for r in range(R):
         w_r = rep_weights[:, r]
         if np.any(w_r > 0):
-            # Rescale: psi_i * (w_r_i / w_full_i) for each unit
-            ratio = np.divide(
-                w_r, full_weights,
-                out=np.zeros_like(w_r, dtype=np.float64),
-                where=full_weights > 0,
-            )
+            if resolved.combined_weights:
+                # Combined: w_r already includes full-sample weight
+                ratio = np.divide(
+                    w_r, full_weights,
+                    out=np.zeros_like(w_r, dtype=np.float64),
+                    where=full_weights > 0,
+                )
+            else:
+                # Non-combined: w_r is perturbation factor directly
+                ratio = w_r
             theta_reps[r] = np.sum(ratio * psi)
 
     valid = np.isfinite(theta_reps)
     n_valid = int(np.sum(valid))
     if n_valid < 2:
         return np.nan, n_valid
-    diffs = theta_reps[valid] - theta_full
+
+    # Support mse=False: center on replicate mean
+    if resolved.mse:
+        center = theta_full
+    else:
+        center = float(np.mean(theta_reps[valid]))
+    diffs = theta_reps[valid] - center
+
+    # Custom scale/rscales
+    if resolved.replicate_rscales is not None:
+        valid_rscales = resolved.replicate_rscales[valid]
+        return float(np.sum(valid_rscales * diffs**2)), n_valid
+    elif resolved.replicate_scale is not None:
+        return resolved.replicate_scale * float(np.sum(diffs**2)), n_valid
+
     ss = float(np.sum(diffs**2))
 
     if method in ("BRR", "Fay", "JK1"):

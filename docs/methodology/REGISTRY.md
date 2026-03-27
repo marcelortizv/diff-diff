@@ -2009,15 +2009,21 @@ variance from the distribution of replicate estimates.
 - **IF-based replicate variance**: For influence-function estimators (CS
   aggregation, ContinuousDiD, EfficientDiD, TripleDifference), replicate
   contrasts are formed via weight-ratio rescaling:
-  `theta_r = sum((w_r/w_full) * psi)`, `theta_full = sum(psi)`.
-  This matches the `compute_survey_if_variance()` contract where psi is
-  accepted as-is (the combined IF/WIF object) without extra weight
-  multiplication.
+  `theta_r = sum((w_r/w_full) * psi)` when `combined_weights=True`,
+  `theta_r = sum(w_r * psi)` when `combined_weights=False`.
 - **Survey df**: `R - 1` for replicate designs (replaces `n_PSU - n_strata`)
 - **Mutual exclusion**: Replicate weights cannot be combined with
   strata/psu/fpc (the replicates encode design structure implicitly)
-- **Normalization**: Replicate columns normalized to `sum(w_r) = n` for
-  pweight/aweight, matching full-sample normalization convention
+- **Design parameters** (matching R `svrepdesign()`):
+  - `combined_weights` (default True): replicate columns include full-sample
+    weight. If False, replicate columns are perturbation factors multiplied
+    by full-sample weight before WLS.
+  - `replicate_scale`: override default variance scaling factor
+  - `replicate_rscales`: per-replicate scaling factors (vector of length R)
+  - `mse` (default True): center variance on full-sample estimate. If False,
+    center on mean of replicate estimates.
+- **Note:** Replicate columns are NOT normalized — raw values are preserved
+  to maintain correct weight ratios in the IF path.
 - **Note:** JKn requires explicit `replicate_strata` (per-replicate stratum
   assignment). Auto-derivation from weight patterns is not supported.
 - **Note:** Invalid replicate solves (singular/degenerate) are dropped with

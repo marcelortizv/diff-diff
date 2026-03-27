@@ -2029,6 +2029,12 @@ variance from the distribution of replicate estimates.
 - **Note:** CallawaySantAnna, ContinuousDiD, and EfficientDiD reject
   replicate weights with `n_bootstrap > 0`. Replicate weights provide
   analytical variance; bootstrap is a separate inference mechanism.
+- **Note:** When invalid replicates are dropped, survey degrees of freedom
+  remain `R - 1` (original replicate count) rather than `n_valid - 1`.
+  This is a conservative simplification: the df difference is marginal for
+  typical replicate counts (R > 50) and errs toward wider CIs / larger
+  p-values. Updating df to track valid replicate count would require
+  threading the count through all estimator inference paths.
 
 ### DEFF Diagnostics (Phase 6)
 

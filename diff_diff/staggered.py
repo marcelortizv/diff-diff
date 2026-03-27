@@ -379,6 +379,20 @@ class CallawaySantAnna(
                 .values
             )
 
+        # Collapse replicate weights to unit level (same groupby pattern)
+        rep_weights_unit = None
+        if resolved_survey.replicate_weights is not None:
+            R = resolved_survey.replicate_weights.shape[1]
+            rep_weights_unit = np.zeros((n_units, R))
+            for r in range(R):
+                rep_weights_unit[:, r] = (
+                    pd.Series(resolved_survey.replicate_weights[:, r], index=df.index)
+                    .groupby(df[unit_col])
+                    .first()
+                    .reindex(all_units)
+                    .values
+                )
+
         return ResolvedSurveyDesign(
             weights=weights_unit.astype(np.float64),
             weight_type=resolved_survey.weight_type,
@@ -388,6 +402,11 @@ class CallawaySantAnna(
             n_strata=resolved_survey.n_strata,
             n_psu=resolved_survey.n_psu,
             lonely_psu=resolved_survey.lonely_psu,
+            replicate_weights=rep_weights_unit,
+            replicate_method=resolved_survey.replicate_method,
+            fay_rho=resolved_survey.fay_rho,
+            n_replicates=resolved_survey.n_replicates,
+            replicate_strata=resolved_survey.replicate_strata,
         )
 
     def _precompute_structures(

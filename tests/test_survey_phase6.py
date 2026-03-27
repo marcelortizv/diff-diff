@@ -878,12 +878,13 @@ class TestEstimatorReplicateWeights:
                 survey_design=sd,
             )
 
-    def test_triple_diff_replicate_ipw(self):
-        """TripleDifference IPW with replicate weights uses raw IF."""
+    @pytest.mark.parametrize("est_method", ["reg", "ipw", "dr"])
+    def test_triple_diff_replicate_all_methods(self, est_method):
+        """TripleDifference with replicate weights works for reg/ipw/dr."""
         from diff_diff import TripleDifference
 
         np.random.seed(42)
-        n = 120
+        n = 200
         n_rep = 10
         d1 = np.repeat([0, 1], n // 2)
         d2 = np.tile([0, 1], n // 2)
@@ -911,8 +912,7 @@ class TestEstimatorReplicateWeights:
             weights="weight", replicate_weights=rep_cols,
             replicate_method="JK1",
         )
-        # Regression method should work
-        result = TripleDifference(estimation_method="reg").fit(
+        result = TripleDifference(estimation_method=est_method).fit(
             data, outcome="y", group="d1", partition="d2",
             time="post", survey_design=sd,
         )

@@ -1858,10 +1858,11 @@ class LinearRegression:
             kept = np.where(~nan_mask)[0]
             if len(kept) == 0:
                 k = len(self.coefficients_)
-                return compute_deff_diagnostics(
-                    self._X, self.residuals_,
-                    np.full((k, k), np.nan), self.weights,
-                    weight_type=self.weight_type,
+                nan_arr = np.full(k, np.nan)
+                from diff_diff.survey import DEFFDiagnostics
+                return DEFFDiagnostics(
+                    deff=nan_arr, effective_n=nan_arr.copy(),
+                    srs_se=nan_arr.copy(), survey_se=nan_arr.copy(),
                     coefficient_names=coefficient_names,
                 )
             # Compute on kept columns only

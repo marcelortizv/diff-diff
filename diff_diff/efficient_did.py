@@ -1067,10 +1067,14 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         if self._unit_resolved_survey is not None:
             from diff_diff.survey import compute_survey_metadata
 
-            return compute_survey_metadata(
+            meta = compute_survey_metadata(
                 self._unit_resolved_survey,
                 self._unit_resolved_survey.weights,
             )
+            # Propagate effective replicate df if available
+            if self._survey_df is not None and meta.df_survey != self._survey_df:
+                meta.df_survey = self._survey_df
+            return meta
         return panel_metadata
 
     # -- Survey SE helpers ----------------------------------------------------

@@ -526,6 +526,11 @@ class ContinuousDiD:
                     raw_w_unit = _unit_resolved.weights
                     survey_metadata = compute_survey_metadata(_unit_resolved, raw_w_unit)
 
+                # Propagate replicate df override to survey_metadata for display consistency
+                if _survey_df is not None and survey_metadata is not None:
+                    if survey_metadata.df_survey != _survey_df:
+                        survey_metadata.df_survey = _survey_df
+
                 overall_att_t, overall_att_p, overall_att_ci = safe_inference(
                     overall_att, overall_att_se, self.alpha, df=_survey_df
                 )
@@ -912,9 +917,14 @@ class ContinuousDiD:
             )
 
         # Skip if not enough treated units for OLS (need n > K for residual df)
-        if n_treated <= n_basis:
+        # When survey weights are present, use positive-weight count as
+        # the effective sample size — subpopulation() can zero weights
+        # leaving rows present but the weighted regression underidentified.
+        n_eff = int(np.count_nonzero(w_treated > 0)) if w_treated is not None else n_treated
+        if n_eff <= n_basis:
+            label = "positive-weight treated units" if w_treated is not None else "treated units"
             warnings.warn(
-                f"Not enough treated units ({n_treated}) for {n_basis} basis functions "
+                f"Not enough {label} ({n_eff}) for {n_basis} basis functions "
                 f"in (g={g}, t={t}). Skipping cell.",
                 UserWarning,
                 stacklevel=3,

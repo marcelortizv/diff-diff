@@ -1201,6 +1201,14 @@ class TripleDifference:
             if weights is not None:
                 # WLS: transform by sqrt(weights) for weighted least squares
                 w_fit = weights[fit_mask]
+                # Check positive-weight effective sample — subpopulation()
+                # can zero weights leaving rows but an underidentified WLS.
+                n_eff = int(np.count_nonzero(w_fit > 0))
+                n_cols = X_fit.shape[1]
+                if n_eff <= n_cols:
+                    if np.sum(w_fit) > 0:
+                        return np.full(n_total, np.average(y_fit, weights=w_fit))
+                    return np.full(n_total, np.mean(y_fit))
                 sqrt_w = np.sqrt(w_fit)
                 beta, _, _ = solve_ols(
                     X_fit * sqrt_w[:, np.newaxis],

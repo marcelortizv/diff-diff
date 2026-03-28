@@ -2080,6 +2080,12 @@ Domain estimation preserving full design structure.
 - **Note:** For replicate-weight designs, `subpopulation()` zeros out both
   full-sample and replicate weight columns for excluded observations,
   preserving all replicate metadata.
+- **Note:** Defensive enhancement: ContinuousDiD and TripleDifference
+  validate the positive-weight effective sample size before WLS cell fits.
+  After `subpopulation()` zeroes weights, raw row counts may exceed the
+  regression rank requirement while the weighted effective sample does not.
+  Underidentified cells are skipped (ContinuousDiD) or fall back to
+  weighted means (TripleDifference).
 
 ---
 

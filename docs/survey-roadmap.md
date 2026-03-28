@@ -99,7 +99,7 @@ JKn requires explicit `replicate_strata` (per-replicate stratum assignment).
 - `compute_replicate_if_variance()` for IF-based estimators (reweights IF)
 - Dispatch in `LinearRegression.fit()` and `staggered_aggregation.py`
 - Replicate weights mutually exclusive with strata/PSU/FPC
-- Survey df = R-1 for replicate designs
+- Survey df = rank(replicate_weights) - 1, matching R's `survey::degf()`
 - **Limitations**: SunAbraham rejects replicate-weight designs (weighted
   within-transformation must be recomputed per replicate — not yet implemented).
   ContinuousDiD and EfficientDiD reject replicate weights + `n_bootstrap > 0`

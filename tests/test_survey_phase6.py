@@ -1091,3 +1091,190 @@ class TestSubpopulationMaskValidation:
                 data, "outcome", "unit", "time", "first_treat",
                 survey_design=sd,
             )
+
+
+# =============================================================================
+# Effective-sample and d.f. consistency tests
+# =============================================================================
+
+
+class TestEffectiveSampleAndDfConsistency:
+    """Tests for P1 effective-sample gates and P2 d.f. metadata consistency."""
+
+    def test_continuous_did_positive_weight_gate(self):
+        """ContinuousDiD skips cells where positive-weight count < n_basis."""
+        import warnings
+        from diff_diff import ContinuousDiD
+
+        np.random.seed(42)
+        n_units, n_periods = 60, 6
+        n_rep = 10
+        rows = []
+        for unit in range(n_units):
+            if unit < 20:
+                ft = 3
+            elif unit < 40:
+                ft = 5
+            else:
+                ft = 0
+            dose = float(unit % 3 + 1) if ft > 0 else 0.0
+            wt = 1.0 + 0.3 * (unit % 5)
+            for t in range(1, n_periods + 1):
+                y = 10.0 + unit * 0.05 + t * 0.2
+                if ft > 0 and t >= ft:
+                    y += 2.0 * dose
+                y += np.random.normal(0, 0.5)
+                rows.append({
+                    "unit": unit, "time": t, "first_treat": ft,
+                    "outcome": y, "weight": wt, "dose": dose,
+                })
+        data = pd.DataFrame(rows)
+
+        # Build replicate columns
+        cluster_size = n_units // n_rep
+        rep_cols = []
+        for r in range(n_rep):
+            w_r = data["weight"].values.copy()
+            start = r * cluster_size
+            end = min((r + 1) * cluster_size, n_units)
+            mask = (data["unit"] >= start) & (data["unit"] < end)
+            w_r[mask] = 0.0
+            w_r[~mask] *= n_rep / (n_rep - 1)
+            col = f"rep_{r}"
+            data[col] = w_r
+            rep_cols.append(col)
+
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JK1",
+        )
+
+        # Zero weights for most of cohort ft=5 (units 20-39) while keeping
+        # cohort ft=3 (units 0-19) and controls intact. This leaves too few
+        # positive-weight treated units in ft=5 cells, triggering the warning,
+        # but ft=3 cells remain valid so the estimator still produces a result.
+        subpop_mask = (data["first_treat"] != 5) | (data["unit"] < 22)
+        new_sd, new_data = sd.subpopulation(data, subpop_mask)
+
+        # Should emit warning about not enough positive-weight treated units
+        # for the cohort-5 cells, but still produce a result from cohort-3
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = ContinuousDiD(n_bootstrap=0, num_knots=2).fit(
+                new_data, "outcome", "unit", "time", "first_treat", "dose",
+                survey_design=new_sd,
+            )
+        weight_warnings = [
+            w for w in caught
+            if "positive-weight" in str(w.message)
+        ]
+        assert len(weight_warnings) > 0, "Expected warning about insufficient positive-weight units"
+        # Result should still be finite (from the valid cohort-3 cells)
+        assert result is not None
+        assert np.isfinite(result.overall_att)
+
+    def test_triple_diff_positive_weight_gate(self):
+        """TripleDifference falls back to weighted mean when n_eff < n_cols."""
+        from diff_diff.triple_diff import TripleDifference
+
+        np.random.seed(42)
+        n = 200
+        d1 = np.repeat([0, 1], n // 2)
+        d2 = np.tile([0, 1], n // 2)
+        post = np.tile([0, 0, 1, 1], n // 4)
+        x1 = np.random.randn(n)
+        x2 = np.random.randn(n)
+        x3 = np.random.randn(n)
+        y = 1.0 + 0.5 * d1 + 0.3 * d2 + 2.0 * d1 * d2 * post + np.random.randn(n) * 0.5
+        w = 1.0 + np.random.exponential(0.3, n)
+
+        # Create a cell (d1=1, d2=1, post=1) where most obs have zero weight
+        # but each cell still has SOME positive weight for cell means.
+        # With 3 covariates + intercept = 4 columns, n_eff=2 < 4 triggers fallback
+        cell_target = (d1 == 1) & (d2 == 1) & (post == 1)
+        cell_indices = np.where(cell_target)[0]
+        # Zero all but 2 obs in this cell
+        for idx in cell_indices[2:]:
+            w[idx] = 0.0
+
+        data = pd.DataFrame({
+            "y": y, "d1": d1, "d2": d2, "post": post,
+            "weight": w, "x1": x1, "x2": x2, "x3": x3,
+        })
+
+        sd = SurveyDesign(weights="weight")
+
+        # Should not crash — falls back to weighted mean for the thin cell
+        result = TripleDifference(estimation_method="reg").fit(
+            data, outcome="y", group="d1", partition="d2",
+            time="post", covariates=["x1", "x2", "x3"], survey_design=sd,
+        )
+        assert result is not None
+        assert np.isfinite(result.att)
+
+    def test_cs_replicate_df_metadata_consistency(self):
+        """CS survey_metadata.df_survey matches the d.f. used for inference."""
+        from diff_diff import CallawaySantAnna
+
+        data, rep_cols = TestEstimatorReplicateWeights._make_staggered_replicate_data()
+        n_rep = len(rep_cols)
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JK1",
+        )
+        result = CallawaySantAnna(estimation_method="reg", n_bootstrap=0).fit(
+            data, "outcome", "unit", "time", "first_treat",
+            survey_design=sd,
+        )
+        sm = result.survey_metadata
+        assert sm is not None
+        assert sm.df_survey is not None
+        assert sm.df_survey == n_rep - 1
+
+        # summary() should include the df line
+        summary_str = result.summary()
+        assert "Survey d.f." in summary_str
+
+    def test_triple_diff_replicate_df_metadata_consistency(self):
+        """TripleDifference survey_metadata.df_survey matches inference d.f."""
+        from diff_diff import TripleDifference
+
+        np.random.seed(42)
+        n = 200
+        n_rep = 10
+        d1 = np.repeat([0, 1], n // 2)
+        d2 = np.tile([0, 1], n // 2)
+        post = np.random.choice([0, 1], n)
+        y = 1.0 + 0.5 * d1 + 0.3 * d2 + 2.0 * d1 * d2 * post + np.random.randn(n) * 0.5
+        w = 1.0 + np.random.exponential(0.3, n)
+
+        data = pd.DataFrame({
+            "y": y, "d1": d1, "d2": d2, "post": post, "weight": w,
+        })
+        cluster_size = n // n_rep
+        rep_cols = []
+        for r in range(n_rep):
+            w_r = w.copy()
+            start = r * cluster_size
+            end = min((r + 1) * cluster_size, n)
+            w_r[start:end] = 0.0
+            w_r[w_r > 0] *= n_rep / (n_rep - 1)
+            col = f"rep_{r}"
+            data[col] = w_r
+            rep_cols.append(col)
+
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JK1",
+        )
+        result = TripleDifference(estimation_method="reg").fit(
+            data, outcome="y", group="d1", partition="d2",
+            time="post", survey_design=sd,
+        )
+        sm = result.survey_metadata
+        assert sm is not None
+        assert sm.df_survey is not None
+        assert sm.df_survey == n_rep - 1
+
+        d = result.to_dict()
+        assert d["df_survey"] == sm.df_survey

@@ -1499,6 +1499,10 @@ class CallawaySantAnna(
         )
         # Re-read df_survey in case replicate aggregation updated it
         df_survey = precomputed.get("df_survey")
+        # Propagate replicate df override to survey_metadata for display consistency
+        if df_survey is not None and survey_metadata is not None:
+            if survey_metadata.df_survey != df_survey:
+                survey_metadata.df_survey = df_survey
         overall_t, overall_p, overall_ci = safe_inference(
             overall_att,
             overall_se,

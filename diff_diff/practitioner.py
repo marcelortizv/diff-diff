@@ -416,7 +416,22 @@ def _handle_synthetic(results: Any):
             ),
             step_name="sensitivity",
         ),
-        _placebo_step(staggered=True),
+        _step(
+            baker_step=6,
+            label="In-time or in-space placebo",
+            why=(
+                "Test robustness by re-estimating on a placebo treatment "
+                "period (in-time) or excluding treated units one at a time "
+                "(leave-one-out). These are the natural falsification "
+                "checks for synthetic control methods."
+            ),
+            code=(
+                "# In-time placebo: re-estimate with a fake treatment date\n"
+                "# Leave-one-out: drop each treated unit and re-estimate"
+            ),
+            priority="medium",
+            step_name="sensitivity",
+        ),
         _step(
             baker_step=8,
             label="Compare with TROP or staggered estimators",
@@ -453,7 +468,22 @@ def _handle_trop(results: Any):
             ),
             step_name="sensitivity",
         ),
-        _placebo_step(staggered=True),
+        _step(
+            baker_step=6,
+            label="In-time or in-space placebo",
+            why=(
+                "Test robustness by re-estimating on a placebo treatment "
+                "period or dropping treated units one at a time. These "
+                "are the natural falsification checks for factor-model "
+                "panel estimators."
+            ),
+            code=(
+                "# In-time placebo: re-estimate with a fake treatment date\n"
+                "# Leave-one-out: drop each treated unit and re-estimate"
+            ),
+            priority="medium",
+            step_name="sensitivity",
+        ),
         _robustness_compare_step("SyntheticDiD or CS"),
     ]
     warnings = _check_nan_att(results)
@@ -537,30 +567,31 @@ def _handle_triple(results: Any):
     steps = [
         _step(
             baker_step=3,
-            label="Assess parallel trends for triple difference",
+            label="Assess DDD identifying assumption",
             why=(
-                "DDD requires parallel trends along two dimensions "
-                "(treatment eligibility and treatment exposure). The "
-                "generic check_parallel_trends() only tests a single "
-                "binary comparison. Inspect pre-treatment trends "
-                "separately for each dimension."
+                "DDD identification is weaker than requiring separate "
+                "parallel trends for two DiDs — it allows group-specific "
+                "and partition-specific PT violations as long as they "
+                "cancel in the triple difference. No built-in formal "
+                "test exists; inspect pre-treatment outcome patterns "
+                "across the treatment/eligibility/time cells."
             ),
             code=(
-                "# No built-in formal DDD PT test.\n"
-                "# Inspect pre-treatment trends in the treatment and\n"
-                "# eligibility dimensions separately."
+                "# No built-in formal DDD assumption test.\n"
+                "# Inspect pre-treatment means across treatment x eligibility\n"
+                "# cells to assess whether the DDD structure is plausible."
             ),
             step_name="parallel_trends",
         ),
         _step(
             baker_step=7,
-            label="Test within-group placebo",
+            label="Test placebo group",
             why=(
-                "DDD requires parallel trends along both dimensions. "
-                "Run placebo tests on the within-group (third difference) "
-                "dimension to verify."
+                "Re-estimate using a placebo eligibility group to check "
+                "whether the DDD result could be an artifact of the "
+                "group structure rather than the treatment."
             ),
-            code="# Re-estimate with a placebo group to test the third difference",
+            code="# Re-estimate with a placebo eligibility group",
             step_name="heterogeneity",
         ),
         _covariates_step(),

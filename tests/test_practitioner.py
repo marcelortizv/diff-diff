@@ -252,10 +252,18 @@ class TestResultTypeDispatch:
         output = practitioner_next_steps(mock_synth_results, verbose=False)
         assert len(output["next_steps"]) > 0
         assert output["estimator"] == "SyntheticDiD"
+        # SDiD should NOT get staggered-specific guidance
+        all_text = " ".join(s.get("code", "") + s.get("why", "") for s in output["next_steps"])
+        assert "control_group" not in all_text
+        assert "anticipation" not in all_text
 
     def test_trop_results(self, mock_trop_results):
         output = practitioner_next_steps(mock_trop_results, verbose=False)
         assert len(output["next_steps"]) > 0
+        # TROP should NOT get staggered-specific guidance
+        all_text = " ".join(s.get("code", "") + s.get("why", "") for s in output["next_steps"])
+        assert "control_group" not in all_text
+        assert "anticipation" not in all_text
 
     def test_efficient_results(self, mock_efficient_results):
         output = practitioner_next_steps(mock_efficient_results, verbose=False)
@@ -264,10 +272,19 @@ class TestResultTypeDispatch:
     def test_continuous_results(self, mock_continuous_results):
         output = practitioner_next_steps(mock_continuous_results, verbose=False)
         assert len(output["next_steps"]) > 0
+        # ContinuousDiD should NOT emit check_parallel_trends
+        all_text = " ".join(s.get("code", "") for s in output["next_steps"])
+        assert "check_parallel_trends" not in all_text
 
     def test_triple_results(self, mock_triple_results):
         output = practitioner_next_steps(mock_triple_results, verbose=False)
         assert len(output["next_steps"]) > 0
+        # DDD should NOT claim "requires PT along two dimensions"
+        all_text = " ".join(s.get("why", "") for s in output["next_steps"])
+        assert "two dimensions" not in all_text
+        assert "check_parallel_trends" not in " ".join(
+            s.get("code", "") for s in output["next_steps"]
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -93,9 +93,9 @@ of 9.6), so the model mix does not inflate the reported improvement.
 
 **After agents** consistently:
 - Structured their code around all 8 Baker steps explicitly
-- Ran formal pre-trends diagnostics (check_parallel_trends or CS event-study pre-periods)
+- Ran pre-trends diagnostics appropriate to design (CS event-study pre-periods for staggered)
 - Ran compute_honest_did() with specific M values
-- Ran run_all_placebo_tests()
+- Ran sensitivity/falsification checks (HonestDiD, specification comparisons)
 - Compared CS vs SA vs BJS
 - Called practitioner_next_steps(results)
 - Named specific PT variants (PT-GT-NYT, PT-GT-Nev)

@@ -75,7 +75,14 @@ Treatment does not affect outcomes before it is implemented. Violated when
 units adjust behavior in anticipation of future treatment. Set `anticipation=k`
 to allow k periods of anticipation.
 
-### Test parallel trends empirically:
+---
+
+## Step 3: Test Parallel Trends
+
+Test the parallel trends assumption empirically BEFORE estimation. This step
+is separated from Step 2 because it requires code execution, not just stating
+assumptions.
+
 ```python
 from diff_diff import check_parallel_trends, equivalence_test_trends
 
@@ -101,7 +108,7 @@ large a violation would need to be to overturn your results.
 
 ---
 
-## Step 3: Choose Estimation Method
+## Step 4: Choose Estimation Method
 
 Use this decision tree to select the appropriate estimator:
 
@@ -146,9 +153,9 @@ print(bacon_result.summary())
 
 ---
 
-## Step 4: Discuss Sources of Uncertainty
+## Step 5: Estimate
 
-Before estimating, you MUST check the cluster count and choose inference
+Before fitting, you MUST check the cluster count and choose inference
 accordingly. Do not assume — always print and decide based on the data.
 
 ```python
@@ -163,37 +170,7 @@ else:
     print(f"-> Only {n_clusters} clusters — use wild cluster bootstrap")
 ```
 
-- **Cluster standard errors** at the level of treatment assignment (e.g.,
-  state, county). Use the `cluster=` parameter.
-- **Few clusters (<50)?** Use wild cluster bootstrap:
-  `inference="wild_bootstrap", n_bootstrap=999`
-- **Survey data?** Wrap in `SurveyDesign()` for design-based inference with
-  stratification, PSU clustering, and finite population corrections.
-
-```python
-from diff_diff import CallawaySantAnna
-
-# Standard cluster-robust SEs (when n_clusters >= 50)
-cs = CallawaySantAnna(cluster='county_id')
-
-# Wild bootstrap for few clusters (when n_clusters < 50)
-from diff_diff import DifferenceInDifferences
-did = DifferenceInDifferences(
-    inference='wild_bootstrap', n_bootstrap=999, cluster='state_id'
-)
-
-# Survey design
-from diff_diff import SurveyDesign
-survey = SurveyDesign(weights='pw', strata='stratum', psu='psu_id')
-cs = CallawaySantAnna()
-results = cs.fit(data, ..., survey_design=survey)
-```
-
----
-
-## Step 5: Estimate
-
-Now run the estimator chosen in Step 3. Examples for common designs:
+Now run the estimator chosen in Step 4. Examples for common designs:
 
 ### Staggered adoption (recommended: Callaway-Sant'Anna)
 ```python

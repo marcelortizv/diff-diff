@@ -280,9 +280,9 @@ class TestCompletedSteps:
             cs_results, completed_steps=["parallel_trends"], verbose=False
         )
         assert len(filtered["next_steps"]) < len(full["next_steps"])
-        # No step should have baker_step 2 about parallel trends
+        # No step should have baker_step 3 about parallel trends
         for s in filtered["next_steps"]:
-            if s["baker_step"] == 2:
+            if s["baker_step"] == 3:
                 assert "parallel trends" not in s["label"].lower()
 
     def test_filter_sensitivity(self, cs_results):
@@ -340,6 +340,49 @@ class TestNaNHandling:
         output = practitioner_next_steps(r, verbose=False)
         assert len(output["warnings"]) > 0
         assert any("NaN" in w for w in output["warnings"])
+
+
+# ---------------------------------------------------------------------------
+# Tests: Bacon handler warnings
+# ---------------------------------------------------------------------------
+class TestBaconWarnings:
+    def test_forbidden_comparison_warning(self, bacon_results):
+        output = practitioner_next_steps(bacon_results, verbose=False)
+        # Real Bacon results from staggered data should have forbidden comparisons
+        weight = getattr(bacon_results, "total_weight_later_vs_earlier", 0)
+        if weight > 0.01:
+            assert any("contaminated" in w for w in output["warnings"])
+
+    def test_bacon_with_high_forbidden_weight(self):
+        """Mock Bacon results with high forbidden comparison weight."""
+        from diff_diff.bacon import BaconDecompositionResults
+
+        r = BaconDecompositionResults.__new__(BaconDecompositionResults)
+        r.overall_att = 0.5
+        r.total_weight_later_vs_earlier = 0.4
+        r.comparisons = []
+        output = practitioner_next_steps(r, verbose=False)
+        assert any("contaminated" in w for w in output["warnings"])
+        assert any("40%" in w for w in output["warnings"])
+
+
+# ---------------------------------------------------------------------------
+# Tests: EfficientDiD handler path
+# ---------------------------------------------------------------------------
+class TestEfficientDiDHandler:
+    def test_hausman_pretest_in_guidance(self, mock_efficient_results):
+        output = practitioner_next_steps(mock_efficient_results, verbose=False)
+        labels = [s["label"] for s in output["next_steps"]]
+        assert any("hausman" in lbl.lower() or "Hausman" in lbl for lbl in labels)
+
+    def test_hausman_snippet_uses_classmethod(self, mock_efficient_results):
+        output = practitioner_next_steps(mock_efficient_results, verbose=False)
+        hausman_steps = [
+            s for s in output["next_steps"]
+            if "hausman" in s["label"].lower() or "Hausman" in s["label"]
+        ]
+        assert len(hausman_steps) > 0
+        assert "hausman_pretest" in hausman_steps[0]["code"]
 
 
 # ---------------------------------------------------------------------------

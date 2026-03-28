@@ -136,7 +136,7 @@ def _step(
 # ---------------------------------------------------------------------------
 def _parallel_trends_step() -> Dict[str, Any]:
     return _step(
-        baker_step=2,
+        baker_step=3,
         label="Test parallel trends assumption",
         why=(
             "Parallel trends is the core identifying assumption. "
@@ -233,7 +233,7 @@ def _handle_did(results: Any):
         _parallel_trends_step(),
         _placebo_step(),
         _step(
-            baker_step=3,
+            baker_step=4,
             label="Check if data is actually staggered",
             why=(
                 "If treatment timing varies across units, basic DiD produces "
@@ -433,9 +433,10 @@ def _handle_efficient(results: Any):
                 "The Hausman pretest compares them — report which was selected."
             ),
             code=(
-                "# Hausman pretest is an estimator method, not a results attribute:\n"
-                "# edid = EfficientDiD()\n"
-                "# results = edid.fit(data, ..., run_pretest=True)"
+                "# Hausman pretest is a classmethod on the estimator:\n"
+                "from diff_diff import EfficientDiD\n"
+                "pretest = EfficientDiD.hausman_pretest(\n"
+                "    data, outcome='y', unit='id', time='t', first_treat='g')"
             ),
             step_name="heterogeneity",
         ),
@@ -503,7 +504,7 @@ def _handle_triple(results: Any):
 def _handle_bacon(results: Any):
     steps = [
         _step(
-            baker_step=3,
+            baker_step=4,
             label="Switch to heterogeneity-robust estimator",
             why=(
                 "Bacon decomposition is diagnostic, not an estimator. "
@@ -521,21 +522,14 @@ def _handle_bacon(results: Any):
         ),
     ]
     warnings = []
-    # Check for negative weights if the attribute exists
-    comparisons = getattr(results, "comparisons", None)
-    if comparisons is not None:
-        try:
-            has_negative = any(
-                getattr(c, "weight", 0) < 0 for c in comparisons
-            )
-            if has_negative:
-                warnings.append(
-                    "Negative weights detected in Bacon decomposition — "
-                    "TWFE estimate is contaminated by forbidden comparisons. "
-                    "Switch to a heterogeneity-robust estimator."
-                )
-        except (TypeError, AttributeError):
-            pass
+    # Check for forbidden comparisons (later vs earlier treated)
+    weight = getattr(results, "total_weight_later_vs_earlier", 0)
+    if isinstance(weight, (int, float)) and weight > 0.01:
+        warnings.append(
+            f"Forbidden comparisons (later vs earlier treated) carry "
+            f"{weight:.0%} of TWFE weight — TWFE estimate is contaminated. "
+            f"Switch to a heterogeneity-robust estimator."
+        )
     return steps, warnings
 
 

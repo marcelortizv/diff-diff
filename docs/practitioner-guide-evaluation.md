@@ -56,15 +56,15 @@ of 9.6), so the model mix does not inflate the reported improvement.
 | S3: Test parallel trends | 0.1 | 2.0 | **+1.9** | From near-zero to universal formal PT testing |
 | S4: Choose estimator | 2.0 | 2.0 | 0.0 | Already perfect before |
 | S5: Estimate (cluster check) | 1.0 | 1.5 | +0.5 | Now discuss wild bootstrap alternative |
-| S6: Sensitivity | **0.1** | **2.0** | **+1.9** | From near-zero to universal HonestDiD + placebo |
+| S6: Sensitivity | **0.1** | **2.0** | **+1.9** | From near-zero to universal HonestDiD + falsification checks |
 | S7: Heterogeneity | 1.4 | 2.0 | +0.6 | Now consistently do group + event study |
 | S8: Robustness | 0.9 | 1.75 | +0.85 | Now compare 3 estimators; ~50% add with/without covariates |
 
 ### Key Findings
 
 1. **Sensitivity analysis (Step 6) showed the largest improvement**: 0.1 to 2.0
-   (+1.9 points). Before, 0/10 agents ran HonestDiD or placebo tests. After,
-   10/10 agents ran both. This was the primary gap the guide was designed to fix.
+   (+1.9 points). Before, 0/10 agents ran HonestDiD or sensitivity checks.
+   After, 10/10 ran HonestDiD and/or specification-based falsification.
 
 2. **Target parameter and assumptions (Steps 1-2) went from partial to full**:
    Before, agents mentioned "ATT" generically. After, they explicitly name the

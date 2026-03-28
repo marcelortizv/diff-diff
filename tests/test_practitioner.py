@@ -239,14 +239,23 @@ class TestResultTypeDispatch:
     def test_imputation_results(self, mock_imputation_results):
         output = practitioner_next_steps(mock_imputation_results, verbose=False)
         assert len(output["next_steps"]) > 0
+        # ImputationDiD has no control_group parameter — code snippets must not use it
+        all_code = " ".join(s.get("code", "") for s in output["next_steps"])
+        assert "control_group" not in all_code
 
     def test_two_stage_results(self, mock_two_stage_results):
         output = practitioner_next_steps(mock_two_stage_results, verbose=False)
         assert len(output["next_steps"]) > 0
+        # TwoStageDiD has no control_group parameter — code snippets must not use it
+        all_code = " ".join(s.get("code", "") for s in output["next_steps"])
+        assert "control_group" not in all_code
 
     def test_stacked_results(self, mock_stacked_results):
         output = practitioner_next_steps(mock_stacked_results, verbose=False)
         assert len(output["next_steps"]) > 0
+        # StackedDiD uses clean_control, not control_group
+        all_text = " ".join(s.get("code", "") + s.get("why", "") for s in output["next_steps"])
+        assert "not_yet_treated" not in all_text or "clean_control" in all_text
 
     def test_synth_results(self, mock_synth_results):
         output = practitioner_next_steps(mock_synth_results, verbose=False)
@@ -268,6 +277,9 @@ class TestResultTypeDispatch:
     def test_efficient_results(self, mock_efficient_results):
         output = practitioner_next_steps(mock_efficient_results, verbose=False)
         assert len(output["next_steps"]) > 0
+        # EfficientDiD uses never_treated/last_cohort — code must not suggest not_yet_treated
+        all_code = " ".join(s.get("code", "") for s in output["next_steps"])
+        assert "not_yet_treated" not in all_code
 
     def test_continuous_results(self, mock_continuous_results):
         output = practitioner_next_steps(mock_continuous_results, verbose=False)

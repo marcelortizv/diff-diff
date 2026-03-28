@@ -348,7 +348,21 @@ def _handle_cs(results: Any):
 def _handle_sa(results: Any):
     steps = [
         _parallel_trends_step(staggered=True),
-        _placebo_step(staggered=True),
+        _step(
+            baker_step=6,
+            label="Specification-based falsification",
+            why=(
+                "Compare results across control group definitions "
+                "(never_treated vs not_yet_treated) and anticipation "
+                "settings to assess robustness."
+            ),
+            code=(
+                "# Re-estimate with different control group / anticipation:\n"
+                "# sa_alt = SunAbraham(control_group='not_yet_treated')"
+            ),
+            priority="medium",
+            step_name="sensitivity",
+        ),
         _robustness_compare_step("CS, BJS, or Gardner"),
         _covariates_step(),
     ]
@@ -359,7 +373,22 @@ def _handle_sa(results: Any):
 def _handle_imputation(results: Any):
     steps = [
         _parallel_trends_step(staggered=True),
-        _placebo_step(staggered=True),
+        _step(
+            baker_step=6,
+            label="Specification-based falsification",
+            why=(
+                "ImputationDiD does not have a control_group parameter. "
+                "Compare results with and without covariates, vary the "
+                "sample (drop cohorts), and compare with CS/SA as "
+                "falsification checks."
+            ),
+            code=(
+                "# Compare with alternative estimators as robustness:\n"
+                "# Leave-one-cohort-out sensitivity analysis"
+            ),
+            priority="medium",
+            step_name="sensitivity",
+        ),
         _robustness_compare_step("CS, SA, or Gardner"),
         _covariates_step(),
     ]
@@ -370,7 +399,22 @@ def _handle_imputation(results: Any):
 def _handle_two_stage(results: Any):
     steps = [
         _parallel_trends_step(staggered=True),
-        _placebo_step(staggered=True),
+        _step(
+            baker_step=6,
+            label="Specification-based falsification",
+            why=(
+                "TwoStageDiD does not have a control_group parameter. "
+                "Compare results with and without covariates, vary the "
+                "sample (drop cohorts), and compare with CS/SA as "
+                "falsification checks."
+            ),
+            code=(
+                "# Compare with alternative estimators as robustness:\n"
+                "# Leave-one-cohort-out sensitivity analysis"
+            ),
+            priority="medium",
+            step_name="sensitivity",
+        ),
         _robustness_compare_step("CS, BJS, or SA"),
         _covariates_step(),
     ]
@@ -381,7 +425,21 @@ def _handle_two_stage(results: Any):
 def _handle_stacked(results: Any):
     steps = [
         _parallel_trends_step(staggered=True),
-        _placebo_step(staggered=True),
+        _step(
+            baker_step=6,
+            label="Vary clean control definition",
+            why=(
+                "StackedDiD uses clean_control parameter (not control_group). "
+                "Compare results with different clean control definitions "
+                "and event window widths as falsification."
+            ),
+            code=(
+                "# Re-estimate with different clean_control settings:\n"
+                "# stacked_alt = StackedDiD(clean_control='not_yet_treated')"
+            ),
+            priority="medium",
+            step_name="sensitivity",
+        ),
         _step(
             baker_step=7,
             label="Check sub-experiment balance",
@@ -493,7 +551,21 @@ def _handle_trop(results: Any):
 def _handle_efficient(results: Any):
     steps = [
         _parallel_trends_step(staggered=True),
-        _placebo_step(staggered=True),
+        _step(
+            baker_step=6,
+            label="Compare control group definitions",
+            why=(
+                "EfficientDiD supports never_treated and last_cohort "
+                "control groups (not not_yet_treated). Compare results "
+                "across both to assess robustness."
+            ),
+            code=(
+                "# Re-estimate with alternative control group:\n"
+                "# edid_alt = EfficientDiD(control_group='last_cohort')"
+            ),
+            priority="medium",
+            step_name="sensitivity",
+        ),
         _step(
             baker_step=7,
             label="Run Hausman pretest (PT-All vs PT-Post)",

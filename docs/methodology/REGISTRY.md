@@ -2030,7 +2030,12 @@ variance from the distribution of replicate estimates.
   assignment). Auto-derivation from weight patterns is not supported.
 - **Note:** Invalid replicate solves (singular/degenerate) are dropped with
   a warning. Variance is computed from valid replicates only. Fewer than 2
-  valid replicates returns NaN variance.
+  valid replicates returns NaN variance. The variance scaling factor
+  (e.g., `1/R` for BRR, `(R-1)/R` for JK1) uses the original design's `R`,
+  not the valid count — matching R's `survey` package convention where the
+  design structure is fixed and dropped replicates contribute zero to the
+  sum without changing the scale. Survey df uses `n_valid - 1` for
+  t-based inference.
 - **Note:** SunAbraham rejects replicate-weight designs with
   `NotImplementedError` because the weighted within-transformation must be
   recomputed per replicate (not yet implemented).

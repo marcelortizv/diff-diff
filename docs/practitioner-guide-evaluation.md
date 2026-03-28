@@ -51,9 +51,9 @@ instances with no shared context.
 |------|------------|-----------|--------|----------------|
 | S1: Target parameter | 1.0 | 2.0 | **+1.0** | Agents now explicitly define weighted/unweighted target |
 | S2: Assumptions | 1.0 | 2.0 | **+1.0** | Agents now formally name PT variant (PT-GT-NYT) |
-| S3: Estimator choice | 2.0 | 2.0 | 0.0 | Already perfect before |
-| S4: Inference | 1.0 | 1.5 | +0.5 | Now discuss wild bootstrap alternative |
-| S5: Estimation | 2.0 | 2.0 | 0.0 | Already perfect before |
+| S3: Test parallel trends | 0.1 | 2.0 | **+1.9** | From near-zero to universal formal PT testing |
+| S4: Choose estimator | 2.0 | 2.0 | 0.0 | Already perfect before |
+| S5: Estimate (cluster check) | 1.0 | 1.5 | +0.5 | Now discuss wild bootstrap alternative |
 | S6: Sensitivity | **0.1** | **2.0** | **+1.9** | From near-zero to universal HonestDiD + placebo |
 | S7: Heterogeneity | 1.4 | 2.0 | +0.6 | Now consistently do group + event study |
 | S8: Robustness | 0.9 | 1.75 | +0.85 | Now compare 3 estimators; ~50% add with/without covariates |
@@ -77,9 +77,9 @@ instances with no shared context.
    standardized behavior — agents now consistently follow the same high-quality
    workflow rather than producing variable-quality ad hoc analyses.
 
-5. **Steps 3 and 5 were already perfect**: Agents already knew to use CS for
-   staggered data and could produce working code. The gap was never in mechanics
-   but in empiricist reasoning.
+5. **Steps 4 and 5 (estimator choice + estimation) were already perfect**:
+   Agents already knew to use CS for staggered data and could produce working
+   code. The gap was never in mechanics but in empiricist reasoning.
 
 ## Qualitative Observations
 
@@ -101,8 +101,8 @@ instances with no shared context.
 ## Iteration 2: Targeted Fixes
 
 After v1, the remaining 0.75 point gap was concentrated in:
-- **Step 4 (Inference)**: Agents mentioned wild bootstrap generically but never
-  checked the actual cluster count in the data (1.5/2 across all runs).
+- **Step 5 (Estimate/Inference)**: Agents mentioned wild bootstrap generically but
+  never checked the actual cluster count in the data (1.5/2 across all runs).
 - **Step 8 (Robustness)**: ~50% of agents skipped with/without covariates
   comparison despite the guide listing it (mean 1.75/2).
 
@@ -129,9 +129,9 @@ After v1, the remaining 0.75 point gap was concentrated in:
 |------|--------|----------|----------|
 | S1: Target parameter | 1.0 | 2.0 | 2.0 |
 | S2: Assumptions | 1.0 | 2.0 | 2.0 |
-| S3: Estimator choice | 2.0 | 2.0 | 2.0 |
-| S4: Inference | 1.0 | 1.5 | **2.0** |
-| S5: Estimation | 2.0 | 2.0 | 2.0 |
+| S3: Test parallel trends | 0.1 | 2.0 | 2.0 |
+| S4: Choose estimator | 2.0 | 2.0 | 2.0 |
+| S5: Estimate (cluster check) | 1.0 | 1.5 | **2.0** |
 | S6: Sensitivity | 0.1 | 2.0 | 2.0 |
 | S7: Heterogeneity | 1.4 | 2.0 | 2.0 |
 | S8: Robustness | 0.9 | 1.75 | **2.0** |

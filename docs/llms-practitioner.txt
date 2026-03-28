@@ -390,8 +390,11 @@ data = load_mpdta()
 #          no anticipation, doubly robust for conditional PT
 
 # Step 3: Test parallel trends
+# Note: check_parallel_trends expects a binary treatment indicator, not cohort years.
+# Use 'treat' (ever-treated binary) with pre-periods before any cohort adopts.
 pt = check_parallel_trends(data, outcome='lemp', time='year',
-                           treatment_group='first_treat')
+                           treatment_group='treat',
+                           pre_periods=[2003, 2004, 2005])
 print(f"Pre-trends p-value: {pt['p_value']:.4f}")
 
 # Step 4: Choose estimator — staggered adoption → CS (primary), SA (robustness)

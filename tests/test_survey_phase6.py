@@ -1458,6 +1458,57 @@ class TestSubpopulationMaskValidation:
                 first_treat="first_treat", survey_design=sd,
             )
 
+    def test_synthetic_did_replicate_rejected(self):
+        """SyntheticDiD rejects replicate-weight designs."""
+        from diff_diff.synthetic_did import SyntheticDiD
+        data, sd = self._replicate_sd_and_data()
+        data["treated"] = (data["first_treat"] > 0).astype(int)
+        with pytest.raises(NotImplementedError):
+            SyntheticDiD().fit(
+                data, outcome="outcome", unit="unit", time="time",
+                treatment="treated", survey_design=sd,
+            )
+
+    @pytest.mark.slow
+    def test_trop_replicate_rejected(self):
+        """TROP rejects replicate-weight designs."""
+        from diff_diff.trop import TROP
+        data, sd = self._replicate_sd_and_data()
+        data["treated"] = (data["first_treat"] > 0).astype(int)
+        with pytest.raises(NotImplementedError):
+            TROP().fit(
+                data, outcome="outcome", unit="unit", time="time",
+                treatment="treated", survey_design=sd,
+            )
+
+
+class TestCSReplicateMethodCoverage:
+    """Test that CS replicate weights work for all supported estimation methods."""
+
+    @staticmethod
+    def _make_cs_replicate_data():
+        data, rep_cols = TestEstimatorReplicateWeights._make_staggered_replicate_data()
+        sd = SurveyDesign(
+            weights="weight", replicate_weights=rep_cols,
+            replicate_method="JK1",
+        )
+        return data, sd
+
+    @pytest.mark.parametrize("method", ["ipw", "dr"])
+    def test_cs_replicate_ipw_dr_no_covariates(self, method):
+        """CS replicate weights work for ipw/dr without covariates."""
+        from diff_diff import CallawaySantAnna
+        data, sd = self._make_cs_replicate_data()
+        result = CallawaySantAnna(
+            estimation_method=method, n_bootstrap=0,
+        ).fit(
+            data, "outcome", "unit", "time", "first_treat",
+            survey_design=sd,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.survey_metadata is not None
+
 
 # =============================================================================
 # Effective-sample and d.f. consistency tests

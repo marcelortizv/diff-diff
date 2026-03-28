@@ -585,6 +585,13 @@ class BaconDecomposition:
                 weights=survey_weights,
             )
 
+        if not comparisons:
+            raise ValueError(
+                "No valid 2x2 comparisons remain after filtering. "
+                "All cells have zero effective weight or insufficient data. "
+                "Check subpopulation/domain definition."
+            )
+
         # Normalize weights to sum to 1
         total_weight = sum(c.weight for c in comparisons)
         if total_weight > 0:

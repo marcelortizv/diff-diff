@@ -1064,6 +1064,9 @@ def _compute_robust_vcov_numpy(
         scores = X * (weights * residuals)[:, np.newaxis]
     else:
         scores = X * residuals[:, np.newaxis]
+        # Zero out scores for zero-weight aweight rows (subpopulation invariance)
+        if weights is not None and np.any(weights == 0):
+            scores[weights == 0] = 0.0
 
     if cluster_ids is None:
         # HC1 (heteroskedasticity-robust) standard errors
@@ -1870,10 +1873,14 @@ class LinearRegression:
         # This is needed for correct degrees of freedom in inference
         nan_mask = np.isnan(coefficients)
         self.n_params_effective_ = int(self.n_params_ - np.sum(nan_mask))
-        # For fweights, df uses sum(w) - k (effective sample size)
+        # Effective n for df: fweights use sum(w), pweight/aweight with
+        # zeros use positive-weight count (matches compute_robust_vcov)
         n_eff_df = self.n_obs_
-        if self.weights is not None and self.weight_type == "fweight":
-            n_eff_df = int(round(np.sum(self.weights)))
+        if self.weights is not None:
+            if self.weight_type == "fweight":
+                n_eff_df = int(round(np.sum(self.weights)))
+            elif np.any(self.weights == 0):
+                n_eff_df = int(np.count_nonzero(self.weights > 0))
         self.df_ = n_eff_df - self.n_params_effective_ - df_adjustment
 
         # Survey degrees of freedom: n_PSU - n_strata (overrides standard df)

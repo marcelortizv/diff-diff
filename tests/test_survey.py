@@ -692,7 +692,7 @@ class TestIntegration:
         assert "Strata:" in summary_text
         assert "PSU/Cluster:" in summary_text
         assert "Effective sample size:" in summary_text
-        assert "Design effect (DEFF):" in summary_text
+        assert "Kish DEFF (weights):" in summary_text
 
     def test_to_dict_survey_fields(self, survey_2x2_data):
         """Survey metadata fields appear in to_dict()."""
@@ -756,11 +756,18 @@ class TestIntegration:
         with pytest.raises(ValueError, match="not found"):
             sd.resolve(df)
 
-    def test_survey_design_validation_zero_weights(self):
-        """Zero weights raise ValueError."""
+    def test_survey_design_validation_zero_weights_allowed(self):
+        """Zero weights are allowed (for subpopulation analysis)."""
         df = pd.DataFrame({"y": [1, 2, 3], "w": [1.0, 0.0, 1.0]})
         sd = SurveyDesign(weights="w")
-        with pytest.raises(ValueError, match="strictly positive"):
+        resolved = sd.resolve(df)
+        assert resolved.weights[1] == 0.0
+
+    def test_survey_design_validation_all_zero_weights_rejected(self):
+        """All-zero weights raise ValueError."""
+        df = pd.DataFrame({"y": [1, 2, 3], "w": [0.0, 0.0, 0.0]})
+        sd = SurveyDesign(weights="w")
+        with pytest.raises(ValueError, match="All weights are zero"):
             sd.resolve(df)
 
     def test_survey_design_validation_nan_weights(self):
@@ -947,7 +954,7 @@ class TestIntegration:
             }
         )
         sd = SurveyDesign(weights="w", weight_type="fweight")
-        with pytest.raises(ValueError, match="Frequency weights.*must be positive integers"):
+        with pytest.raises(ValueError, match="Frequency weights.*must be non-negative integers"):
             sd.resolve(df)
 
     def test_lonely_psu_remove_warning(self):
@@ -2360,7 +2367,7 @@ class TestRound9Fixes:
         y = np.random.randn(n)
         w = np.array([1.5, 2.3, 1.0, 2.0, 1.7, 3.0, 1.0, 2.0, 1.0, 1.0])
 
-        with pytest.raises(ValueError, match="positive integers"):
+        with pytest.raises(ValueError, match="non-negative integers"):
             solve_ols(X, y, weights=w, weight_type="fweight")
 
     def test_fractional_fweight_rejected_compute_robust_vcov(self):
@@ -2371,7 +2378,7 @@ class TestRound9Fixes:
         resid = np.random.randn(n)
         w = np.array([1.5, 2.0, 1.0, 2.0, 1.0, 3.0, 1.0, 2.0, 1.0, 1.0])
 
-        with pytest.raises(ValueError, match="positive integers"):
+        with pytest.raises(ValueError, match="non-negative integers"):
             compute_robust_vcov(X, resid, weights=w, weight_type="fweight")
 
     def test_integer_fweight_accepted(self):

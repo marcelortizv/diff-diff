@@ -705,6 +705,52 @@ class TestHausmanPretest:
         assert pretest.recommendation in ("pt_all", "pt_post", "inconclusive")
         assert pretest.df >= 0
 
+    def test_hausman_clustered_stale_ncl_after_nan_filtering(self):
+        """After filtering NaN EIF rows, n_cl must be recomputed.
+
+        If entire clusters are dropped by the row_finite filter, the original
+        n_cl overcounts clusters, inflating variance via the (n_cl / (n_cl-1))
+        correction and phantom zero rows in _cluster_aggregate.
+        """
+        rng = np.random.default_rng(99)
+        n_clusters = 10
+        units_per_cluster = 8
+        n_units = n_clusters * units_per_cluster
+        n_periods = 7
+
+        cluster_ids = np.repeat(np.arange(n_clusters), units_per_cluster)
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(1, n_periods + 1), n_units)
+        ft = np.full(n_units, np.inf)
+        # Two small treatment cohorts
+        ft[:8] = 3  # cluster 0 only
+        ft[8:24] = 5  # clusters 1-2
+
+        ft_col = np.repeat(ft, n_periods)
+        unit_fe = np.repeat(rng.normal(0, 0.3, n_units), n_periods)
+        eps = rng.normal(0, 0.3, len(units))
+        tau = np.where((ft_col < np.inf) & (times >= ft_col), 2.0, 0.0)
+        y = unit_fe + tau + eps
+
+        df = pd.DataFrame(
+            {
+                "unit": units,
+                "time": times,
+                "first_treat": ft_col,
+                "y": y,
+                "cluster_id": np.repeat(cluster_ids, n_periods),
+            }
+        )
+
+        pretest = EfficientDiD.hausman_pretest(
+            df, "y", "unit", "time", "first_treat", cluster="cluster_id"
+        )
+        assert pretest.recommendation in ("pt_all", "pt_post", "inconclusive")
+        # Key assertion: if the statistic is finite, df should reflect the
+        # actual number of clusters remaining after NaN filtering
+        if np.isfinite(pretest.statistic):
+            assert pretest.df > 0
+
     def test_hausman_last_cohort(self):
         """Hausman pretest on all-treated panel with last_cohort control."""
         df = _make_staggered_panel(

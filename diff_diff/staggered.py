@@ -379,6 +379,20 @@ class CallawaySantAnna(
                 .values
             )
 
+        # Collapse replicate weights to unit level (same groupby pattern)
+        rep_weights_unit = None
+        if resolved_survey.replicate_weights is not None:
+            R = resolved_survey.replicate_weights.shape[1]
+            rep_weights_unit = np.zeros((n_units, R))
+            for r in range(R):
+                rep_weights_unit[:, r] = (
+                    pd.Series(resolved_survey.replicate_weights[:, r], index=df.index)
+                    .groupby(df[unit_col])
+                    .first()
+                    .reindex(all_units)
+                    .values
+                )
+
         return ResolvedSurveyDesign(
             weights=weights_unit.astype(np.float64),
             weight_type=resolved_survey.weight_type,
@@ -388,6 +402,15 @@ class CallawaySantAnna(
             n_strata=resolved_survey.n_strata,
             n_psu=resolved_survey.n_psu,
             lonely_psu=resolved_survey.lonely_psu,
+            replicate_weights=rep_weights_unit,
+            replicate_method=resolved_survey.replicate_method,
+            fay_rho=resolved_survey.fay_rho,
+            n_replicates=resolved_survey.n_replicates,
+            replicate_strata=resolved_survey.replicate_strata,
+            combined_weights=resolved_survey.combined_weights,
+            replicate_scale=resolved_survey.replicate_scale,
+            replicate_rscales=resolved_survey.replicate_rscales,
+            mse=resolved_survey.mse,
         )
 
     def _precompute_structures(
@@ -585,6 +608,12 @@ class CallawaySantAnna(
         sw_treated = survey_w[treated_valid] if survey_w is not None else None
         sw_control = survey_w[control_valid] if survey_w is not None else None
 
+        # Guard against zero effective mass after subpopulation filtering
+        if sw_treated is not None and np.sum(sw_treated) <= 0:
+            return np.nan, np.nan, 0, 0, None, None
+        if sw_control is not None and np.sum(sw_control) <= 0:
+            return np.nan, np.nan, 0, 0, None, None
+
         # Get covariates if specified (from the base period)
         X_treated = None
         X_control = None
@@ -781,6 +810,9 @@ class CallawaySantAnna(
             if survey_w is not None:
                 sw_t = survey_w[treated_valid]
                 sw_c = survey_w[control_valid]
+                # Guard against zero effective mass
+                if np.sum(sw_t) <= 0 or np.sum(sw_c) <= 0:
+                    continue
                 sw_t_norm = sw_t / np.sum(sw_t)
                 sw_c_norm = sw_c / np.sum(sw_c)
                 mu_t = float(np.sum(sw_t_norm * treated_change))
@@ -842,6 +874,12 @@ class CallawaySantAnna(
         # Batch inference for all (g,t) pairs at once
         if task_keys:
             df_survey_val = precomputed.get("df_survey")
+            # Guard: replicate design with undefined df → NaN inference
+            if (df_survey_val is None
+                    and precomputed.get("resolved_survey_unit") is not None
+                    and hasattr(precomputed["resolved_survey_unit"], 'uses_replicate_variance')
+                    and precomputed["resolved_survey_unit"].uses_replicate_variance):
+                df_survey_val = 0
             t_stats, p_values, ci_lowers, ci_uppers = safe_inference_batch(
                 np.array(atts),
                 np.array(ses),
@@ -1176,8 +1214,16 @@ class CallawaySantAnna(
 
         # Batch inference
         if task_keys:
+            # Use survey df for replicate designs (propagated from precomputed)
+            _ipw_dr_df = precomputed.get("df_survey") if precomputed is not None else None
+            # Guard: replicate design with undefined df → NaN inference
+            if (_ipw_dr_df is None and precomputed is not None
+                    and precomputed.get("resolved_survey_unit") is not None
+                    and hasattr(precomputed["resolved_survey_unit"], 'uses_replicate_variance')
+                    and precomputed["resolved_survey_unit"].uses_replicate_variance):
+                _ipw_dr_df = 0
             t_stats, p_values, ci_lowers, ci_uppers = safe_inference_batch(
-                np.array(atts), np.array(ses), alpha=self.alpha
+                np.array(atts), np.array(ses), alpha=self.alpha, df=_ipw_dr_df
             )
             for idx, key in enumerate(task_keys):
                 group_time_effects[key]["t_stat"] = float(t_stats[idx])
@@ -1372,6 +1418,11 @@ class CallawaySantAnna(
         # Survey df for safe_inference calls — use the unit-level resolved
         # survey df computed in _precompute_structures for consistency.
         df_survey = precomputed.get("df_survey")
+        # Guard: replicate design with undefined df (rank <= 1) → NaN inference
+        if (df_survey is None and resolved_survey is not None
+                and hasattr(resolved_survey, 'uses_replicate_variance')
+                and resolved_survey.uses_replicate_variance):
+            df_survey = 0
 
         # Compute ATT(g,t) for each group-time combination
         min_period = min(time_periods)
@@ -1465,6 +1516,17 @@ class CallawaySantAnna(
         overall_att, overall_se = self._aggregate_simple(
             group_time_effects, influence_func_info, df, unit, precomputed
         )
+        # Re-read df_survey in case replicate aggregation updated it
+        df_survey = precomputed.get("df_survey")
+        # Propagate replicate df override to survey_metadata for display consistency
+        if df_survey is not None and survey_metadata is not None:
+            if survey_metadata.df_survey != df_survey:
+                survey_metadata.df_survey = df_survey
+        # Guard: replicate design with undefined df (rank <= 1) → NaN inference
+        if (df_survey is None and resolved_survey is not None
+                and hasattr(resolved_survey, 'uses_replicate_variance')
+                and resolved_survey.uses_replicate_variance):
+            df_survey = 0
         overall_t, overall_p, overall_ci = safe_inference(
             overall_att,
             overall_se,
@@ -1496,6 +1558,20 @@ class CallawaySantAnna(
                 precomputed=precomputed,
                 df=df,
                 unit=unit,
+            )
+
+        # Reject replicate-weight designs for bootstrap — replicate variance
+        # is an analytical alternative, not compatible with bootstrap
+        if (
+            self.n_bootstrap > 0
+            and resolved_survey is not None
+            and hasattr(resolved_survey, "uses_replicate_variance")
+            and resolved_survey.uses_replicate_variance
+        ):
+            raise NotImplementedError(
+                "CallawaySantAnna bootstrap (n_bootstrap > 0) is not supported "
+                "with replicate-weight survey designs. Replicate weights provide "
+                "analytical variance; use n_bootstrap=0 instead."
             )
 
         # Run bootstrap inference if requested

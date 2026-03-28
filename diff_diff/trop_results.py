@@ -16,7 +16,7 @@ try:
 except ImportError:
     from typing_extensions import TypedDict
 
-from diff_diff.results import _get_significance_stars
+from diff_diff.results import _format_survey_block, _get_significance_stars
 
 __all__ = [
     "_LAMBDA_INF",
@@ -208,24 +208,7 @@ class TROPResults:
         # Add survey design info
         if self.survey_metadata is not None:
             sm = self.survey_metadata
-            lines.extend(
-                [
-                    "",
-                    "-" * 75,
-                    "Survey Design".center(75),
-                    "-" * 75,
-                    f"{'Weight type:':<25} {sm.weight_type:>10}",
-                ]
-            )
-            if sm.n_strata is not None:
-                lines.append(f"{'Strata:':<25} {sm.n_strata:>10}")
-            if sm.n_psu is not None:
-                lines.append(f"{'PSU/Cluster:':<25} {sm.n_psu:>10}")
-            lines.append(f"{'Effective sample size:':<25} {sm.effective_n:>10.1f}")
-            lines.append(f"{'Design effect (DEFF):':<25} {sm.design_effect:>10.2f}")
-            if sm.df_survey is not None:
-                lines.append(f"{'Survey d.f.:':<25} {sm.df_survey:>10}")
-            lines.append("-" * 75)
+            lines.extend(_format_survey_block(sm, 75))
 
         lines.extend(
             [

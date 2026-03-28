@@ -1,7 +1,7 @@
 # Survey Data Support Roadmap
 
-This document captures planned future work for survey data support in diff-diff.
-Phases 1-4 are implemented. Phase 5 is deferred for future PRs.
+This document captures the survey data support roadmap for diff-diff.
+All phases (1-6) are implemented.
 
 ## Implemented (Phases 1-2)
 
@@ -46,7 +46,7 @@ message pointing to the planned phase or describing the limitation.
 |-----------|------|----------------|-------|
 | ImputationDiD | `imputation.py` | Analytical | Weighted iterative FE, weighted ATT aggregation, weighted conservative variance (Theorem 3); bootstrap+survey deferred |
 | TwoStageDiD | `two_stage.py` | Analytical | Weighted iterative FE, weighted Stage 2 OLS, weighted GMM sandwich variance; bootstrap+survey deferred |
-| CallawaySantAnna | `staggered.py` | Weights-only | Weights-only SurveyDesign (strata/PSU/FPC rejected); reg supports covariates, IPW/DR no-covariate only; survey-weighted WIF in aggregation; full design SEs, covariates+IPW/DR, and bootstrap+survey deferred |
+| CallawaySantAnna | `staggered.py` | Full | Full SurveyDesign (strata/PSU/FPC/replicate weights); reg supports covariates, IPW/DR no-covariate only; survey-weighted WIF in aggregation; replicate IF variance for analytical SEs |
 
 **Infrastructure**: Weighted `solve_logit()` added to `linalg.py` — survey weights
 enter the IRLS working weights as `w_survey * mu * (1 - mu)`. This also unblocked
@@ -90,16 +90,33 @@ Survey-aware bootstrap for all 8 bootstrap-using estimators. Two strategies:
 - **TROP**: cross-classified pseudo-strata (survey_stratum × treatment_group).
 - **Rust TROP**: pweight-only in Rust; full design falls to Python path.
 
-### Replicate Weight Variance
+### Replicate Weight Variance ✅ (2026-03-26)
 Re-run WLS for each replicate weight column, compute variance from distribution
-of estimates. Supports BRR, Fay's BRR, JK1, JKn, bootstrap replicate methods.
-Add `replicate_weights`, `replicate_type`, `replicate_rho` fields to SurveyDesign.
+of estimates. Supports BRR, Fay's BRR, JK1, JKn methods.
+JKn requires explicit `replicate_strata` (per-replicate stratum assignment).
+- `replicate_weights`, `replicate_method`, `fay_rho` fields on SurveyDesign
+- `compute_replicate_vcov()` for OLS-based estimators (re-runs WLS per replicate)
+- `compute_replicate_if_variance()` for IF-based estimators (reweights IF)
+- Dispatch in `LinearRegression.fit()` and `staggered_aggregation.py`
+- Replicate weights mutually exclusive with strata/PSU/FPC
+- Survey df = rank(replicate_weights) - 1, matching R's `survey::degf()`
+- **Limitations**: Supported in CallawaySantAnna, ContinuousDiD, EfficientDiD,
+  TripleDifference (analytical only, no bootstrap). Rejected with
+  `NotImplementedError` in DifferenceInDifferences, TwoWayFixedEffects,
+  MultiPeriodDiD, StackedDiD, SunAbraham, ImputationDiD, TwoStageDiD,
+  SyntheticDiD, TROP.
 
-### DEFF Diagnostics
-Compare survey vcov to SRS vcov element-wise. Report design effect per
-coefficient. Effective n = n / DEFF.
+### DEFF Diagnostics ✅ (2026-03-26)
+Per-coefficient design effects comparing survey vcov to SRS (HC1) vcov.
+- `DEFFDiagnostics` dataclass with per-coefficient DEFF, effective n, SRS/survey SE
+- `compute_deff_diagnostics()` standalone function
+- `LinearRegression.compute_deff()` post-fit method
+- Display label "Kish DEFF (weights)" for existing weight-based DEFF
 
-### Subpopulation Analysis
+### Subpopulation Analysis ✅ (2026-03-26)
 `SurveyDesign.subpopulation(data, mask)` — zero-out weights for excluded
 observations while preserving the full design structure for correct variance
 estimation (unlike simple subsetting, which would drop design information).
+- Mask: bool array/Series, column name, or callable
+- Returns (SurveyDesign, DataFrame) pair with synthetic `_subpop_weight` column
+- Weight validation relaxed: zero weights allowed (negative still rejected)

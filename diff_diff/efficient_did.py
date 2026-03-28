@@ -373,6 +373,11 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
 
         # Store survey df for safe_inference calls (t-distribution with survey df)
         self._survey_df = survey_metadata.df_survey if survey_metadata is not None else None
+        # Guard: replicate design with undefined df → NaN inference
+        if (self._survey_df is None and resolved_survey is not None
+                and hasattr(resolved_survey, 'uses_replicate_variance')
+                and resolved_survey.uses_replicate_variance):
+            self._survey_df = 0
 
         # Bootstrap + survey supported via PSU-level multiplier bootstrap.
 
@@ -516,18 +521,16 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             unit_fpc = resolved_survey.fpc[row_idx] if resolved_survey.fpc is not None else None
             n_strata_u = len(np.unique(unit_strata)) if unit_strata is not None else 0
             n_psu_u = len(np.unique(unit_psu)) if unit_psu is not None else 0
-            self._unit_resolved_survey = ResolvedSurveyDesign(
-                weights=unit_weights_s,
-                weight_type=resolved_survey.weight_type,
-                strata=unit_strata,
-                psu=unit_psu,
-                fpc=unit_fpc,
-                n_strata=n_strata_u,
-                n_psu=n_psu_u,
-                lonely_psu=resolved_survey.lonely_psu,
+            self._unit_resolved_survey = resolved_survey.subset_to_units(
+                row_idx, unit_weights_s, unit_strata, unit_psu, unit_fpc,
+                n_strata_u, n_psu_u,
             )
             # Use unit-level df (not panel-level) for t-distribution
             self._survey_df = self._unit_resolved_survey.df_survey
+            # Re-apply replicate guard: undefined df → NaN inference
+            if (self._survey_df is None
+                    and self._unit_resolved_survey.uses_replicate_variance):
+                self._survey_df = 0
         else:
             self._unit_resolved_survey = None
 
@@ -951,6 +954,18 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             )
 
         # ----- Bootstrap -----
+        # Reject replicate-weight designs for bootstrap — replicate variance
+        # is an analytical alternative, not compatible with bootstrap
+        if (
+            self.n_bootstrap > 0
+            and self._unit_resolved_survey is not None
+            and self._unit_resolved_survey.uses_replicate_variance
+        ):
+            raise NotImplementedError(
+                "EfficientDiD bootstrap (n_bootstrap > 0) is not supported "
+                "with replicate-weight survey designs. Replicate weights provide "
+                "analytical variance; use n_bootstrap=0 instead."
+            )
         bootstrap_results = None
         if self.n_bootstrap > 0 and eif_by_gt:
             bootstrap_results = self._run_multiplier_bootstrap(
@@ -1061,10 +1076,16 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         if self._unit_resolved_survey is not None:
             from diff_diff.survey import compute_survey_metadata
 
-            return compute_survey_metadata(
+            meta = compute_survey_metadata(
                 self._unit_resolved_survey,
                 self._unit_resolved_survey.weights,
             )
+            # Propagate effective replicate df if available
+            # (but not the df=0 sentinel — keep metadata as None for undefined df)
+            if (self._survey_df is not None and self._survey_df != 0
+                    and meta.df_survey != self._survey_df):
+                meta.df_survey = self._survey_df
+            return meta
         return panel_metadata
 
     # -- Survey SE helpers ----------------------------------------------------
@@ -1076,6 +1097,18 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         once in ``fit()``, ensuring consistent unit-level arrays and
         avoiding repeated subsetting of panel-level survey data.
         """
+        if self._unit_resolved_survey.uses_replicate_variance:
+            from diff_diff.survey import compute_replicate_if_variance
+
+            # Score-scale IFs to match TSL bread: psi = w * eif / sum(w)
+            w = self._unit_resolved_survey.weights
+            psi_scaled = w * eif_vals / w.sum()
+            variance, n_valid = compute_replicate_if_variance(psi_scaled, self._unit_resolved_survey)
+            # Update survey df to reflect effective replicate count
+            if n_valid < self._unit_resolved_survey.n_replicates:
+                self._survey_df = n_valid - 1 if n_valid > 1 else None
+            return float(np.sqrt(max(variance, 0.0))) if np.isfinite(variance) else np.nan
+
         from diff_diff.survey import compute_survey_vcov
 
         X_ones = np.ones((len(eif_vals), 1))
@@ -1577,6 +1610,10 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             n_units = int(np.sum(row_finite))
             if cl_idx is not None:
                 cl_idx = cl_idx[row_finite]
+                # Recompute effective cluster count and remap to contiguous
+                # indices — entire clusters may have been dropped by filtering
+                unique_cl, cl_idx = np.unique(cl_idx, return_inverse=True)
+                n_cl = len(unique_cl)
 
         # Compute full covariance matrices
         if cl_idx is not None and n_cl is not None:

@@ -355,6 +355,12 @@ class ContinuousDiD:
                     gt_results[(g, t)] = result
                     gt_bootstrap_info[(g, t)] = result.get("_bootstrap_info", {})
 
+        # Filter out NaN cells (e.g., from zero effective survey mass)
+        gt_results = {
+            gt: r for gt, r in gt_results.items()
+            if np.isfinite(r.get("att_glob", np.nan))
+        }
+
         if len(gt_results) == 0:
             raise ValueError("No valid (g,t) cells computed.")
 
@@ -390,6 +396,7 @@ class ContinuousDiD:
                 gt_bootstrap_info=gt_bootstrap_info,
                 unit_survey_weights=precomp.get("unit_survey_weights"),
                 unit_cohorts=precomp["unit_cohorts"],
+                anticipation=self.anticipation,
             )
 
         _survey_df = None  # Set by analytical branch when survey is active
@@ -509,6 +516,11 @@ class ContinuousDiD:
 
                 # Survey df for t-distribution inference (unit-level, not panel-level)
                 _survey_df = analytic.get("df_survey")
+                # Guard: replicate design with undefined df → NaN inference
+                if (_survey_df is None and resolved_survey is not None
+                        and hasattr(resolved_survey, 'uses_replicate_variance')
+                        and resolved_survey.uses_replicate_variance):
+                    _survey_df = 0
 
                 # Recompute survey_metadata from unit-level design so reported
                 # effective_n/n_psu/df_survey match the inference actually run
@@ -518,6 +530,13 @@ class ContinuousDiD:
 
                     raw_w_unit = _unit_resolved.weights
                     survey_metadata = compute_survey_metadata(_unit_resolved, raw_w_unit)
+
+                # Propagate replicate df override to survey_metadata for display
+                # (but not the df=0 sentinel — keep metadata as None for undefined df)
+                if (_survey_df is not None and _survey_df != 0
+                        and survey_metadata is not None):
+                    if survey_metadata.df_survey != _survey_df:
+                        survey_metadata.df_survey = _survey_df
 
                 overall_att_t, overall_att_p, overall_att_ci = safe_inference(
                     overall_att, overall_att_se, self.alpha, df=_survey_df
@@ -571,15 +590,8 @@ class ContinuousDiD:
                         )
                         n_strata_u = len(np.unique(us)) if us is not None else 0
                         n_psu_u = len(np.unique(up)) if up is not None else 0
-                        unit_resolved_es = ResolvedSurveyDesign(
-                            weights=uw,
-                            weight_type=resolved_survey.weight_type,
-                            strata=us,
-                            psu=up,
-                            fpc=uf,
-                            n_strata=n_strata_u,
-                            n_psu=n_psu_u,
-                            lonely_psu=resolved_survey.lonely_psu,
+                        unit_resolved_es = resolved_survey.subset_to_units(
+                            row_idx, uw, us, up, uf, n_strata_u, n_psu_u,
                         )
 
                     for e_val, info_e in event_study_effects.items():
@@ -638,12 +650,19 @@ class ContinuousDiD:
 
                         # Compute SE: survey-aware TSL or standard sqrt(sum(IF^2))
                         if unit_resolved_es is not None:
-                            X_ones_es = np.ones((n_units, 1))
-                            # Rescale IFs by total survey mass (not n_units) for fweight support
-                            tsl_scale_es = float(unit_resolved_es.weights.sum())
-                            if_es_tsl = if_es * tsl_scale_es
-                            vcov_es = compute_survey_vcov(X_ones_es, if_es_tsl, unit_resolved_es)
-                            es_se = float(np.sqrt(np.abs(vcov_es[0, 0])))
+                            if unit_resolved_es.uses_replicate_variance:
+                                from diff_diff.survey import compute_replicate_if_variance
+
+                                # Score-scale: psi = w * if_es (matches TSL bread)
+                                psi_es = unit_resolved_es.weights * if_es
+                                variance, _nv = compute_replicate_if_variance(psi_es, unit_resolved_es)
+                                es_se = float(np.sqrt(max(variance, 0.0))) if np.isfinite(variance) else np.nan
+                            else:
+                                X_ones_es = np.ones((n_units, 1))
+                                tsl_scale_es = float(unit_resolved_es.weights.sum())
+                                if_es_tsl = if_es * tsl_scale_es
+                                vcov_es = compute_survey_vcov(X_ones_es, if_es_tsl, unit_resolved_es)
+                                es_se = float(np.sqrt(np.abs(vcov_es[0, 0])))
                         else:
                             es_se = float(np.sqrt(np.sum(if_es**2)))
 
@@ -871,6 +890,14 @@ class ContinuousDiD:
         if survey_weights is not None:
             w_treated = survey_weights[treated_mask]
             w_control = survey_weights[control_mask]
+            # Guard against zero effective mass (e.g., after subpopulation)
+            if np.sum(w_treated) <= 0 or np.sum(w_control) <= 0:
+                return {
+                    "att_glob": np.nan, "acrt_glob": np.nan,
+                    "n_treated": 0, "n_control": 0,
+                    "att_d": np.full(len(dvals), np.nan),
+                    "acrt_d": np.full(len(dvals), np.nan),
+                }
 
         # Control counterfactual (weighted mean when survey weights present)
         if w_control is not None:
@@ -897,9 +924,14 @@ class ContinuousDiD:
             )
 
         # Skip if not enough treated units for OLS (need n > K for residual df)
-        if n_treated <= n_basis:
+        # When survey weights are present, use positive-weight count as
+        # the effective sample size — subpopulation() can zero weights
+        # leaving rows present but the weighted regression underidentified.
+        n_eff = int(np.count_nonzero(w_treated > 0)) if w_treated is not None else n_treated
+        if n_eff <= n_basis:
+            label = "positive-weight treated units" if w_treated is not None else "treated units"
             warnings.warn(
-                f"Not enough treated units ({n_treated}) for {n_basis} basis functions "
+                f"Not enough {label} ({n_eff}) for {n_basis} basis functions "
                 f"in (g={g}, t={t}). Skipping cell.",
                 UserWarning,
                 stacklevel=3,
@@ -1052,12 +1084,15 @@ class ContinuousDiD:
         gt_bootstrap_info: Dict[Tuple, Dict] = None,
         unit_survey_weights: Optional[np.ndarray] = None,
         unit_cohorts: Optional[np.ndarray] = None,
+        anticipation: int = 0,
     ) -> Dict[int, Dict[str, Any]]:
         """Aggregate binarized ATT_glob by relative period."""
         effects_by_e: Dict[int, List[Tuple[float, float, Tuple]]] = {}
 
         for (g, t), r in gt_results.items():
             e = t - g
+            if anticipation > 0 and e < -anticipation:
+                continue
             if e not in effects_by_e:
                 effects_by_e[e] = []
             # Compute weight for this (g,t) cell
@@ -1205,48 +1240,58 @@ class ContinuousDiD:
             n_strata_unit = len(np.unique(unit_strata)) if unit_strata is not None else 0
             n_psu_unit = len(np.unique(unit_psu)) if unit_psu is not None else 0
 
-            unit_resolved = ResolvedSurveyDesign(
-                weights=unit_weights,
-                weight_type=resolved_survey.weight_type,
-                strata=unit_strata,
-                psu=unit_psu,
-                fpc=unit_fpc,
-                n_strata=n_strata_unit,
-                n_psu=n_psu_unit,
-                lonely_psu=resolved_survey.lonely_psu,
+            unit_resolved = resolved_survey.subset_to_units(
+                row_idx, unit_weights, unit_strata, unit_psu, unit_fpc,
+                n_strata_unit, n_psu_unit,
             )
 
             X_ones = np.ones((n_units, 1))
 
-            # Rescale IFs from 1/n convention to score scale for TSL sandwich.
-            # The per-unit IFs contain internal 1/n_t, 1/n_c scaling (for the
-            # unweighted SE = sqrt(sum(IF^2)) convention). compute_survey_vcov
-            # applies its own (X'WX)^{-1} bread, which would double-count.
-            # Rescale by the unit-level total survey mass (= n_units for
-            # pweight/aweight, but can differ for fweight).
-            tsl_scale = float(unit_resolved.weights.sum())
-            if_att_glob_tsl = if_att_glob * tsl_scale
-            if_acrt_glob_tsl = if_acrt_glob * tsl_scale
-            if_att_d_tsl = if_att_d * tsl_scale
-            if_acrt_d_tsl = if_acrt_d * tsl_scale
+            if unit_resolved.uses_replicate_variance:
+                # Replicate-weight variance: score-scale IFs to match TSL bread.
+                # TSL path does: scores = w * (if * tsl_scale), bread = 1/sum(w)^2
+                # Equivalent psi for replicate: w * if_vals * tsl_scale / sum(w) = w * if_vals
+                from diff_diff.survey import compute_replicate_if_variance
 
-            # Overall ATT SE via compute_survey_vcov
-            vcov_att = compute_survey_vcov(X_ones, if_att_glob_tsl, unit_resolved)
-            overall_att_se = float(np.sqrt(np.abs(vcov_att[0, 0])))
+                _w_rep = unit_resolved.weights
+                _rep_n_valid = unit_resolved.n_replicates  # track effective count
 
-            # Overall ACRT SE via compute_survey_vcov
-            vcov_acrt = compute_survey_vcov(X_ones, if_acrt_glob_tsl, unit_resolved)
-            overall_acrt_se = float(np.sqrt(np.abs(vcov_acrt[0, 0])))
+                def _rep_se(if_vals):
+                    nonlocal _rep_n_valid
+                    psi_scaled = _w_rep * if_vals
+                    v, nv = compute_replicate_if_variance(psi_scaled, unit_resolved)
+                    _rep_n_valid = min(_rep_n_valid, nv)  # worst-case valid count
+                    return float(np.sqrt(max(v, 0.0))) if np.isfinite(v) else np.nan
 
-            # Per-grid-point SEs for dose-response curves
-            att_d_se = np.zeros(n_grid)
-            acrt_d_se = np.zeros(n_grid)
-            for d_idx in range(n_grid):
-                vcov_d = compute_survey_vcov(X_ones, if_att_d_tsl[:, d_idx], unit_resolved)
-                att_d_se[d_idx] = float(np.sqrt(np.abs(vcov_d[0, 0])))
+                overall_att_se = _rep_se(if_att_glob)
+                overall_acrt_se = _rep_se(if_acrt_glob)
+                att_d_se = np.zeros(n_grid)
+                acrt_d_se = np.zeros(n_grid)
+                for d_idx in range(n_grid):
+                    att_d_se[d_idx] = _rep_se(if_att_d[:, d_idx])
+                    acrt_d_se[d_idx] = _rep_se(if_acrt_d[:, d_idx])
+            else:
+                # TSL: rescale IFs from 1/n convention to score scale for sandwich.
+                tsl_scale = float(unit_resolved.weights.sum())
+                if_att_glob_tsl = if_att_glob * tsl_scale
+                if_acrt_glob_tsl = if_acrt_glob * tsl_scale
+                if_att_d_tsl = if_att_d * tsl_scale
+                if_acrt_d_tsl = if_acrt_d * tsl_scale
 
-                vcov_d = compute_survey_vcov(X_ones, if_acrt_d_tsl[:, d_idx], unit_resolved)
-                acrt_d_se[d_idx] = float(np.sqrt(np.abs(vcov_d[0, 0])))
+                vcov_att = compute_survey_vcov(X_ones, if_att_glob_tsl, unit_resolved)
+                overall_att_se = float(np.sqrt(np.abs(vcov_att[0, 0])))
+
+                vcov_acrt = compute_survey_vcov(X_ones, if_acrt_glob_tsl, unit_resolved)
+                overall_acrt_se = float(np.sqrt(np.abs(vcov_acrt[0, 0])))
+
+                att_d_se = np.zeros(n_grid)
+                acrt_d_se = np.zeros(n_grid)
+                for d_idx in range(n_grid):
+                    vcov_d = compute_survey_vcov(X_ones, if_att_d_tsl[:, d_idx], unit_resolved)
+                    att_d_se[d_idx] = float(np.sqrt(np.abs(vcov_d[0, 0])))
+
+                    vcov_d = compute_survey_vcov(X_ones, if_acrt_d_tsl[:, d_idx], unit_resolved)
+                    acrt_d_se[d_idx] = float(np.sqrt(np.abs(vcov_d[0, 0])))
         else:
             # SE = sqrt(sum(IF_i^2)), matching CallawaySantAnna's convention
             # (per-unit IFs already contain 1/n_t, 1/n_c scaling)
@@ -1257,7 +1302,14 @@ class ContinuousDiD:
             acrt_d_se = np.sqrt(np.sum(if_acrt_d**2, axis=0))
 
         # Return unit-level survey df and resolved design for metadata recomputation
-        unit_df_survey = unit_resolved.df_survey if resolved_survey is not None else None
+        # Only override with n_valid-based df when replicates were actually dropped
+        if resolved_survey is not None and hasattr(resolved_survey, 'uses_replicate_variance') and resolved_survey.uses_replicate_variance:
+            if _rep_n_valid < unit_resolved.n_replicates:
+                unit_df_survey = _rep_n_valid - 1 if _rep_n_valid > 1 else None
+            else:
+                unit_df_survey = unit_resolved.df_survey
+        else:
+            unit_df_survey = unit_resolved.df_survey if resolved_survey is not None else None
 
         return {
             "overall_att_se": overall_att_se,
@@ -1294,6 +1346,15 @@ class ContinuousDiD:
                 stacklevel=3,
             )
 
+        # Reject replicate-weight designs for bootstrap — replicate variance
+        # is an analytical alternative to bootstrap, not compatible with it
+        if resolved_survey is not None and hasattr(resolved_survey, "uses_replicate_variance") and resolved_survey.uses_replicate_variance:
+            raise NotImplementedError(
+                "ContinuousDiD bootstrap (n_bootstrap > 0) is not supported "
+                "with replicate-weight survey designs. Replicate weights provide "
+                "analytical variance; use n_bootstrap=0 instead."
+            )
+
         rng = np.random.default_rng(self.seed)
         n_units = precomp["n_units"]
         n_grid = len(dvals)
@@ -1314,15 +1375,9 @@ class ContinuousDiD:
             unit_fpc = resolved_survey.fpc[row_idx] if resolved_survey.fpc is not None else None
             n_strata_u = len(np.unique(unit_strata)) if unit_strata is not None else 0
             n_psu_u = len(np.unique(unit_psu)) if unit_psu is not None else 0
-            unit_resolved = ResolvedSurveyDesign(
-                weights=unit_weights,
-                weight_type=resolved_survey.weight_type,
-                strata=unit_strata,
-                psu=unit_psu,
-                fpc=unit_fpc,
-                n_strata=n_strata_u,
-                n_psu=n_psu_u,
-                lonely_psu=resolved_survey.lonely_psu,
+            unit_resolved = resolved_survey.subset_to_units(
+                row_idx, unit_weights, unit_strata, unit_psu, unit_fpc,
+                n_strata_u, n_psu_u,
             )
 
         # Generate bootstrap weights — PSU-level when survey design is present
@@ -1374,6 +1429,8 @@ class ContinuousDiD:
             for gt, r in gt_results.items():
                 g_val, t_val = gt
                 e = t_val - g_val
+                if self.anticipation > 0 and e < -self.anticipation:
+                    continue
                 if unit_sw is not None:
                     g_mask = unit_cohorts == g_val
                     cell_mass = float(np.sum(unit_sw[g_mask]))
@@ -1383,6 +1440,8 @@ class ContinuousDiD:
             for gt, r in gt_results.items():
                 g_val, t_val = gt
                 e = t_val - g_val
+                if self.anticipation > 0 and e < -self.anticipation:
+                    continue
                 if unit_sw is not None:
                     g_mask = unit_cohorts == g_val
                     cell_mass = float(np.sum(unit_sw[g_mask]))

@@ -127,6 +127,16 @@ class TwoWayFixedEffects(DifferenceInDifferences):
         resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
             _resolve_survey_for_fit(survey_design, data, self.inference)
         )
+        # Reject replicate-weight designs — TWFE within-transformation must
+        # be recomputed per replicate (same reason as SunAbraham rejection)
+        if resolved_survey is not None and resolved_survey.uses_replicate_variance:
+            raise NotImplementedError(
+                "TwoWayFixedEffects does not yet support replicate-weight "
+                "survey designs. The weighted within-transformation must be "
+                "recomputed for each replicate. Use CallawaySantAnna or "
+                "TripleDifference for replicate-weight inference, or use a "
+                "TSL-based survey design (strata/psu/fpc)."
+            )
 
         # Use unit-level clustering if not specified (use local variable to avoid mutation)
         cluster_var = self.cluster if self.cluster is not None else unit

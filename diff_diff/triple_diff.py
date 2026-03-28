@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 
 from diff_diff.linalg import solve_logit, solve_ols
-from diff_diff.results import _get_significance_stars
+from diff_diff.results import _format_survey_block, _get_significance_stars
 from diff_diff.utils import safe_inference
 
 _MIN_CELL_SIZE = 10
@@ -152,24 +152,7 @@ class TripleDifferenceResults:
         # Add survey design info
         if self.survey_metadata is not None:
             sm = self.survey_metadata
-            lines.extend(
-                [
-                    "",
-                    "-" * 75,
-                    "Survey Design".center(75),
-                    "-" * 75,
-                    f"{'Weight type:':<30} {sm.weight_type:>15}",
-                ]
-            )
-            if sm.n_strata is not None:
-                lines.append(f"{'Strata:':<30} {sm.n_strata:>15}")
-            if sm.n_psu is not None:
-                lines.append(f"{'PSU/Cluster:':<30} {sm.n_psu:>15}")
-            lines.append(f"{'Effective sample size:':<30} {sm.effective_n:>15.1f}")
-            lines.append(f"{'Design effect (DEFF):':<30} {sm.design_effect:>15.2f}")
-            if sm.df_survey is not None:
-                lines.append(f"{'Survey d.f.:':<30} {sm.df_survey:>15}")
-            lines.append("-" * 75)
+            lines.extend(_format_survey_block(sm, 75))
 
         if self.inference_method != "analytical":
             lines.append(f"{'Inference method:':<30} {self.inference_method:>15}")
@@ -495,6 +478,9 @@ class TripleDifference:
         NotImplementedError
             If survey_design is used with wild_bootstrap inference.
         """
+        # Reset replicate state from any previous fit
+        self._replicate_n_valid = None
+
         # Resolve survey design if provided
         from diff_diff.survey import (
             _inject_cluster_as_psu,
@@ -595,7 +581,21 @@ class TripleDifference:
         # Compute inference
         # When survey design is active, use survey df (n_PSU - n_strata)
         if survey_metadata is not None and survey_metadata.df_survey is not None:
-            df = max(survey_metadata.df_survey, 1)
+            df = survey_metadata.df_survey
+            # Override with effective replicate df only when replicates were dropped
+            if (hasattr(self, '_replicate_n_valid') and self._replicate_n_valid is not None
+                    and resolved_survey is not None
+                    and self._replicate_n_valid < resolved_survey.n_replicates):
+                df = self._replicate_n_valid - 1
+                survey_metadata.df_survey = self._replicate_n_valid - 1
+            # df <= 0 means insufficient rank for t-based inference
+            if df is not None and df <= 0:
+                df = 0  # Forces NaN from t-distribution
+        elif (resolved_survey is not None
+              and hasattr(resolved_survey, 'uses_replicate_variance')
+              and resolved_survey.uses_replicate_variance):
+            # Replicate design with undefined df (rank <= 1) — NaN inference
+            df = 0  # Forces NaN from t-distribution
         else:
             df = n_obs - 8  # Approximate df (8 cell means)
             if covariates:
@@ -721,7 +721,14 @@ class TripleDifference:
                     mask = (G == g_val) & (P == p_val) & (T == t_val)
                     cell_name = f"{g_name}, {p_name}, {t_name}"
                     if weights is not None:
-                        means[cell_name] = float(np.average(y[mask], weights=weights[mask]))
+                        w_cell = weights[mask]
+                        if np.sum(w_cell) <= 0:
+                            raise ValueError(
+                                f"Cell '{cell_name}' has zero effective survey "
+                                f"weight. Cannot compute weighted cell mean. "
+                                f"Check subpopulation/domain definition."
+                            )
+                        means[cell_name] = float(np.average(y[mask], weights=w_cell))
                     else:
                         means[cell_name] = float(np.mean(y[mask]))
         return means
@@ -1089,15 +1096,32 @@ class TripleDifference:
             # For reg: pairwise IFs are already on the unweighted scale (WLS
             # fits use weights but the IF is residual-based, not Riesz-weighted),
             # so pass directly to TSL without de-weighting.
-            from diff_diff.survey import compute_survey_vcov
-
             inf_for_tsl = inf_func.copy()
             if est_method in ("ipw", "dr") and survey_weights is not None:
                 sw = survey_weights
                 nz = sw > 0
                 inf_for_tsl[nz] = inf_for_tsl[nz] / sw[nz]
-            vcov_survey = compute_survey_vcov(np.ones((n, 1)), inf_for_tsl, resolved_survey)
-            se = float(np.sqrt(vcov_survey[0, 0]))
+
+            if resolved_survey.uses_replicate_variance:
+                from diff_diff.survey import compute_replicate_if_variance
+
+                # Score-scale to match TSL bread (1/sum(w)^2):
+                # reg: psi = w * inf_func / sum(w)
+                # ipw/dr: psi = inf_func / sum(w)  (survey weights cancel)
+                w_sum = float(resolved_survey.weights.sum())
+                if est_method in ("ipw", "dr") and survey_weights is not None:
+                    psi_rep = inf_func / w_sum
+                else:
+                    psi_rep = resolved_survey.weights * inf_func / w_sum
+                variance, n_valid_rep = compute_replicate_if_variance(psi_rep, resolved_survey)
+                se = float(np.sqrt(max(variance, 0.0))) if np.isfinite(variance) else np.nan
+                # Store effective replicate count for df update in fit()
+                self._replicate_n_valid = n_valid_rep
+            else:
+                from diff_diff.survey import compute_survey_vcov
+
+                vcov_survey = compute_survey_vcov(np.ones((n, 1)), inf_for_tsl, resolved_survey)
+                se = float(np.sqrt(vcov_survey[0, 0]))
         elif self._cluster_ids is not None:
             # Cluster-robust SE: sum IF within clusters, then Liang-Zeger variance
             unique_clusters = np.unique(self._cluster_ids)
@@ -1187,6 +1211,14 @@ class TripleDifference:
             if weights is not None:
                 # WLS: transform by sqrt(weights) for weighted least squares
                 w_fit = weights[fit_mask]
+                # Check positive-weight effective sample — subpopulation()
+                # can zero weights leaving rows but an underidentified WLS.
+                n_eff = int(np.count_nonzero(w_fit > 0))
+                n_cols = X_fit.shape[1]
+                if n_eff <= n_cols:
+                    if np.sum(w_fit) > 0:
+                        return np.full(n_total, np.average(y_fit, weights=w_fit))
+                    return np.full(n_total, np.mean(y_fit))
                 sqrt_w = np.sqrt(w_fit)
                 beta, _, _ = solve_ols(
                     X_fit * sqrt_w[:, np.newaxis],

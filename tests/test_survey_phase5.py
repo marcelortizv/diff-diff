@@ -852,3 +852,38 @@ class TestPinnedNumerical:
             "df_survey",
         ]:
             assert key in d, f"Missing key: {key}"
+
+
+class TestTROPRaoWuEquivalence:
+    """Test Rao-Wu vs block bootstrap equivalence under degenerate design."""
+
+    def test_rao_wu_approximates_block_no_strata(self, trop_survey_data):
+        """Without real strata variation, Rao-Wu SE ~ block bootstrap SE."""
+        from diff_diff import TROP
+
+        data = trop_survey_data.copy()
+        # Single stratum, PSU = unit (effectively block bootstrap)
+        data["single_stratum"] = 0
+        data["unit_psu"] = data["unit"]
+
+        sd_rw = SurveyDesign(
+            weights="weight", strata="single_stratum", psu="unit_psu",
+        )
+        sd_block = SurveyDesign(weights="weight")
+
+        result_rw = TROP(method="local", n_bootstrap=99, seed=42, max_iter=5).fit(
+            data, "outcome", "D", "unit", "time", survey_design=sd_rw,
+        )
+        result_block = TROP(method="local", n_bootstrap=99, seed=42, max_iter=5).fit(
+            data, "outcome", "D", "unit", "time", survey_design=sd_block,
+        )
+
+        # Point estimates identical (same weights)
+        assert result_rw.att == pytest.approx(result_block.att, abs=1e-10)
+        # SEs should be within factor of 2
+        if result_block.se > 0:
+            ratio = result_rw.se / result_block.se
+            assert 0.5 < ratio < 2.0, (
+                f"Rao-Wu SE ({result_rw.se:.4f}) and block SE "
+                f"({result_block.se:.4f}) differ by > 2x (ratio={ratio:.2f})"
+            )

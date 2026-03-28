@@ -177,6 +177,9 @@ def safe_inference(effect, se, alpha=0.05, df=None):
     """
     if not (np.isfinite(se) and se > 0):
         return np.nan, np.nan, (np.nan, np.nan)
+    if df is not None and df <= 0:
+        # Undefined degrees of freedom (e.g., rank-deficient replicate design)
+        return np.nan, np.nan, (np.nan, np.nan)
     t_stat = effect / se
     p_value = compute_p_value(t_stat, df=df)
     conf_int = compute_confidence_interval(effect, se, alpha, df=df)
@@ -212,6 +215,10 @@ def safe_inference_batch(effects, ses, alpha=0.05, df=None):
     p_values = np.full(n, np.nan)
     ci_lowers = np.full(n, np.nan)
     ci_uppers = np.full(n, np.nan)
+
+    # Undefined df (e.g., rank-deficient replicate design) → all NaN
+    if df is not None and df <= 0:
+        return t_stats, p_values, ci_lowers, ci_uppers
 
     valid = np.isfinite(ses) & (ses > 0)
     if not np.any(valid):

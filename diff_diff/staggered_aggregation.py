@@ -473,6 +473,17 @@ class CallawaySantAnnaAggregationMixin:
         resolved_survey = (
             precomputed.get("resolved_survey_unit") if precomputed is not None else None
         )
+        if resolved_survey is not None and hasattr(resolved_survey, "uses_replicate_variance") and resolved_survey.uses_replicate_variance:
+            from diff_diff.survey import compute_replicate_if_variance
+
+            variance, n_valid_rep = compute_replicate_if_variance(psi_total, resolved_survey)
+            # Update precomputed survey df to reflect valid replicate count
+            if precomputed is not None and n_valid_rep < resolved_survey.n_replicates:
+                precomputed["df_survey"] = n_valid_rep - 1 if n_valid_rep > 1 else None
+            if np.isnan(variance):
+                return np.nan
+            return np.sqrt(max(variance, 0.0))
+
         if resolved_survey is not None and (
             resolved_survey.strata is not None
             or resolved_survey.psu is not None
@@ -606,6 +617,12 @@ class CallawaySantAnnaAggregationMixin:
         if not agg_effects_list:
             return {}
         df_survey_val = precomputed.get("df_survey") if precomputed is not None else None
+        # Guard: replicate design with undefined df → NaN inference
+        if (df_survey_val is None and precomputed is not None
+                and precomputed.get("resolved_survey_unit") is not None
+                and hasattr(precomputed["resolved_survey_unit"], 'uses_replicate_variance')
+                and precomputed["resolved_survey_unit"].uses_replicate_variance):
+            df_survey_val = 0
         t_stats, p_values, ci_lowers, ci_uppers = safe_inference_batch(
             np.array(agg_effects_list),
             np.array(agg_ses_list),
@@ -699,6 +716,12 @@ class CallawaySantAnnaAggregationMixin:
         agg_effects = np.array([x[1] for x in group_data_list])
         agg_ses = np.array([x[2] for x in group_data_list])
         df_survey_val = precomputed.get("df_survey") if precomputed is not None else None
+        # Guard: replicate design with undefined df → NaN inference
+        if (df_survey_val is None and precomputed is not None
+                and precomputed.get("resolved_survey_unit") is not None
+                and hasattr(precomputed["resolved_survey_unit"], 'uses_replicate_variance')
+                and precomputed["resolved_survey_unit"].uses_replicate_variance):
+            df_survey_val = 0
         t_stats, p_values, ci_lowers, ci_uppers = safe_inference_batch(
             agg_effects,
             agg_ses,

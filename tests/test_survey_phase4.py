@@ -202,7 +202,7 @@ class TestWeightedSolveLogit:
         y = (X @ [0.5, -0.5] + rng.randn(n) > 0).astype(float)
         weights = np.ones(n)
         weights[0] = -1.0
-        with pytest.raises(ValueError, match="strictly positive"):
+        with pytest.raises(ValueError, match="non-negative"):
             solve_logit(X, y, weights=weights)
 
     def test_wrong_shape_weights_raises(self):
@@ -1509,3 +1509,23 @@ class TestScaleInvariance:
 
         assert abs(r1.overall_att - r2.overall_att) < 1e-10
         assert abs(r1.overall_se - r2.overall_se) < 1e-8
+
+
+class TestCallawaySantAnnaFullDesignBootstrap:
+    """Test full-design bootstrap for CS with strata+PSU+FPC."""
+
+    def test_bootstrap_full_design_cs(self, staggered_survey_data):
+        """Bootstrap + full survey (strata+PSU+FPC) works for CS."""
+        sd = SurveyDesign(
+            weights="weight", strata="stratum", psu="psu", fpc="fpc",
+        )
+        result = CallawaySantAnna(
+            estimation_method="reg", n_bootstrap=30, seed=42,
+        ).fit(
+            staggered_survey_data, "outcome", "unit", "period",
+            "first_treat", survey_design=sd,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.survey_metadata is not None
+        assert result.survey_metadata.n_strata is not None

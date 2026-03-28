@@ -402,11 +402,16 @@ def _validate_weights(weights, weight_type, n):
             raise ValueError("Weights contain Inf values")
         if np.any(weights < 0):
             raise ValueError("Weights must be non-negative")
+        if np.sum(weights) <= 0:
+            raise ValueError(
+                "Weights sum to zero — no observations have positive weight. "
+                "Cannot fit a model on an empty effective sample."
+            )
         if weight_type == "fweight":
             fractional = weights - np.round(weights)
             if np.any(np.abs(fractional) > 1e-10):
                 raise ValueError(
-                    "Frequency weights (fweight) must be positive integers. "
+                    "Frequency weights (fweight) must be non-negative integers. "
                     "Fractional values detected. Use pweight for non-integer weights."
                 )
     return weights
@@ -1041,10 +1046,16 @@ def _compute_robust_vcov_numpy(
     else:
         bread_matrix = X.T @ X
 
-    # Effective n for df computation (fweights use sum(w))
+    # Effective n for df computation
+    # fweights: sum(w) (frequency expansion)
+    # pweight/aweight with zeros: positive-weight count (zero-weight rows
+    # contribute nothing to the sandwich and should not inflate df)
     n_eff = n
-    if weights is not None and weight_type == "fweight":
-        n_eff = int(round(np.sum(weights)))
+    if weights is not None:
+        if weight_type == "fweight":
+            n_eff = int(round(np.sum(weights)))
+        elif np.any(weights == 0):
+            n_eff = int(np.count_nonzero(weights > 0))
 
     # Compute weighted scores for cluster-robust meat (outer product of sums).
     # pweight/fweight multiply by w; aweight and unweighted use raw residuals.
@@ -1053,6 +1064,9 @@ def _compute_robust_vcov_numpy(
         scores = X * (weights * residuals)[:, np.newaxis]
     else:
         scores = X * residuals[:, np.newaxis]
+        # Zero out scores for zero-weight aweight rows (subpopulation invariance)
+        if weights is not None and np.any(weights == 0):
+            scores[weights == 0] = 0.0
 
     if cluster_ids is None:
         # HC1 (heteroskedasticity-robust) standard errors
@@ -1069,6 +1083,11 @@ def _compute_robust_vcov_numpy(
         cluster_ids = np.asarray(cluster_ids)
         unique_clusters = np.unique(cluster_ids)
         n_clusters = len(unique_clusters)
+
+        # Exclude clusters with zero total weight (subpopulation-zeroed)
+        if weights is not None and weight_type != "fweight" and np.any(weights == 0):
+            cluster_weights = pd.Series(weights).groupby(cluster_ids).sum()
+            n_clusters = int((cluster_weights > 0).sum())
 
         if n_clusters < 2:
             raise ValueError(f"Need at least 2 clusters for cluster-robust SEs, got {n_clusters}")
@@ -1166,8 +1185,12 @@ def solve_logit(
             raise ValueError("weights contain NaN values")
         if np.any(~np.isfinite(weights)):
             raise ValueError("weights contain Inf values")
-        if np.any(weights <= 0):
-            raise ValueError("weights must be strictly positive")
+        if np.any(weights < 0):
+            raise ValueError("weights must be non-negative")
+        if np.sum(weights) <= 0:
+            raise ValueError(
+                "weights sum to zero — no observations have positive weight"
+            )
 
     # Validate rank_deficient_action
     valid_actions = {"warn", "error", "silent"}
@@ -1177,7 +1200,57 @@ def solve_logit(
             f"got '{rank_deficient_action}'"
         )
 
-    # Check rank deficiency once before iterating
+    # Track original column count for coefficient expansion at the end
+    k_original = X_with_intercept.shape[1]
+    eff_dropped_original: list = []  # indices in original column space
+
+    # Validate effective weighted sample when weights have zeros
+    if weights is not None and np.any(weights == 0):
+        pos_mask = weights > 0
+        n_pos = int(np.sum(pos_mask))
+        y_pos = y[pos_mask]
+        # Need both outcome classes in the positive-weight subset
+        unique_y = np.unique(y_pos)
+        if len(unique_y) < 2:
+            raise ValueError(
+                f"Positive-weight observations have only {len(unique_y)} "
+                f"outcome class(es). Logistic regression requires both 0 and 1 "
+                f"in the effective (positive-weight) sample."
+            )
+        # Check rank deficiency on positive-weight rows FIRST — full design
+        # may be full rank due to zero-weight padding. Drop columns before
+        # checking sample-size identification.
+        X_eff = X_with_intercept[pos_mask]
+        eff_rank_info = _detect_rank_deficiency(X_eff)
+        if len(eff_rank_info[1]) > 0:
+            n_dropped_eff = len(eff_rank_info[1])
+            if rank_deficient_action == "error":
+                raise ValueError(
+                    f"Effective (positive-weight) sample is rank-deficient: "
+                    f"{n_dropped_eff} linearly dependent column(s). "
+                    f"Cannot identify logistic model on this subpopulation."
+                )
+            elif rank_deficient_action == "warn":
+                warnings.warn(
+                    f"Effective (positive-weight) sample is rank-deficient: "
+                    f"dropping {n_dropped_eff} column(s). Propensity estimates "
+                    f"may be unreliable on this subpopulation.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            # Drop columns and track original indices for final expansion
+            eff_dropped_original = list(eff_rank_info[1])
+            X_with_intercept = np.delete(X_with_intercept, eff_rank_info[1], axis=1)
+            k = X_with_intercept.shape[1]
+        # Check sample-size identification AFTER column dropping
+        if n_pos <= k:
+            raise ValueError(
+                f"Only {n_pos} positive-weight observation(s) for "
+                f"{k} parameters (after rank reduction). "
+                f"Cannot identify logistic model."
+            )
+
+    # Check rank deficiency once before iterating (on possibly-shrunk matrix)
     rank_info = _detect_rank_deficiency(X_with_intercept)
     rank, dropped_cols, _ = rank_info
     if len(dropped_cols) > 0:
@@ -1273,10 +1346,21 @@ def solve_logit(
                 stacklevel=2,
             )
 
-    # Expand beta back to full size if columns were dropped
-    if len(dropped_cols) > 0:
-        beta_full = np.zeros(k)
-        beta_full[kept_cols] = beta_solve
+    # Expand beta back to original column count, accounting for columns
+    # dropped in both the effective-sample check and the full-sample check
+    if len(dropped_cols) > 0 or len(eff_dropped_original) > 0:
+        # First expand from X_solve columns back to post-eff-drop columns
+        # Use NaN for dropped coefficients (R convention: not estimable)
+        beta_post_eff = np.full(k, np.nan)
+        beta_post_eff[kept_cols] = beta_solve
+
+        # Then expand from post-eff-drop columns back to original columns
+        if len(eff_dropped_original) > 0:
+            beta_full = np.full(k_original, np.nan)
+            kept_original = [i for i in range(k_original) if i not in eff_dropped_original]
+            beta_full[kept_original] = beta_post_eff
+        else:
+            beta_full = beta_post_eff
     else:
         beta_full = beta_solve
 
@@ -1592,6 +1676,9 @@ class LinearRegression:
         X = np.asarray(X, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
 
+        # Reset replicate df from any previous fit
+        self._replicate_df = None
+
         # Add intercept if requested
         if self.include_intercept:
             X = np.column_stack([np.ones(X.shape[0]), X])
@@ -1670,10 +1757,14 @@ class LinearRegression:
             nan_mask = np.isnan(coefficients)
             k_effective = k - np.sum(nan_mask)  # Number of identified coefficients
 
-            # For fweights, df uses sum(w) - k (effective sample size)
+            # Effective n for df: fweights use sum(w), pweight/aweight with
+            # zeros use positive-weight count (zero-weight rows don't contribute)
             n_eff_df = n
-            if self.weights is not None and self.weight_type == "fweight":
-                n_eff_df = int(round(np.sum(self.weights)))
+            if self.weights is not None:
+                if self.weight_type == "fweight":
+                    n_eff_df = int(round(np.sum(self.weights)))
+                elif np.any(self.weights == 0):
+                    n_eff_df = int(np.count_nonzero(self.weights > 0))
 
             if k_effective == 0:
                 # All coefficients dropped - no valid inference
@@ -1721,20 +1812,54 @@ class LinearRegression:
 
         # Compute survey vcov if applicable
         if _use_survey_vcov:
-            from diff_diff.survey import compute_survey_vcov
+            from diff_diff.survey import ResolvedSurveyDesign as _RSD
 
-            nan_mask = np.isnan(coefficients)
-            if np.any(nan_mask):
-                kept_cols = np.where(~nan_mask)[0]
-                if len(kept_cols) > 0:
-                    vcov_reduced = compute_survey_vcov(
-                        X[:, kept_cols], residuals, _effective_survey_design
-                    )
-                    vcov = _expand_vcov_with_nan(vcov_reduced, X.shape[1], kept_cols)
+            _uses_rep = (
+                isinstance(_effective_survey_design, _RSD)
+                and _effective_survey_design.uses_replicate_variance
+            )
+
+            if _uses_rep:
+                from diff_diff.survey import compute_replicate_vcov
+
+                nan_mask = np.isnan(coefficients)
+                if np.any(nan_mask):
+                    kept_cols = np.where(~nan_mask)[0]
+                    if len(kept_cols) > 0:
+                        vcov_reduced, _n_valid_rep = compute_replicate_vcov(
+                            X[:, kept_cols], y, coefficients[kept_cols],
+                            _effective_survey_design,
+                            weight_type=self.weight_type,
+                        )
+                        vcov = _expand_vcov_with_nan(vcov_reduced, X.shape[1], kept_cols)
+                    else:
+                        vcov = np.full((X.shape[1], X.shape[1]), np.nan)
+                        _n_valid_rep = 0
                 else:
-                    vcov = np.full((X.shape[1], X.shape[1]), np.nan)
+                    vcov, _n_valid_rep = compute_replicate_vcov(
+                        X, y, coefficients, _effective_survey_design,
+                        weight_type=self.weight_type,
+                    )
+                # Store effective replicate df only when replicates were dropped
+                if _n_valid_rep < _effective_survey_design.n_replicates:
+                    self._replicate_df = _n_valid_rep - 1 if _n_valid_rep > 1 else None
+                else:
+                    self._replicate_df = None  # use rank-based df from design
             else:
-                vcov = compute_survey_vcov(X, residuals, _effective_survey_design)
+                from diff_diff.survey import compute_survey_vcov
+
+                nan_mask = np.isnan(coefficients)
+                if np.any(nan_mask):
+                    kept_cols = np.where(~nan_mask)[0]
+                    if len(kept_cols) > 0:
+                        vcov_reduced = compute_survey_vcov(
+                            X[:, kept_cols], residuals, _effective_survey_design
+                        )
+                        vcov = _expand_vcov_with_nan(vcov_reduced, X.shape[1], kept_cols)
+                    else:
+                        vcov = np.full((X.shape[1], X.shape[1]), np.nan)
+                else:
+                    vcov = compute_survey_vcov(X, residuals, _effective_survey_design)
 
         # Store fitted attributes
         self.coefficients_ = coefficients
@@ -1750,10 +1875,14 @@ class LinearRegression:
         # This is needed for correct degrees of freedom in inference
         nan_mask = np.isnan(coefficients)
         self.n_params_effective_ = int(self.n_params_ - np.sum(nan_mask))
-        # For fweights, df uses sum(w) - k (effective sample size)
+        # Effective n for df: fweights use sum(w), pweight/aweight with
+        # zeros use positive-weight count (matches compute_robust_vcov)
         n_eff_df = self.n_obs_
-        if self.weights is not None and self.weight_type == "fweight":
-            n_eff_df = int(round(np.sum(self.weights)))
+        if self.weights is not None:
+            if self.weight_type == "fweight":
+                n_eff_df = int(round(np.sum(self.weights)))
+            elif np.any(self.weights == 0):
+                n_eff_df = int(np.count_nonzero(self.weights > 0))
         self.df_ = n_eff_df - self.n_params_effective_ - df_adjustment
 
         # Survey degrees of freedom: n_PSU - n_strata (overrides standard df)
@@ -1763,8 +1892,73 @@ class LinearRegression:
 
             if isinstance(_effective_survey_design, ResolvedSurveyDesign):
                 self.survey_df_ = _effective_survey_design.df_survey
+                # Override with effective replicate df if available
+                if hasattr(self, '_replicate_df') and self._replicate_df is not None:
+                    self.survey_df_ = self._replicate_df
 
         return self
+
+    def compute_deff(self, coefficient_names=None):
+        """Compute per-coefficient design effect diagnostics.
+
+        Compares the survey vcov to an SRS (HC1) baseline.  Must be called
+        after ``fit()`` with a survey design.
+
+        Returns
+        -------
+        DEFFDiagnostics
+        """
+        self._check_fitted()
+        if not (hasattr(self, 'survey_design') and self.survey_design is not None):
+            raise ValueError(
+                "compute_deff() requires a survey design. "
+                "Fit with survey_design= first."
+            )
+        from diff_diff.survey import compute_deff_diagnostics
+
+        # Handle rank-deficient fits: compute DEFF only on kept columns,
+        # then expand back with NaN for dropped columns
+        nan_mask = np.isnan(self.coefficients_)
+        if np.any(nan_mask):
+            kept = np.where(~nan_mask)[0]
+            if len(kept) == 0:
+                k = len(self.coefficients_)
+                nan_arr = np.full(k, np.nan)
+                from diff_diff.survey import DEFFDiagnostics
+                return DEFFDiagnostics(
+                    deff=nan_arr, effective_n=nan_arr.copy(),
+                    srs_se=nan_arr.copy(), survey_se=nan_arr.copy(),
+                    coefficient_names=coefficient_names,
+                )
+            # Compute on kept columns only
+            X_kept = self._X[:, kept]
+            vcov_kept = self.vcov_[np.ix_(kept, kept)]
+            deff_kept = compute_deff_diagnostics(
+                X_kept, self.residuals_, vcov_kept,
+                self.weights, weight_type=self.weight_type,
+            )
+            # Expand back to full size with NaN for dropped
+            k = len(self.coefficients_)
+            full_deff = np.full(k, np.nan)
+            full_eff_n = np.full(k, np.nan)
+            full_srs_se = np.full(k, np.nan)
+            full_survey_se = np.full(k, np.nan)
+            full_deff[kept] = deff_kept.deff
+            full_eff_n[kept] = deff_kept.effective_n
+            full_srs_se[kept] = deff_kept.srs_se
+            full_survey_se[kept] = deff_kept.survey_se
+            from diff_diff.survey import DEFFDiagnostics
+            return DEFFDiagnostics(
+                deff=full_deff, effective_n=full_eff_n,
+                srs_se=full_srs_se, survey_se=full_survey_se,
+                coefficient_names=coefficient_names,
+            )
+
+        return compute_deff_diagnostics(
+            self._X, self.residuals_, self.vcov_,
+            self.weights, weight_type=self.weight_type,
+            coefficient_names=coefficient_names,
+        )
 
     def _check_fitted(self) -> None:
         """Raise error if model has not been fitted."""
@@ -1859,11 +2053,25 @@ class LinearRegression:
             effective_df = df
         elif self.survey_df_ is not None:
             effective_df = self.survey_df_
+        elif (hasattr(self, 'survey_design') and self.survey_design is not None
+              and hasattr(self.survey_design, 'uses_replicate_variance')
+              and self.survey_design.uses_replicate_variance):
+            # Replicate design with undefined df (rank <= 1) — NaN inference
+            warnings.warn(
+                "Replicate design has undefined survey d.f. (rank <= 1). "
+                "Inference fields will be NaN.",
+                UserWarning, stacklevel=2,
+            )
+            effective_df = 0  # Forces NaN from t-distribution
         else:
             effective_df = self.df_
 
         # Warn if df is non-positive and fall back to normal distribution
-        if effective_df is not None and effective_df <= 0:
+        # (skip for replicate designs — df=0 is intentional for NaN inference)
+        _is_replicate = (hasattr(self, 'survey_design') and self.survey_design is not None
+                         and hasattr(self.survey_design, 'uses_replicate_variance')
+                         and self.survey_design.uses_replicate_variance)
+        if effective_df is not None and effective_df <= 0 and not _is_replicate:
             import warnings
 
             warnings.warn(

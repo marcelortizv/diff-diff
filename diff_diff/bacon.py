@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from diff_diff.results import _format_survey_block
 from diff_diff.utils import within_transform as _within_transform_util
 
 
@@ -144,23 +145,7 @@ class BaconDecompositionResults:
         # Add survey design info
         if self.survey_metadata is not None:
             sm = self.survey_metadata
-            lines.extend(
-                [
-                    "-" * 85,
-                    "Survey Design".center(85),
-                    "-" * 85,
-                    f"{'Weight type:':<35} {sm.weight_type:>10}",
-                ]
-            )
-            if sm.n_strata is not None:
-                lines.append(f"{'Strata:':<35} {sm.n_strata:>10}")
-            if sm.n_psu is not None:
-                lines.append(f"{'PSU/Cluster:':<35} {sm.n_psu:>10}")
-            lines.append(f"{'Effective sample size:':<35} {sm.effective_n:>10.1f}")
-            lines.append(f"{'Design effect (DEFF):':<35} {sm.design_effect:>10.2f}")
-            if sm.df_survey is not None:
-                lines.append(f"{'Survey d.f.:':<35} {sm.df_survey:>10}")
-            lines.extend(["-" * 85, ""])
+            lines.extend(_format_survey_block(sm, 85))
 
         lines.extend(
             [
@@ -477,6 +462,13 @@ class BaconDecomposition:
         resolved_survey, survey_weights, survey_weight_type, survey_metadata = (
             _resolve_survey_for_fit(survey_design, data, "analytical")
         )
+        # Reject replicate-weight designs — Bacon decomposition is a
+        # diagnostic that does not compute replicate-based variance
+        if resolved_survey is not None and resolved_survey.uses_replicate_variance:
+            raise NotImplementedError(
+                "BaconDecomposition does not support replicate-weight survey "
+                "designs. Use a TSL-based survey design (strata/psu/fpc)."
+            )
 
         # Validate within-unit constancy for exact survey weights only.
         # The exact-weight path collapses to per-unit weights via groupby().first(),
@@ -591,6 +583,13 @@ class BaconDecomposition:
                 first_treat,
                 time_periods,
                 weights=survey_weights,
+            )
+
+        if not comparisons:
+            raise ValueError(
+                "No valid 2x2 comparisons remain after filtering. "
+                "All cells have zero effective weight or insufficient data. "
+                "Check subpopulation/domain definition."
             )
 
         # Normalize weights to sum to 1
@@ -849,11 +848,19 @@ class BaconDecomposition:
         never_post_mask = never_mask & df[time].isin(post_periods)
 
         # Guard against empty cells (unbalanced/filtered panels)
+        # Also check positive weight mass for survey/subpopulation designs
         if not (
             np.any(treated_pre_mask)
             and np.any(treated_post_mask)
             and np.any(never_pre_mask)
             and np.any(never_post_mask)
+        ):
+            return None
+        if (
+            np.sum(w[treated_pre_mask]) <= 0
+            or np.sum(w[treated_post_mask]) <= 0
+            or np.sum(w[never_pre_mask]) <= 0
+            or np.sum(w[never_post_mask]) <= 0
         ):
             return None
 
@@ -966,12 +973,19 @@ class BaconDecomposition:
         control_pre_mask = control_mask & df[time].isin(pre_periods)
         control_post_mask = control_mask & df[time].isin(post_periods)
 
-        # Skip if any cell is empty
+        # Skip if any cell is empty or has zero effective weight
         if (
             treated_pre_mask.sum() == 0
             or treated_post_mask.sum() == 0
             or control_pre_mask.sum() == 0
             or control_post_mask.sum() == 0
+        ):
+            return None
+        if (
+            np.sum(w[treated_pre_mask]) <= 0
+            or np.sum(w[treated_post_mask]) <= 0
+            or np.sum(w[control_pre_mask]) <= 0
+            or np.sum(w[control_post_mask]) <= 0
         ):
             return None
 

@@ -1195,3 +1195,83 @@ class TestReviewRegressions:
             if np.isfinite(row["effect"]) and np.isfinite(row["se"]) and row["se"] > 0:
                 _, expected_p, _ = safe_inference(row["effect"], row["se"], df=sm.df_survey)
                 assert row["p_value"] == pytest.approx(expected_p, rel=1e-10)
+
+
+# =============================================================================
+# Survey Edge Case Coverage Gaps
+# =============================================================================
+
+
+class TestSurveyEdgeCases:
+    """Tests for FPC census, single-PSU NaN, and full-design bootstrap."""
+
+    def test_fpc_census_zero_variance_stacked(self, staggered_survey_data):
+        """When FPC == n_PSU (full census), sampling variance should be ~0."""
+        from diff_diff import StackedDiD
+
+        data = staggered_survey_data.copy()
+        # Set FPC = n_PSU per stratum (census)
+        for h in data["stratum"].unique():
+            mask = data["stratum"] == h
+            n_psu_h = data.loc[mask, "psu"].nunique()
+            data.loc[mask, "fpc"] = float(n_psu_h)
+
+        sd = SurveyDesign(
+            weights="weight", strata="stratum", psu="psu", fpc="fpc",
+            nest=True,
+        )
+        result = StackedDiD().fit(
+            data, "outcome", "unit", "time", "first_treat",
+            survey_design=sd,
+        )
+        assert result.overall_se == pytest.approx(0.0, abs=1e-10)
+
+    def test_single_psu_lonely_remove_nan_se(self, staggered_survey_data):
+        """All strata with 1 PSU + lonely_psu='remove' -> NaN SE."""
+        from diff_diff import SunAbraham
+
+        data = staggered_survey_data.copy()
+        # Force all units into a single PSU per stratum
+        data["single_psu"] = data["stratum"]
+
+        sd = SurveyDesign(
+            weights="weight", strata="stratum", psu="single_psu",
+            lonely_psu="remove",
+        )
+        with pytest.warns(UserWarning, match="only 1 PSU"):
+            result = SunAbraham().fit(
+                data, "outcome", "unit", "time", "first_treat",
+                survey_design=sd,
+            )
+        # All strata removed -> NaN SE
+        assert np.isnan(result.overall_se)
+
+    def test_full_design_bootstrap_continuous_did(self, staggered_survey_data):
+        """Bootstrap with strata survey design works for ContinuousDiD."""
+        from diff_diff import ContinuousDiD
+
+        data = staggered_survey_data.copy()
+        # Add dose column
+        data["dose"] = np.where(data["first_treat"] > 0, 1.0 + 0.5 * data["unit"] % 3, 0.0)
+
+        sd = SurveyDesign(weights="weight", strata="stratum")
+        result = ContinuousDiD(n_bootstrap=30, seed=42).fit(
+            data, "outcome", "unit", "time", "first_treat", "dose",
+            survey_design=sd,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_att_se)
+        assert result.survey_metadata is not None
+
+    def test_full_design_bootstrap_efficient_did(self, staggered_survey_data):
+        """Bootstrap with strata survey design works for EfficientDiD."""
+        from diff_diff import EfficientDiD
+
+        sd = SurveyDesign(weights="weight", strata="stratum")
+        result = EfficientDiD(n_bootstrap=30, seed=42).fit(
+            staggered_survey_data, "outcome", "unit", "time", "first_treat",
+            survey_design=sd,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.survey_metadata is not None

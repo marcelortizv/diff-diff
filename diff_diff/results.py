@@ -11,6 +11,41 @@ import numpy as np
 import pandas as pd
 
 
+def _format_survey_block(sm, width: int) -> list:
+    """Format survey design metadata block for summary() output.
+
+    Parameters
+    ----------
+    sm : SurveyMetadata
+        Survey metadata from results object.
+    width : int
+        Total width for separator lines and centering.
+    """
+    label_width = 30 if width >= 80 else 25
+    lines = [
+        "",
+        "-" * width,
+        "Survey Design".center(width),
+        "-" * width,
+        f"{'Weight type:':<{label_width}} {sm.weight_type:>10}",
+    ]
+    if getattr(sm, "replicate_method", None) is not None:
+        lines.append(f"{'Replicate method:':<{label_width}} {sm.replicate_method:>10}")
+        if getattr(sm, "n_replicates", None) is not None:
+            lines.append(f"{'Replicates:':<{label_width}} {sm.n_replicates:>10}")
+    else:
+        if sm.n_strata is not None:
+            lines.append(f"{'Strata:':<{label_width}} {sm.n_strata:>10}")
+        if sm.n_psu is not None:
+            lines.append(f"{'PSU/Cluster:':<{label_width}} {sm.n_psu:>10}")
+    lines.append(f"{'Effective sample size:':<{label_width}} {sm.effective_n:>10.1f}")
+    lines.append(f"{'Kish DEFF (weights):':<{label_width}} {sm.design_effect:>10.2f}")
+    if sm.df_survey is not None:
+        lines.append(f"{'Survey d.f.:':<{label_width}} {sm.df_survey:>10}")
+    lines.append("-" * width)
+    return lines
+
+
 @dataclass
 class DiDResults:
     """
@@ -103,24 +138,7 @@ class DiDResults:
         # Add survey design info
         if self.survey_metadata is not None:
             sm = self.survey_metadata
-            lines.extend(
-                [
-                    "",
-                    "-" * 70,
-                    "Survey Design".center(70),
-                    "-" * 70,
-                    f"{'Weight type:':<25} {sm.weight_type:>10}",
-                ]
-            )
-            if sm.n_strata is not None:
-                lines.append(f"{'Strata:':<25} {sm.n_strata:>10}")
-            if sm.n_psu is not None:
-                lines.append(f"{'PSU/Cluster:':<25} {sm.n_psu:>10}")
-            lines.append(f"{'Effective sample size:':<25} {sm.effective_n:>10.1f}")
-            lines.append(f"{'Design effect (DEFF):':<25} {sm.design_effect:>10.2f}")
-            if sm.df_survey is not None:
-                lines.append(f"{'Survey d.f.:':<25} {sm.df_survey:>10}")
-            lines.append("-" * 70)
+            lines.extend(_format_survey_block(sm, 70))
 
         # Add inference method info
         if self.inference_method != "analytical":
@@ -405,24 +423,7 @@ class MultiPeriodDiDResults:
         # Add survey design info
         if self.survey_metadata is not None:
             sm = self.survey_metadata
-            lines.extend(
-                [
-                    "",
-                    "-" * 80,
-                    "Survey Design".center(80),
-                    "-" * 80,
-                    f"{'Weight type:':<25} {sm.weight_type:>10}",
-                ]
-            )
-            if sm.n_strata is not None:
-                lines.append(f"{'Strata:':<25} {sm.n_strata:>10}")
-            if sm.n_psu is not None:
-                lines.append(f"{'PSU/Cluster:':<25} {sm.n_psu:>10}")
-            lines.append(f"{'Effective sample size:':<25} {sm.effective_n:>10.1f}")
-            lines.append(f"{'Design effect (DEFF):':<25} {sm.design_effect:>10.2f}")
-            if sm.df_survey is not None:
-                lines.append(f"{'Survey d.f.:':<25} {sm.df_survey:>10}")
-            lines.append("-" * 80)
+            lines.extend(_format_survey_block(sm, 80))
 
         # Pre-period effects (parallel trends test)
         pre_effects = {p: pe for p, pe in self.period_effects.items() if p in self.pre_periods}
@@ -740,24 +741,7 @@ class SyntheticDiDResults:
         # Add survey design info
         if self.survey_metadata is not None:
             sm = self.survey_metadata
-            lines.extend(
-                [
-                    "",
-                    "-" * 75,
-                    "Survey Design".center(75),
-                    "-" * 75,
-                    f"{'Weight type:':<25} {sm.weight_type:>10}",
-                ]
-            )
-            if sm.n_strata is not None:
-                lines.append(f"{'Strata:':<25} {sm.n_strata:>10}")
-            if sm.n_psu is not None:
-                lines.append(f"{'PSU/Cluster:':<25} {sm.n_psu:>10}")
-            lines.append(f"{'Effective sample size:':<25} {sm.effective_n:>10.1f}")
-            lines.append(f"{'Design effect (DEFF):':<25} {sm.design_effect:>10.2f}")
-            if sm.df_survey is not None:
-                lines.append(f"{'Survey d.f.:':<25} {sm.df_survey:>10}")
-            lines.append("-" * 75)
+            lines.extend(_format_survey_block(sm, 75))
 
         lines.extend(
             [

@@ -1907,9 +1907,9 @@ unequal selection probabilities).
 - **Note:** pweight HC1 meat uses score outer products (Σ s_i s_i' where
   s_i = w_i x_i u_i), giving w² in the meat. fweight HC1 meat uses
   X'diag(w u²)X (one power of w), matching frequency-expanded HC1.
-- **Note:** fweights must be positive integers; fractional values are
-  rejected by `_validate_weights()`. This matches Stata's convention and
-  avoids ambiguous frequency semantics.
+- **Note:** fweights must be non-negative integers; fractional values are
+  rejected by `_validate_weights()`. All-zero vectors rejected at solver
+  level. This matches Stata's convention.
 
 ### Absorbed Fixed Effects with Survey Weights
 
@@ -1993,10 +1993,128 @@ ContinuousDiD, EfficientDiD):
   tau values once and only varies the ATT aggregation weights across draws. This is
   mathematically equivalent to refitting per draw and avoids redundant computation.
 
+### Replicate Weight Variance (Phase 6)
+
+Alternative to TSL: re-run WLS for each replicate weight column and compute
+variance from the distribution of replicate estimates.
+
+- **Reference**: Wolter (2007) "Introduction to Variance Estimation", 2nd ed.
+  Rao & Wu (1988).
+- **Supported methods**: BRR, Fay's BRR, JK1, JKn
+- **Formulas**:
+  - BRR: `V = (1/R) * sum_r (theta_r - theta)^2`
+  - Fay: `V = 1/(R*(1-rho)^2) * sum_r (theta_r - theta)^2`
+  - JK1: `V = (R-1)/R * sum_r (theta_r - theta)^2`
+  - JKn: `V = sum_h ((n_h-1)/n_h) * sum_{r in h} (theta_r - theta)^2`
+- **IF-based replicate variance**: For influence-function estimators (CS
+  aggregation, ContinuousDiD, EfficientDiD, TripleDifference), replicate
+  contrasts are formed via weight-ratio rescaling:
+  `theta_r = sum((w_r/w_full) * psi)` when `combined_weights=True`,
+  `theta_r = sum(w_r * psi)` when `combined_weights=False`.
+- **Survey df**: QR-rank of the analysis-weight matrix minus 1,
+  matching R's `survey::degf()` which uses `qr(..., tol=1e-5)$rank`.
+  For `combined_weights=True` (default), analysis weights are the raw
+  replicate columns. For `combined_weights=False`, analysis weights are
+  `replicate_weights * full_sample_weights`. Returns `None` (undefined)
+  when rank <= 1, yielding NaN inference. Replaces `n_PSU - n_strata`.
+- **Mutual exclusion**: Replicate weights cannot be combined with
+  strata/psu/fpc (the replicates encode design structure implicitly)
+- **Design parameters** (matching R `svrepdesign()`):
+  - `combined_weights` (default True): replicate columns include full-sample
+    weight. If False, replicate columns are perturbation factors multiplied
+    by full-sample weight before WLS.
+  - `replicate_scale`: overall variance multiplier, applied multiplicatively
+    with `replicate_rscales` when both are provided (`scale * rscales`)
+  - `replicate_rscales`: per-replicate scaling factors (vector of length R).
+    BRR and Fay ignore custom `replicate_scale`/`replicate_rscales` with a
+    warning (fixed scaling by design); JK1/JKn allow overrides.
+  - `mse` (default False, matching R's `survey::svrepdesign()`): if True,
+    center variance on full-sample estimate; if False, center on mean of
+    replicate estimates. When `replicate_rscales` contains zero entries
+    and `mse=False`, centering excludes zero-scaled replicates, matching
+    R's `survey::svrVar()` convention.
+- **Note:** Replicate columns are NOT normalized — raw values are preserved
+  to maintain correct weight ratios in the IF path.
+- **Note:** JKn requires explicit `replicate_strata` (per-replicate stratum
+  assignment). Auto-derivation from weight patterns is not supported.
+- **Note:** Invalid replicate solves (singular/degenerate) are dropped with
+  a warning. Variance is computed from valid replicates only. Fewer than 2
+  valid replicates returns NaN variance. The variance scaling factor
+  (e.g., `1/R` for BRR, `(R-1)/R` for JK1) uses the original design's `R`,
+  not the valid count — matching R's `survey` package convention where the
+  design structure is fixed and dropped replicates contribute zero to the
+  sum without changing the scale. Survey df uses `n_valid - 1` for
+  t-based inference.
+- **Note:** Replicate-weight support matrix:
+  - **Supported**: CallawaySantAnna (reg/ipw/dr without covariates, no
+    bootstrap), ContinuousDiD
+    (no bootstrap), EfficientDiD (no bootstrap), TripleDifference (all
+    methods), LinearRegression (OLS path)
+  - **Rejected with NotImplementedError**: SunAbraham, TwoWayFixedEffects
+    (within-transformation must be recomputed per replicate),
+    DifferenceInDifferences, MultiPeriodDiD, StackedDiD (use
+    compute_survey_vcov directly), ImputationDiD, TwoStageDiD (custom
+    variance), SyntheticDiD, TROP (bootstrap-based variance),
+    BaconDecomposition (diagnostic only)
+  - CS/ContinuousDiD/EfficientDiD reject replicate + `n_bootstrap > 0`
+    (replicate weights provide analytical variance)
+- **Note:** When invalid replicates are dropped in `compute_replicate_vcov`
+  (OLS path), `n_valid` is returned and used for `df_survey = n_valid - 1`
+  in `LinearRegression.fit()`. For IF-based replicate paths, replicates
+  essentially never fail (weighted sums cannot be singular), so `n_valid`
+  equals `R` in practice and df propagation is not needed.
+
+### DEFF Diagnostics (Phase 6)
+
+Per-coefficient design effect comparing survey variance to SRS variance.
+
+- **Reference**: Kish (1965) "Survey Sampling", Wiley. Chapter 8.
+- **Formula**: `DEFF_k = Var_survey(beta_k) / Var_SRS(beta_k)` where
+  SRS baseline uses HC1 sandwich ignoring design structure
+- **Effective n**: `n_eff_k = n / DEFF_k`
+- **Display**: Existing weight-based DEFF labeled "Kish DEFF (weights)";
+  per-coefficient DEFF available via `compute_deff_diagnostics()` or
+  `LinearRegression.compute_deff()` post-fit
+- **Note:** Opt-in computation — not run automatically. Users call standalone
+  function or post-fit method when diagnostics are needed.
+
+### Subpopulation Analysis (Phase 6)
+
+Domain estimation preserving full design structure.
+
+- **Reference**: Lumley (2004) Section 3.4. Stata `svy: subpop`.
+- **Method**: `SurveyDesign.subpopulation(data, mask)` zeros out weights for
+  excluded observations while retaining strata/PSU layout for correct
+  variance estimation
+- **Note:** Unlike naive subsetting, subpopulation analysis preserves design
+  information (PSU structure, strata counts) that would be lost by dropping
+  observations. This is the methodologically correct approach for domain
+  estimation under complex survey designs.
+- **Note:** Weight validation relaxed from "strictly positive" to
+  "non-negative" to support zero-weight observations. Negative weights
+  still rejected. All-zero weight vectors rejected at solver level.
+- **Note:** Survey design df (`n_PSU - n_strata`) uses total design
+  structure (including zero-weight rows), matching R's `survey::degf()`
+  convention after `subset()`. The generic HC1/classical inference paths
+  use positive-weight count for df adjustments, ensuring zero-weight
+  padding is inference-invariant outside the survey vcov path. DEFF
+  effective-n also uses positive-weight count.
+- **Note:** For replicate-weight designs, `subpopulation()` zeros out both
+  full-sample and replicate weight columns for excluded observations,
+  preserving all replicate metadata.
+- **Note:** Defensive enhancement: ContinuousDiD and TripleDifference
+  validate the positive-weight effective sample size before WLS cell fits.
+  After `subpopulation()` zeroes weights, raw row counts may exceed the
+  regression rank requirement while the weighted effective sample does not.
+  Underidentified cells are skipped (ContinuousDiD) or fall back to
+  weighted means (TripleDifference).
+
 ---
 
 # Version History
 
+- **v1.3** (2026-03-26): Added Replicate Weight Variance, DEFF Diagnostics,
+  and Subpopulation Analysis sections (Phase 6 completion)
 - **v1.2** (2026-03-24): Added Survey-Aware Bootstrap section (Phase 6)
 - **v1.1** (2026-03-20): Added Survey Data Support section
 - **v1.0** (2025-01-19): Initial registry with 12 estimators

@@ -134,7 +134,25 @@ def _step(
 # ---------------------------------------------------------------------------
 # Common steps reused across handlers
 # ---------------------------------------------------------------------------
-def _parallel_trends_step() -> Dict[str, Any]:
+def _parallel_trends_step(staggered: bool = False) -> Dict[str, Any]:
+    if staggered:
+        return _step(
+            baker_step=3,
+            label="Test parallel trends (event-study pre-periods)",
+            why=(
+                "For staggered designs, inspect CS event-study pre-period "
+                "coefficients rather than the generic check_parallel_trends() "
+                "which assumes a single binary treatment with universal "
+                "pre-periods. Pre-treatment ATTs should be near zero."
+            ),
+            code=(
+                "# Fit with aggregate='event_study' or 'all', then inspect:\n"
+                "for rel_t, eff in sorted(results.event_study_effects.items()):\n"
+                "    if rel_t < 0:\n"
+                "        print(f'Pre {rel_t}: ATT={eff[\"effect\"]:.4f}')"
+            ),
+            step_name="parallel_trends",
+        )
     return _step(
         baker_step=3,
         label="Test parallel trends assumption",
@@ -265,7 +283,7 @@ def _handle_multi_period(results: Any):
 
 def _handle_cs(results: Any):
     steps = [
-        _parallel_trends_step(),
+        _parallel_trends_step(staggered=True),
         _step(
             baker_step=6,
             label="Run HonestDiD sensitivity analysis",
@@ -308,7 +326,7 @@ def _handle_cs(results: Any):
 
 def _handle_sa(results: Any):
     steps = [
-        _parallel_trends_step(),
+        _parallel_trends_step(staggered=True),
         _placebo_step(),
         _robustness_compare_step("CS, BJS, or Gardner"),
         _covariates_step(),
@@ -319,7 +337,7 @@ def _handle_sa(results: Any):
 
 def _handle_imputation(results: Any):
     steps = [
-        _parallel_trends_step(),
+        _parallel_trends_step(staggered=True),
         _placebo_step(),
         _robustness_compare_step("CS, SA, or Gardner"),
         _covariates_step(),
@@ -330,7 +348,7 @@ def _handle_imputation(results: Any):
 
 def _handle_two_stage(results: Any):
     steps = [
-        _parallel_trends_step(),
+        _parallel_trends_step(staggered=True),
         _placebo_step(),
         _robustness_compare_step("CS, BJS, or SA"),
         _covariates_step(),
@@ -341,7 +359,7 @@ def _handle_two_stage(results: Any):
 
 def _handle_stacked(results: Any):
     steps = [
-        _parallel_trends_step(),
+        _parallel_trends_step(staggered=True),
         _placebo_step(),
         _step(
             baker_step=7,
@@ -423,7 +441,7 @@ def _handle_trop(results: Any):
 
 def _handle_efficient(results: Any):
     steps = [
-        _parallel_trends_step(),
+        _parallel_trends_step(staggered=True),
         _placebo_step(),
         _step(
             baker_step=7,

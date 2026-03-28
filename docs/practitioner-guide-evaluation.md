@@ -17,7 +17,9 @@ difference-in-differences design using the load_mpdta() dataset."
 (with practitioner workflow header) + key sections of `docs/llms-practitioner.txt`.
 
 **Model**: 1 Opus + 9 Sonnet (before), 10 Sonnet (after). All agents are fresh
-instances with no shared context.
+instances with no shared context. Note: the before arm includes one Opus run;
+this is a minor confound but the Opus run scored 8/16 (below the Sonnet mean
+of 9.6), so the model mix does not inflate the reported improvement.
 
 ## Scoring Rubric (0-2 per step, 16 total)
 
@@ -108,7 +110,7 @@ After v1, the remaining 0.75 point gap was concentrated in:
 
 ### Targeted Changes
 
-1. **Step 4**: Added "You MUST check the cluster count before choosing inference"
+1. **Step 5**: Added "You MUST check the cluster count before choosing inference"
    with explicit code: `n_clusters = data[cluster_col].nunique()` + if/else branch.
 2. **Step 8**: Strengthened "Report with and without covariates" from a checklist
    item to "REQUIRED — This is not optional" with explanation of why it matters.
@@ -150,6 +152,6 @@ and practically massive. Key results:
 - **Variance collapsed** from SD=0.84 to SD=0.0 — the guide standardized
   behavior so completely that all agents produce the same high-quality workflow
 - **Two iterations sufficed**: v1 closed 79% of the gap; targeted v2 fixes
-  to Step 4 (cluster count) and Step 8 (covariates) closed the remaining 21%
+  to Step 5 (cluster count) and Step 8 (covariates) closed the remaining 21%
 - **Documentation alone** drove these results — no runtime enforcement was
   needed beyond the `practitioner_next_steps()` function

@@ -79,14 +79,14 @@ to allow k periods of anticipation.
 
 ## Step 3: Test Parallel Trends
 
-Test the parallel trends assumption empirically BEFORE estimation. This step
-is separated from Step 2 because it requires code execution, not just stating
-assumptions.
+Test the parallel trends assumption empirically. This step is separated from
+Step 2 because it requires code execution, not just stating assumptions.
 
+**For simple 2x2 designs** (single treatment timing):
 ```python
 from diff_diff import check_parallel_trends, equivalence_test_trends
 
-# Simple pre-trends test (compares slopes)
+# Simple pre-trends test (compares slopes for a binary treatment indicator)
 pt_result = check_parallel_trends(
     data, outcome='y', time='period', treatment_group='treated',
     pre_periods=[1, 2, 3]
@@ -100,6 +100,24 @@ equiv = equivalence_test_trends(
     data, outcome='y', time='period', treatment_group='treated',
     pre_periods=[1, 2, 3], equivalence_margin=0.5
 )
+```
+
+**For staggered designs** (multiple cohorts adopting at different times):
+The generic `check_parallel_trends()` assumes a single binary treatment with
+universal pre-periods, which is invalid when cohorts adopt at different times
+(some "pre-periods" are post-treatment for early cohorts). Instead, use the
+CS event-study pre-period coefficients as the pre-trends diagnostic:
+```python
+# Fit CS with event_study aggregation, then inspect pre-periods
+cs = CallawaySantAnna(control_group='not_yet_treated', cluster='unit_id')
+results = cs.fit(data, ..., aggregate='event_study')
+
+# Pre-treatment relative-time ATTs should be near zero
+if results.event_study_effects:
+    for rel_t, eff in sorted(results.event_study_effects.items()):
+        if rel_t < 0:
+            print(f"Pre-period {rel_t}: ATT={eff['effect']:.4f}, SE={eff['se']:.4f}")
+# Significant pre-treatment effects → parallel trends may be violated
 ```
 
 CAUTION: Small, statistically insignificant pre-trends do NOT guarantee
@@ -390,14 +408,12 @@ data = load_mpdta()
 #          no anticipation, doubly robust for conditional PT
 
 # Step 3: Test parallel trends
-# Note: check_parallel_trends expects a binary treatment indicator, not cohort years.
-# Use 'treat' (ever-treated binary) with pre-periods before any cohort adopts.
-pt = check_parallel_trends(data, outcome='lemp', time='year',
-                           treatment_group='treat',
-                           pre_periods=[2003, 2004, 2005])
-print(f"Pre-trends p-value: {pt['p_value']:.4f}")
+# For staggered designs, use the CS event-study pre-period coefficients
+# as the pre-trends diagnostic (NOT the generic check_parallel_trends,
+# which assumes a single binary treatment and universal pre-periods).
+# We estimate CS with event_study aggregation first, then inspect pre-periods.
 
-# Step 4: Choose estimator — staggered adoption → CS (primary), SA (robustness)
+# Step 4: Choose estimator — staggered adoption -> CS (primary), SA (robustness)
 # Diagnose TWFE bias first:
 bacon = BaconDecomposition()
 bacon_result = bacon.fit(data, outcome='lemp', unit='countyreal',
@@ -415,6 +431,14 @@ results = cs.fit(data, outcome='lemp', unit='countyreal', time='year',
                  first_treat='first_treat', covariates=['lpop'],
                  aggregate='all')
 print(results.summary())
+
+# Step 3 (continued): Inspect CS event-study pre-period coefficients
+# Pre-treatment relative-time ATTs should be near zero and insignificant.
+if results.event_study_effects:
+    for rel_t, eff in sorted(results.event_study_effects.items()):
+        if rel_t < 0:
+            print(f"  Pre-period {rel_t}: ATT={eff['effect']:.4f}, "
+                  f"SE={eff['se']:.4f}")
 
 # Step 6: Sensitivity — HonestDiD bounds
 honest = compute_honest_did(results, method='relative_magnitude', M=1.0)
@@ -436,6 +460,12 @@ bjs_result = bjs.fit(data, outcome='lemp', unit='countyreal', time='year',
 print(f"CS ATT:  {results.overall_att:.4f} (SE: {results.overall_se:.4f})")
 print(f"SA ATT:  {sa_result.overall_att:.4f} (SE: {sa_result.overall_se:.4f})")
 print(f"BJS ATT: {bjs_result.overall_att:.4f} (SE: {bjs_result.overall_se:.4f})")
+
+# Step 8 (continued): REQUIRED with/without covariates comparison
+results_no_cov = cs.fit(data, outcome='lemp', unit='countyreal', time='year',
+                        first_treat='first_treat', aggregate='all')
+print(f"Without covariates: ATT={results_no_cov.overall_att:.4f}")
+print(f"With covariates:    ATT={results.overall_att:.4f}")
 
 # Context-aware next steps
 guidance = practitioner_next_steps(results)

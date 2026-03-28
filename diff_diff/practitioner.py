@@ -217,7 +217,8 @@ def _covariates_step() -> Dict[str, Any]:
         code=(
             "# Re-estimate without covariates and compare:\n"
             "result_no_cov = estimator.fit(data, ..., covariates=None)\n"
-            "print(f'Without covariates: ATT={result_no_cov.att:.4f}')"
+            "# Compare ATT with and without covariates.\n"
+            "# Use .att (basic DiD) or .overall_att (staggered estimators)."
         ),
         priority="medium",
         step_name="robustness",
@@ -265,7 +266,23 @@ def _handle_multi_period(results: Any):
 def _handle_cs(results: Any):
     steps = [
         _parallel_trends_step(),
-        _honest_did_step(),
+        _step(
+            baker_step=6,
+            label="Run HonestDiD sensitivity analysis",
+            why=(
+                "Bounds the treatment effect under plausible violations of "
+                "parallel trends. Requires event study effects — refit with "
+                "aggregate='event_study' or 'all' if not already done."
+            ),
+            code=(
+                "from diff_diff import compute_honest_did\n"
+                "# CS results must have event_study_effects:\n"
+                "results = cs.fit(data, ..., aggregate='event_study')\n"
+                "honest = compute_honest_did(results, method='relative_magnitude', M=1.0)\n"
+                "print(honest.summary())"
+            ),
+            step_name="sensitivity",
+        ),
         _step(
             baker_step=7,
             label="Examine group and event study effects",
@@ -292,7 +309,7 @@ def _handle_cs(results: Any):
 def _handle_sa(results: Any):
     steps = [
         _parallel_trends_step(),
-        _honest_did_step(),
+        _placebo_step(),
         _robustness_compare_step("CS, BJS, or Gardner"),
         _covariates_step(),
     ]
@@ -303,7 +320,7 @@ def _handle_sa(results: Any):
 def _handle_imputation(results: Any):
     steps = [
         _parallel_trends_step(),
-        _honest_did_step(),
+        _placebo_step(),
         _robustness_compare_step("CS, SA, or Gardner"),
         _covariates_step(),
     ]
@@ -314,7 +331,7 @@ def _handle_imputation(results: Any):
 def _handle_two_stage(results: Any):
     steps = [
         _parallel_trends_step(),
-        _honest_did_step(),
+        _placebo_step(),
         _robustness_compare_step("CS, BJS, or SA"),
         _covariates_step(),
     ]
@@ -325,7 +342,7 @@ def _handle_two_stage(results: Any):
 def _handle_stacked(results: Any):
     steps = [
         _parallel_trends_step(),
-        _honest_did_step(),
+        _placebo_step(),
         _step(
             baker_step=7,
             label="Check sub-experiment balance",
@@ -333,7 +350,7 @@ def _handle_stacked(results: Any):
                 "Stacked DiD constructs sub-experiments for each cohort. "
                 "Verify that each sub-experiment has sufficient controls."
             ),
-            code="# Inspect results.sub_experiments for balance",
+            code="# Check results.n_sub_experiments and inspect results.stacked_data",
             priority="medium",
             step_name="heterogeneity",
         ),
@@ -354,8 +371,8 @@ def _handle_synthetic(results: Any):
                 "approximate the counterfactual well."
             ),
             code=(
-                "# Check pre-treatment RMSE and unit weight concentration:\n"
-                "print(f'Pre-treatment RMSE: {results.pre_treatment_rmse:.4f}')\n"
+                "# Check pre-treatment fit and unit weight concentration:\n"
+                "print(f'Pre-treatment fit (RMSE): {results.pre_treatment_fit:.4f}')\n"
                 "# Highly concentrated weights suggest fragile estimates"
             ),
             step_name="sensitivity",
@@ -407,28 +424,24 @@ def _handle_trop(results: Any):
 def _handle_efficient(results: Any):
     steps = [
         _parallel_trends_step(),
-        _honest_did_step(),
+        _placebo_step(),
+        _step(
+            baker_step=7,
+            label="Run Hausman pretest (PT-All vs PT-Post)",
+            why=(
+                "EfficientDiD supports both PT-All and PT-Post assumptions. "
+                "The Hausman pretest compares them — report which was selected."
+            ),
+            code=(
+                "# Hausman pretest is an estimator method, not a results attribute:\n"
+                "# edid = EfficientDiD()\n"
+                "# results = edid.fit(data, ..., run_pretest=True)"
+            ),
+            step_name="heterogeneity",
+        ),
+        _robustness_compare_step("CS, SA, or BJS"),
+        _covariates_step(),
     ]
-    # Check for Hausman pretest
-    hausman = getattr(results, "hausman_pretest", None)
-    if hausman is not None:
-        steps.append(
-            _step(
-                baker_step=7,
-                label="Report Hausman pretest result",
-                why=(
-                    "The Hausman pretest compares PT-All vs PT-Post "
-                    "assumptions. Report which was selected and why."
-                ),
-                code=(
-                    f"# Hausman test p-value: {getattr(hausman, 'p_value', 'N/A')}\n"
-                    f"# Recommendation: {getattr(hausman, 'recommendation', 'N/A')}"
-                ),
-                step_name="heterogeneity",
-            )
-        )
-    steps.append(_robustness_compare_step("CS, SA, or BJS"))
-    steps.append(_covariates_step())
     warnings = _check_nan_att(results)
     return steps, warnings
 

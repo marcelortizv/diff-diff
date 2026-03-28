@@ -1,8 +1,9 @@
-# diff-diff Practitioner Guide (Baker et al. 2025)
+# diff-diff Practitioner Guide
 
-> This guide maps Baker et al. (2025) "Difference-in-Differences Designs: A
-> Practitioner's Guide" to concrete diff-diff API calls. It ensures rigorous
-> causal inference by following an 8-step empiricist workflow.
+> An 8-step workflow for rigorous Difference-in-Differences analysis, based on
+> Baker et al. (2025) "Difference-in-Differences Designs: A Practitioner's
+> Guide" and adapted for the diff-diff library. Some steps are reorganized or
+> extended relative to the paper (see docs/methodology/REGISTRY.md for details).
 
 ## Instructions for AI Agents
 
@@ -90,7 +91,7 @@ print(f"Difference p-value: {pt_result['p_value']:.4f}")
 # Equivalence test (TOST) — tests that trends are meaningfully similar
 equiv = equivalence_test_trends(
     data, outcome='y', time='period', treatment_group='treated',
-    pre_periods=[1, 2, 3], threshold=0.5
+    pre_periods=[1, 2, 3], equivalence_margin=0.5
 )
 ```
 
@@ -106,26 +107,26 @@ Use this decision tree to select the appropriate estimator:
 
 ```
 Is treatment adoption staggered (multiple cohorts, different timing)?
-├── YES: Do NOT use plain TWFE. Use one of:
-│   ├── CallawaySantAnna (CS)  — most general, doubly robust, recommended default
-│   ├── SunAbraham (SA)        — interaction-weighted, good for event studies
-│   ├── ImputationDiD (BJS)    — most efficient under homogeneous effects
-│   ├── TwoStageDiD (Gardner)  — two-stage with GMM variance
-│   ├── StackedDiD (Stacked)   — sub-experiment approach
-│   └── EfficientDiD (EDiD)    �� optimal weighting for tighter SEs
-│
-├── NO, simple 2x2 design:
-│   └── DifferenceInDifferences (DiD)
-│
-├── Few treated units (< 20)?
-│   ├── SyntheticDiD (SDiD)    — synthetic control + DiD hybrid
-│   └── TROP                   — triply robust with factor adjustment
-│
-├── Continuous treatment (doses)?
-│   └── ContinuousDiD (CDiD)
-│
-└���─ Two eligibility criteria?
-    └── TripleDifference (DDD)
+|-- YES: Do NOT use plain TWFE. Use one of:
+|   |-- CallawaySantAnna (CS)  -- most general, doubly robust, recommended default
+|   |-- SunAbraham (SA)        -- interaction-weighted, good for event studies
+|   |-- ImputationDiD (BJS)    -- most efficient under homogeneous effects
+|   |-- TwoStageDiD (Gardner)  -- two-stage with GMM variance
+|   |-- StackedDiD (Stacked)   -- sub-experiment approach
+|   \-- EfficientDiD (EDiD)    -- optimal weighting for tighter SEs
+|
+|-- NO, simple 2x2 design:
+|   \-- DifferenceInDifferences (DiD)
+|
+|-- Few treated units (< 20)?
+|   |-- SyntheticDiD (SDiD)    -- synthetic control + DiD hybrid
+|   \-- TROP                   -- triply robust with factor adjustment
+|
+|-- Continuous treatment (doses)?
+|   \-- ContinuousDiD (CDiD)
+|
+\-- Two eligibility criteria?
+    \-- TripleDifference (DDD)
 ```
 
 Always run BaconDecomposition first if using TWFE, to check for negative
@@ -243,8 +244,9 @@ This step is CRITICAL and most often skipped. Run at least one of:
 
 ### HonestDiD (Rambachan & Roth 2023) — recommended
 Bounds on the treatment effect under violations of parallel trends.
-Works with MultiPeriodDiD, CallawaySantAnna, SunAbraham, ImputationDiD,
-TwoStageDiD, StackedDiD, and EfficientDiD results.
+Works with MultiPeriodDiD and CallawaySantAnna results only. For CS,
+requires `aggregate='event_study'` or `aggregate='all'` so that event
+study effects are available.
 
 ```python
 from diff_diff import compute_honest_did

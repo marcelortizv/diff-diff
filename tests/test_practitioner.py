@@ -118,17 +118,16 @@ def mock_trop_results():
 @pytest.fixture
 def mock_efficient_results():
     r = EfficientDiDResults.__new__(EfficientDiDResults)
-    r.att = 0.6
-    r.se = 0.15
-    r.hausman_pretest = None
+    r.overall_att = 0.6
+    r.overall_se = 0.15
     return r
 
 
 @pytest.fixture
 def mock_continuous_results():
     r = ContinuousDiDResults.__new__(ContinuousDiDResults)
-    r.att = 0.4
-    r.se = 0.1
+    r.overall_att = 0.4
+    r.overall_se = 0.1
     return r
 
 
@@ -143,32 +142,32 @@ def mock_triple_results():
 @pytest.fixture
 def mock_sa_results():
     r = SunAbrahamResults.__new__(SunAbrahamResults)
-    r.att = 0.5
-    r.se = 0.1
+    r.overall_att = 0.5
+    r.overall_se = 0.1
     return r
 
 
 @pytest.fixture
 def mock_imputation_results():
     r = ImputationDiDResults.__new__(ImputationDiDResults)
-    r.att = 0.5
-    r.se = 0.1
+    r.overall_att = 0.5
+    r.overall_se = 0.1
     return r
 
 
 @pytest.fixture
 def mock_two_stage_results():
     r = TwoStageDiDResults.__new__(TwoStageDiDResults)
-    r.att = 0.5
-    r.se = 0.1
+    r.overall_att = 0.5
+    r.overall_se = 0.1
     return r
 
 
 @pytest.fixture
 def mock_stacked_results():
     r = StackedDiDResults.__new__(StackedDiDResults)
-    r.att = 0.5
-    r.se = 0.1
+    r.overall_att = 0.5
+    r.overall_se = 0.1
     return r
 
 

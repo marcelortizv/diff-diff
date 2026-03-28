@@ -10,7 +10,7 @@ diff-diff offers 14 estimators covering basic 2x2 DiD, modern staggered adoption
 - Source: https://github.com/igerber/diff-diff
 - Docs: https://diff-diff.readthedocs.io/en/stable/
 
-## Practitioner Workflow (Baker et al. 2025)
+## Practitioner Workflow (based on Baker et al. 2025)
 
 IMPORTANT: For rigorous DiD analysis, follow these 8 steps. Skipping
 diagnostic steps produces unreliable results.

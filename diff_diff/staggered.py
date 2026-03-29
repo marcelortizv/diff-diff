@@ -2914,12 +2914,13 @@ class CallawaySantAnna(
         bread_t = _safe_inv(X_ct_int.T @ (W_ct[:, None] * X_ct_int))
         bread_s = _safe_inv(X_cs_int.T @ (W_cs[:, None] * X_cs_int))
 
-        # M1 = colMeans(w_D * X) / mean(w_D) — gradient, same X basis for both
-        # In R: M1 = colMeans(w.cont * out.x) / mean(w.cont)
-        # w.cont = i.weights * D across all obs; for treated obs, out.x is their X
+        # R: M1 = colMeans(w.cont * out.x) = sum(w_D * X) / n_all
+        # The final control IF divides by mean_w_D = sum_w_D / n_all (once).
+        # In our split convention phi = psi / n_all, the estimation effect is
+        # asy_lin_rep @ M1 / sum_w_D (where M1 uses n_all denominator).
         M1 = (
             np.sum(w_D_gt[:, None] * X_gt_int, axis=0) + np.sum(w_D_gs[:, None] * X_gs_int, axis=0)
-        ) / sum_w_D
+        ) / n_all
 
         # asy_lin_rep_ols_t: nonzero only for control-t obs
         # = W_i * (1-D_i) * 1{T=t} * (y_i - X_i'*beta_t) * X_i @ bread_t
@@ -2975,6 +2976,7 @@ class CallawaySantAnna(
         n_gs = len(y_gs)
         n_ct = len(y_ct)
         n_cs = len(y_cs)
+        n_all = n_gt + n_gs + n_ct + n_cs
 
         # Pool treated and control for propensity score
         X_all = np.vstack([X_gt, X_gs, X_ct, X_cs])
@@ -3067,20 +3069,29 @@ class CallawaySantAnna(
         asy_lin_rep_ps = score_ps @ H_ps_inv  # (n_all, p+1)
 
         # M2: gradient of IPW ATT w.r.t. PS parameters
-        # Control IPW residuals from both periods
+        # R: M2 = colMeans(w_ipw * (y-mu)/mean_w * X) over ALL n obs (zeros for treated).
+        # In our split convention phi = psi/n_all, so M2_rc = R's M2 / n_all.
+        # R's M2 = sum(w_ct_norm * (y-mu) * X_ct)  [the mean_w normalization cancels].
+        # So M2_rc = sum(...) / n_all.  Old code used np.mean → sum/n_ct (wrong).
         ipw_resid_ct = w_ct_norm * (y_ct - mu_ct_ipw)
         ipw_resid_cs = w_cs_norm * (y_cs - mu_cs_ipw)
         # Zero for treated observations
         M2_rc = np.zeros(X_all_int.shape[1])
-        # Control-t contribution
-        M2_rc += np.mean(
-            ipw_resid_ct[:, None] * X_all_int[n_gt + n_gs : n_gt + n_gs + n_ct],
-            axis=0,
+        # Control-t contribution: sum / n_all (NOT np.mean which divides by n_ct)
+        M2_rc += (
+            np.sum(
+                ipw_resid_ct[:, None] * X_all_int[n_gt + n_gs : n_gt + n_gs + n_ct],
+                axis=0,
+            )
+            / n_all
         )
         # Control-s contribution (opposite sign -- base period)
-        M2_rc -= np.mean(
-            ipw_resid_cs[:, None] * X_all_int[n_gt + n_gs + n_ct :],
-            axis=0,
+        M2_rc -= (
+            np.sum(
+                ipw_resid_cs[:, None] * X_all_int[n_gt + n_gs + n_ct :],
+                axis=0,
+            )
+            / n_all
         )
 
         inf_all = inf_all + asy_lin_rep_ps @ M2_rc

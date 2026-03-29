@@ -1443,11 +1443,12 @@ class HonestDiD:
 
             if isinstance(results, CallawaySantAnnaResults):
                 if results.event_study_effects:
-                    # Filter out normalization constraints (n_groups=0, e.g. reference period)
+                    # Use the reference-aware pre_periods from _extract_event_study_params
+                    pre_set = set(pre_periods) if pre_periods else set()
                     pre_effects = [
                         abs(results.event_study_effects[t]["effect"])
                         for t in results.event_study_effects
-                        if t < 0 and results.event_study_effects[t].get("n_groups", 1) > 0
+                        if t in pre_set and results.event_study_effects[t].get("n_groups", 1) > 0
                     ]
                     if pre_effects:
                         return max(pre_effects)

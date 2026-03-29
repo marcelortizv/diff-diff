@@ -19,25 +19,28 @@ Current limitations that may affect users:
 
 ### Large Module Files
 
-Target: < 1000 lines per module for maintainability.
+Target: < 1000 lines per module for maintainability. Updated 2026-03-29.
 
 | File | Lines | Action |
 |------|-------|--------|
-| `trop.py` | 862 | Split done — trop_global.py (990), trop_local.py (1000) |
-| `utils.py` | 1838 | Monitor |
-| `staggered.py` | 1785 | Monitor |
-| `imputation.py` | 1756 | Monitor |
-| `visualization.py` | 1727 | Monitor — growing but cohesive |
-| `linalg.py` | 1727 | Monitor — unified backend, splitting would hurt cohesion |
-| `triple_diff.py` | 1581 | Monitor |
+| `power.py` | 2588 | Consider splitting (power analysis + MDE + sample size) |
+| `linalg.py` | 2289 | Monitor — unified backend, splitting would hurt cohesion |
+| `staggered.py` | 2275 | Monitor — grew with survey support |
+| `imputation.py` | 2009 | Monitor |
+| `triple_diff.py` | 1921 | Monitor |
+| `utils.py` | 1902 | Monitor |
+| `two_stage.py` | 1708 | Monitor |
+| `survey.py` | 1646 | Monitor — grew with Phase 6 features |
+| `continuous_did.py` | 1626 | Monitor |
 | `honest_did.py` | 1511 | Acceptable |
-| `two_stage.py` | 1451 | Acceptable |
-| `power.py` | 1350 | Acceptable |
-| `prep.py` | 1242 | Acceptable |
-| `sun_abraham.py` | 1162 | Acceptable |
-| `continuous_did.py` | 1155 | Acceptable |
-| `estimators.py` | 1147 | Acceptable |
-| `pretrends.py` | 1104 | Acceptable |
+| `sun_abraham.py` | 1540 | Acceptable |
+| `estimators.py` | 1357 | Acceptable |
+| `trop_local.py` | 1261 | Acceptable |
+| `trop_global.py` | 1251 | Acceptable |
+| `prep.py` | 1225 | Acceptable |
+| `pretrends.py` | 1105 | Acceptable |
+| `trop.py` | 981 | Split done — trop_global.py + trop_local.py |
+| `visualization/` | 4172 | Subpackage (split across 7 files) — OK |
 
 ---
 
@@ -49,8 +52,7 @@ Deferred items from PR reviews that were not addressed before merge.
 
 | Issue | Location | PR | Priority |
 |-------|----------|----|----------|
-| ImputationDiD dense `(A0'A0).toarray()` scales O((U+T+K)^2), OOM risk on large panels | `imputation.py` | #141 | Medium (deferred — only triggers when sparse solver fails; fixing requires sparse least-squares alternatives) |
-| EfficientDiD: API docs / tutorial page for new public estimator | `docs/` | #192 | Medium |
+| ImputationDiD dense `(A0'A0).toarray()` scales O((U+T+K)^2), OOM risk on large panels | `imputation.py` | #141 | Medium (deferred — only triggers when sparse solver fails) |
 | Multi-absorb weighted demeaning needs iterative alternating projections for N > 1 absorbed FE with survey weights; unweighted multi-absorb also uses single-pass (pre-existing, exact only for balanced panels) | `estimators.py` | #218 | Medium |
 | Replicate-weight survey df — **Resolved**. `df_survey = rank(replicate_weights) - 1` matching R's `survey::degf()`. For IF paths, `n_valid - 1` when dropped replicates reduce effective count. | `survey.py` | #238 | Resolved |
 | CallawaySantAnna survey: strata/PSU/FPC — **Resolved**. Aggregated SEs (overall, event study, group) use `compute_survey_if_variance()`. Bootstrap uses PSU-level multiplier weights. | `staggered.py` | #237 | Resolved |
@@ -75,11 +77,11 @@ Deferred items from PR reviews that were not addressed before merge.
 
 | Issue | Location | PR | Priority |
 |-------|----------|----|----------|
+| Plotly renderers silently ignore styling kwargs (marker, markersize, linewidth, capsize, ci_linewidth) that the matplotlib backend honors; thread them through or reject when `backend="plotly"` | `visualization/_event_study.py`, `_diagnostic.py`, `_power.py` | #222 | Medium |
 | R comparison tests spawn separate `Rscript` per test (slow CI) | `tests/test_methodology_twfe.py:294` | #139 | Low |
 | CS R helpers hard-code `xformla = ~ 1`; no covariate-adjusted R benchmark for IRLS path | `tests/test_methodology_callaway.py` | #202 | Low |
-| ~376 `duplicate object description` Sphinx warnings — caused by autodoc `:members:` on dataclass attributes within manual API pages (not from autosummary stubs); fix requires restructuring `docs/api/*.rst` pages to avoid documenting the same attribute via both `:members:` and inline `autosummary` tables | `docs/api/*.rst` | — | Low |
-| Plotly renderers silently ignore styling kwargs (marker, markersize, linewidth, capsize, ci_linewidth) that the matplotlib backend honors; thread them through or reject when `backend="plotly"` | `visualization/_event_study.py`, `_diagnostic.py`, `_power.py` | #222 | Medium |
-| Survey bootstrap test coverage — **Resolved**. Added FPC census zero-variance, single-PSU NaN, full-design bootstrap for CS/ContinuousDiD/EfficientDiD, and TROP Rao-Wu vs block bootstrap equivalence tests. | `tests/test_survey_phase*.py` | — | Resolved |
+| ~376 `duplicate object description` Sphinx warnings — restructure `docs/api/*.rst` to avoid duplicate `:members:` + `autosummary` | `docs/api/*.rst` | — | Low |
+| Doc-snippet smoke tests only cover `.rst` files; `.txt` AI guides outside CI validation | `tests/test_doc_snippets.py` | #239 | Low |
 
 ---
 

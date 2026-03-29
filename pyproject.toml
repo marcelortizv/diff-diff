@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "diff-diff"
-version = "2.7.5"
+version = "2.7.6"
 description = "Difference-in-Differences causal inference with sklearn-like API. Callaway-Sant'Anna, Synthetic DiD, Honest DiD, event studies, parallel trends."
 readme = "README.md"
 license = "MIT"
@@ -79,6 +79,7 @@ Homepage = "https://github.com/igerber/diff-diff"
 Documentation = "https://diff-diff.readthedocs.io"
 Repository = "https://github.com/igerber/diff-diff"
 Issues = "https://github.com/igerber/diff-diff/issues"
+"Practitioner Guide" = "https://github.com/igerber/diff-diff/blob/main/docs/llms-practitioner.txt"
 
 [tool.maturin]
 # Build the Rust extension module

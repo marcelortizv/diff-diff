@@ -2050,12 +2050,13 @@ class CallawaySantAnna(
                 asy_lin_rep_ps = score_ps @ H_inv  # shape (n_t + n_c, p)
 
                 # M2: gradient of ATT w.r.t. PS parameters
+                # R convention: colMeans over ALL n obs (zero for treated rows)
                 att_control_weighted = np.sum(weights_control_norm * control_change)
-                M2 = np.mean(
+                M2 = np.sum(
                     (weights_control_norm * (control_change - att_control_weighted))[:, None]
                     * X_all_int[n_t:],
                     axis=0,
-                )
+                ) / (n_t + n_c)
 
                 # PS correction to influence function
                 inf_ps_correction = asy_lin_rep_ps @ M2
@@ -2310,12 +2311,13 @@ class CallawaySantAnna(
 
                     # M2_dr: dATT/dgamma — gradient of DR ATT w.r.t. PS parameters
                     # Only the control augmentation term depends on PS via w_ipw
+                    # R convention: colMeans over ALL n obs (zero for treated rows)
                     dr_resid_control = m_control - control_change
-                    M2_dr = np.mean(
+                    M2_dr = np.sum(
                         ((weights_control / sw_t_sum) * dr_resid_control)[:, None]
                         * X_all_int[n_t:],
                         axis=0,
-                    )
+                    ) / (n_t + n_c)
                     inf_func = inf_func + asy_lin_rep_ps @ M2_dr
 
                     # --- OR IF correction ---
@@ -2371,11 +2373,12 @@ class CallawaySantAnna(
                     score_ps = (D_all - pscore_all)[:, None] * X_all_int
                     asy_lin_rep_ps = score_ps @ H_ps_inv
 
+                    # R convention: colMeans over ALL n obs (zero for treated rows)
                     dr_resid_control = m_control - control_change
-                    M2_dr = np.mean(
+                    M2_dr = np.sum(
                         ((weights_control / n_t) * dr_resid_control)[:, None] * X_all_int[n_t:],
                         axis=0,
-                    )
+                    ) / (n_t + n_c)
                     inf_func = inf_func + asy_lin_rep_ps @ M2_dr
 
                     # --- OR IF correction ---

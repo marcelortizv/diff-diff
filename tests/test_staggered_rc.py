@@ -349,3 +349,57 @@ class TestEdgeCases:
             v["effect"] for v in result.group_time_effects.values() if np.isfinite(v["effect"])
         ]
         assert len(finite_effects) > 0
+
+
+# =============================================================================
+# Methodology: IF corrections change SE
+# =============================================================================
+
+
+class TestIFCorrections:
+    """Verify RCS DR/IPW IF corrections are non-trivial."""
+
+    def test_dr_se_differs_from_reg_rc(self, rc_data_with_covariates):
+        """DR and reg should give different SEs in RCS (DR has IF corrections)."""
+        r_reg = CallawaySantAnna(estimation_method="reg", panel=False).fit(
+            rc_data_with_covariates,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            covariates=["x1"],
+        )
+        r_dr = CallawaySantAnna(estimation_method="dr", panel=False).fit(
+            rc_data_with_covariates,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            covariates=["x1"],
+        )
+        # SEs should differ (DR has nuisance IF corrections)
+        assert r_reg.overall_se != r_dr.overall_se
+
+    def test_panel_field_on_results(self, rc_data):
+        """panel=False should be reflected on CallawaySantAnnaResults."""
+        result = CallawaySantAnna(estimation_method="reg", panel=False).fit(
+            rc_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+        )
+        assert result.panel is False
+
+    def test_summary_labels_rcs(self, rc_data):
+        """Summary should use 'obs' labels for RCS, not 'units'."""
+        result = CallawaySantAnna(estimation_method="reg", panel=False).fit(
+            rc_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+        )
+        summary = result.summary()
+        assert "obs:" in summary
+        assert "units:" not in summary.split("\n")[3]  # Treated line

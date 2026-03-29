@@ -111,6 +111,7 @@ class CallawaySantAnnaResults:
     alpha: float = 0.05
     control_group: str = "never_treated"
     base_period: str = "varying"
+    panel: bool = True
     event_study_effects: Optional[Dict[int, Dict[str, Any]]] = field(default=None)
     group_effects: Optional[Dict[Any, Dict[str, Any]]] = field(default=None)
     influence_functions: Optional["np.ndarray"] = field(default=None, repr=False)
@@ -155,8 +156,8 @@ class CallawaySantAnnaResults:
             "=" * 85,
             "",
             f"{'Total observations:':<30} {self.n_obs:>10}",
-            f"{'Treated units:':<30} {self.n_treated_units:>10}",
-            f"{'Never-treated units:':<30} {self.n_control_units:>10}",
+            f"{'Treated ' + ('obs:' if not self.panel else 'units:'):<30} {self.n_treated_units:>10}",
+            f"{'Control ' + ('obs:' if not self.panel else 'units:'):<30} {self.n_control_units:>10}",
             f"{'Treatment cohorts:':<30} {len(self.groups):>10}",
             f"{'Time periods:':<30} {len(self.time_periods):>10}",
             f"{'Control group:':<30} {self.control_group:>10}",

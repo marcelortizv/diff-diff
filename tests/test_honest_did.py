@@ -1243,6 +1243,43 @@ class TestSurveyVariance:
         assert h_result.df_survey is None
         assert h_result.survey_metadata is None
 
+    def test_replicate_weight_uses_diagonal_fallback(self):
+        """Replicate-weight designs should NOT produce full event_study_vcov."""
+        from diff_diff import CallawaySantAnna, SurveyDesign, generate_staggered_data
+
+        data = generate_staggered_data(n_units=100, n_periods=5, seed=42)
+        unit_ids = data["unit"].unique()
+        n_units = len(unit_ids)
+        unit_map = {uid: i for i, uid in enumerate(unit_ids)}
+        idx = data["unit"].map(unit_map).values
+
+        # Create replicate weights (4 replicates)
+        rng = np.random.default_rng(42)
+        data["weight"] = (1.0 + 0.3 * (np.arange(n_units) % 3))[idx]
+        for k in range(4):
+            data[f"repwt_{k}"] = data["weight"] * rng.uniform(0.8, 1.2, len(data))
+            # Make constant within unit
+            unit_rw = data.groupby("unit")[f"repwt_{k}"].first()
+            data[f"repwt_{k}"] = data["unit"].map(unit_rw)
+
+        sd = SurveyDesign(
+            weights="weight",
+            replicate_weights=[f"repwt_{k}" for k in range(4)],
+            replicate_method="JK1",
+        )
+        cs_result = CallawaySantAnna().fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd,
+            aggregate="event_study",
+        )
+
+        # event_study_vcov should be None (diagonal fallback for replicate designs)
+        assert cs_result.event_study_vcov is None
+
 
 # =============================================================================
 # Tests for Visualization (without matplotlib)

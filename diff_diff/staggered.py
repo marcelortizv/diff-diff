@@ -181,6 +181,13 @@ class CallawaySantAnna(
         Trimming bound for propensity scores. Scores are clipped to
         ``[pscore_trim, 1 - pscore_trim]`` before weight computation
         in IPW and DR estimation. Must be in ``(0, 0.5)``.
+    panel : bool, default=True
+        Whether the data is a balanced/unbalanced panel (units observed
+        across multiple time periods). Set to ``False`` for repeated
+        cross-sections where each observation has a unique unit ID and
+        units do not repeat across periods. Uses cross-sectional DRDID
+        (Sant'Anna & Zhao 2020, Section 4) with per-observation influence
+        functions.
 
     Attributes
     ----------
@@ -1783,6 +1790,7 @@ class CallawaySantAnna(
             pscore_trim=self.pscore_trim,
             survey_metadata=survey_metadata,
             event_study_vcov=event_study_vcov,
+            panel=self.panel,
         )
 
         self.is_fitted_ = True
@@ -2972,6 +2980,40 @@ class CallawaySantAnna(
         inf_control = np.concatenate([inf_ct, inf_cs])
         inf_all = np.concatenate([inf_treated, inf_control])
 
+        # PS IF correction for cross-sectional IPW
+        X_all_int = np.column_stack([np.ones(len(D_all)), X_all])
+        pscore_all = pscore  # already computed and clipped
+
+        W_ps = pscore_all * (1 - pscore_all)
+        if sw_all is not None:
+            W_ps = W_ps * sw_all
+        H_ps = X_all_int.T @ (W_ps[:, None] * X_all_int)
+        H_ps_inv = _safe_inv(H_ps)
+
+        score_ps = (D_all - pscore_all)[:, None] * X_all_int
+        if sw_all is not None:
+            score_ps = score_ps * sw_all[:, None]
+        asy_lin_rep_ps = score_ps @ H_ps_inv  # (n_all, p+1)
+
+        # M2: gradient of IPW ATT w.r.t. PS parameters
+        # Control IPW residuals from both periods
+        ipw_resid_ct = w_ct_norm * (y_ct - mu_ct_ipw)
+        ipw_resid_cs = w_cs_norm * (y_cs - mu_cs_ipw)
+        # Zero for treated observations
+        M2_rc = np.zeros(X_all_int.shape[1])
+        # Control-t contribution
+        M2_rc += np.mean(
+            ipw_resid_ct[:, None] * X_all_int[n_gt + n_gs : n_gt + n_gs + n_ct],
+            axis=0,
+        )
+        # Control-s contribution (opposite sign -- base period)
+        M2_rc -= np.mean(
+            ipw_resid_cs[:, None] * X_all_int[n_gt + n_gs + n_ct :],
+            axis=0,
+        )
+
+        inf_all = inf_all + asy_lin_rep_ps @ M2_rc
+
         se = float(np.sqrt(np.sum(inf_all**2)))
 
         idx_all = None
@@ -3120,6 +3162,70 @@ class CallawaySantAnna(
         inf_treated = np.concatenate([inf_gt, inf_gs])
         inf_control = np.concatenate([inf_ct, inf_cs])
         inf_all = np.concatenate([inf_treated, inf_control])
+
+        # --- PS IF correction ---
+        X_all_int = np.column_stack([np.ones(len(D_all)), X_all])
+        pscore_all = pscore
+
+        W_ps = pscore_all * (1 - pscore_all)
+        if sw_all is not None:
+            W_ps = W_ps * sw_all
+        H_ps = X_all_int.T @ (W_ps[:, None] * X_all_int)
+        H_ps_inv = _safe_inv(H_ps)
+
+        score_ps = (D_all - pscore_all)[:, None] * X_all_int
+        if sw_all is not None:
+            score_ps = score_ps * sw_all[:, None]
+        asy_lin_rep_ps = score_ps @ H_ps_inv
+
+        # M2_dr: uses DR residuals (m-y) instead of raw y
+        dr_resid_ct = m_ct - y_ct  # control period-t DR residuals
+        dr_resid_cs = m_cs - y_cs  # control period-s DR residuals
+        normalizer = np.sum(sw_gt) if sw_gt is not None else n_gt
+        M2_dr = np.zeros(X_all_int.shape[1])
+        # Control-t: (w_ct/normalizer) * (m_ct - y_ct) * X
+        ct_slice = slice(n_gt + n_gs, n_gt + n_gs + n_ct)
+        M2_dr += np.mean(
+            ((w_ct / normalizer) * dr_resid_ct)[:, None] * X_all_int[ct_slice],
+            axis=0,
+        )
+        # Control-s: -(w_cs/normalizer) * (m_cs - y_cs) * X (opposite sign)
+        cs_slice = slice(n_gt + n_gs + n_ct, None)
+        M2_dr -= np.mean(
+            ((w_cs / normalizer) * dr_resid_cs)[:, None] * X_all_int[cs_slice],
+            axis=0,
+        )
+
+        inf_all = inf_all + asy_lin_rep_ps @ M2_dr
+
+        # --- OR IF correction -- period t model ---
+        W_t = sw_ct if sw_ct is not None else np.ones(n_ct)
+        bread_t = _safe_inv(X_ct_int.T @ (W_t[:, None] * X_ct_int))
+
+        # M1_t: dATT/dbeta_t (from treated-t prediction and control-t augmentation)
+        sw_gt_vals = sw_gt if sw_gt is not None else np.ones(n_gt)
+        M1_t = (
+            -np.sum(sw_gt_vals[:, None] * X_gt_int, axis=0)
+            + np.sum(w_ct[:, None] * X_ct_int, axis=0)
+        ) / normalizer
+
+        asy_lin_rep_or_t = (W_t * (y_ct - m_ct))[:, None] * X_ct_int @ bread_t
+        # Apply only to control-t portion of inf_all
+        inf_all[n_gt + n_gs : n_gt + n_gs + n_ct] += asy_lin_rep_or_t @ M1_t
+
+        # --- OR IF correction -- period s model ---
+        W_s = sw_cs if sw_cs is not None else np.ones(n_cs)
+        bread_s = _safe_inv(X_cs_int.T @ (W_s[:, None] * X_cs_int))
+
+        sw_gs_vals = sw_gs if sw_gs is not None else np.ones(n_gs)
+        M1_s = (
+            np.sum(sw_gs_vals[:, None] * X_gs_int, axis=0)
+            - np.sum(w_cs[:, None] * X_cs_int, axis=0)
+        ) / normalizer
+
+        asy_lin_rep_or_s = (W_s * (y_cs - m_cs))[:, None] * X_cs_int @ bread_s
+        # Apply only to control-s portion of inf_all
+        inf_all[n_gt + n_gs + n_ct :] += asy_lin_rep_or_s @ M1_s
 
         se = float(np.sqrt(np.sum(inf_all**2)))
 

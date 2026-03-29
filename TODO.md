@@ -80,6 +80,7 @@ Deferred items from PR reviews that were not addressed before merge.
 | ~376 `duplicate object description` Sphinx warnings — caused by autodoc `:members:` on dataclass attributes within manual API pages (not from autosummary stubs); fix requires restructuring `docs/api/*.rst` pages to avoid documenting the same attribute via both `:members:` and inline `autosummary` tables | `docs/api/*.rst` | — | Low |
 | Plotly renderers silently ignore styling kwargs (marker, markersize, linewidth, capsize, ci_linewidth) that the matplotlib backend honors; thread them through or reject when `backend="plotly"` | `visualization/_event_study.py`, `_diagnostic.py`, `_power.py` | #222 | Medium |
 | Survey bootstrap test coverage — **Resolved**. Added FPC census zero-variance, single-PSU NaN, full-design bootstrap for CS/ContinuousDiD/EfficientDiD, and TROP Rao-Wu vs block bootstrap equivalence tests. | `tests/test_survey_phase*.py` | — | Resolved |
+| Doc-snippet smoke tests only cover `.rst` files; new `.txt` AI guides are outside CI validation | `tests/test_doc_snippets.py` | #239 | Low |
 
 ---
 

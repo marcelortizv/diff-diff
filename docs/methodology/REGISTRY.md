@@ -2111,6 +2111,27 @@ Domain estimation preserving full design structure.
 
 ---
 
+# Practitioner Guide
+
+The 8-step workflow in `docs/llms-practitioner.txt` is adapted from Baker et al. (2025)
+"Difference-in-Differences Designs: A Practitioner's Guide" (arXiv:2503.13323), not a
+1:1 mapping of the paper's forward-engineering framework.
+
+- **Note:** The diff-diff canonical numbering is: 1-Define, 2-Assumptions, 3-Test PT,
+  4-Choose estimator, 5-Estimate, 6-Sensitivity, 7-Heterogeneity, 8-Robustness.
+  Paper's numbering: 1-Define, 2-Assumptions, 3-Estimation method, 4-Uncertainty,
+  5-Estimate, 6-Sensitivity, 7-Heterogeneity, 8-Keep learning.
+- **Note:** Parallel trends testing is a separate Step 3 (paper embeds it in Step 2),
+  to ensure AI agents execute it as a distinct action.
+- **Note:** Sources of uncertainty (paper's Step 4) is folded into Step 5 (Estimate)
+  with an explicit cluster-count check directive (>= 50 clusters for asymptotic SEs,
+  otherwise wild bootstrap). The 50-cluster threshold is a diff-diff convention.
+- **Note:** Step 8 is "Robustness & Reporting" (compare estimators, report with/without
+  covariates). Paper's Step 8 is "Keep learning." The mandatory with/without covariate
+  comparison is a diff-diff convention.
+
+---
+
 # Version History
 
 - **v1.3** (2026-03-26): Added Replicate Weight Variance, DEFF Diagnostics,

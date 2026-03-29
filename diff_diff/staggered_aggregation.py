@@ -80,12 +80,12 @@ class CallawaySantAnnaAggregationMixin:
                 continue
             effects.append(data["effect"])
             # Use fixed cohort-level survey weight sum for aggregation.
-            # For RCS, data["n_treated"] is already the fixed cohort mass
-            # (set at the source in _compute_att_gt_rc), so the fallback is correct.
+            # For RCS, data["agg_weight"] holds the fixed cohort mass;
+            # for panel, fallback to data["n_treated"].
             if survey_cohort_weights is not None and g in survey_cohort_weights:
                 weights_list.append(survey_cohort_weights[g])
             else:
-                weights_list.append(data["n_treated"])
+                weights_list.append(data.get("agg_weight", data["n_treated"]))
             gt_pairs.append((g, t))
             groups_for_gt.append(g)
 
@@ -577,11 +577,12 @@ class CallawaySantAnnaAggregationMixin:
             e = t - g  # Relative time
             if e not in effects_by_e:
                 effects_by_e[e] = []
-            # For RCS, data["n_treated"] is already the fixed cohort mass
+            # For RCS, data["agg_weight"] holds the fixed cohort mass;
+            # for panel, fallback to data["n_treated"].
             w = (
                 survey_cohort_weights[g]
                 if survey_cohort_weights is not None and g in survey_cohort_weights
-                else data["n_treated"]
+                else data.get("agg_weight", data["n_treated"])
             )
             effects_by_e[e].append(
                 (
@@ -609,7 +610,7 @@ class CallawaySantAnnaAggregationMixin:
                     w = (
                         survey_cohort_weights[g]
                         if survey_cohort_weights is not None and g in survey_cohort_weights
-                        else data["n_treated"]
+                        else data.get("agg_weight", data["n_treated"])
                     )
                     balanced_effects[e].append(
                         (

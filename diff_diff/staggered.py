@@ -1480,12 +1480,14 @@ class CallawaySantAnna(
                     ]
 
                 for t in valid_periods:
-                    att_gt, se_gt, n_treat, n_ctrl, inf_info, sw_sum = self._compute_att_gt_rc(
+                    rc_result = self._compute_att_gt_rc(
                         precomputed,
                         g,
                         t,
                         covariates,
                     )
+                    att_gt, se_gt, n_treat, n_ctrl, inf_info, sw_sum = rc_result[:6]
+                    agg_w = rc_result[6] if len(rc_result) > 6 else n_treat
 
                     if att_gt is not None:
                         t_stat, p_val, ci = safe_inference(
@@ -1503,6 +1505,7 @@ class CallawaySantAnna(
                             "conf_int": ci,
                             "n_treated": n_treat,
                             "n_control": n_ctrl,
+                            "agg_weight": agg_w,
                         }
                         if sw_sum is not None:
                             gte_entry["survey_weight_sum"] = sw_sum
@@ -2708,9 +2711,10 @@ class CallawaySantAnna(
         }
 
         sw_sum = float(np.sum(sw_gt)) if sw_gt is not None else None
-        # Use fixed cohort mass as n_treated for aggregation weight consistency
+        # n_treated = per-cell treated count at period t (for display).
+        # cohort_mass = total treated across all periods (for aggregation weights).
         cohort_mass = precomputed.get("rcs_cohort_masses", {}).get(g, n_gt)
-        return att, se, cohort_mass, n_ct, inf_func_info, sw_sum
+        return att, se, n_gt, n_ct, inf_func_info, sw_sum, cohort_mass
 
     def _rc_2x2_did(
         self,
@@ -2810,10 +2814,11 @@ class CallawaySantAnna(
         """
         Cross-sectional outcome regression for ATT(g,t).
 
-        Two outcome models: E[Y|X] on controls at t, E[Y|X] on controls at s.
-        Predict counterfactual for treated at each period.
-        ATT = mean(Y_t - m_t(X_t)) for treated at t
-            - mean(Y_s - m_s(X_s)) for treated at s
+        Matches R DRDID::reg_did_rc (Sant'Anna & Zhao 2020, Eq 2.2).
+
+        Two OLS models fit on controls (period t and base period s).
+        Predictions made for ALL treated (both periods).
+        OR correction pools ALL treated observations across both periods.
 
         Returns (att, se, inf_func_concat, idx_concat).
         """
@@ -2821,8 +2826,9 @@ class CallawaySantAnna(
         n_gs = len(y_gs)
         n_ct = len(y_ct)
         n_cs = len(y_cs)
+        n_all = n_gt + n_gs + n_ct + n_cs
 
-        # Fit outcome model on controls at period t
+        # --- Fit 2 OLS on control groups (period t and s separately) ---
         beta_t, resid_ct = _linear_regression(
             X_ct,
             y_ct,
@@ -2831,7 +2837,6 @@ class CallawaySantAnna(
         )
         beta_t = np.where(np.isfinite(beta_t), beta_t, 0.0)
 
-        # Fit outcome model on controls at base period s
         beta_s, resid_cs = _linear_regression(
             X_cs,
             y_cs,
@@ -2840,41 +2845,91 @@ class CallawaySantAnna(
         )
         beta_s = np.where(np.isfinite(beta_s), beta_s, 0.0)
 
-        # Predict counterfactual for treated
+        # --- Predict counterfactual for ALL treated (both periods) ---
         X_gt_int = np.column_stack([np.ones(n_gt), X_gt])
         X_gs_int = np.column_stack([np.ones(n_gs), X_gs])
-        m_gt = X_gt_int @ beta_t  # counterfactual at t
-        m_gs = X_gs_int @ beta_s  # counterfactual at s
+        X_ct_int = np.column_stack([np.ones(n_ct), X_ct])
+        X_cs_int = np.column_stack([np.ones(n_cs), X_cs])
 
-        # Treated residuals
-        resid_treated_t = y_gt - m_gt
-        resid_treated_s = y_gs - m_gs
+        # mu_hat_{0,t}(X) and mu_hat_{0,s}(X) for each treated obs
+        mu_post_gt = X_gt_int @ beta_t  # treated-post predicted at post model
+        mu_pre_gt = X_gt_int @ beta_s  # treated-post predicted at pre model
+        mu_post_gs = X_gs_int @ beta_t  # treated-pre predicted at post model
+        mu_pre_gs = X_gs_int @ beta_s  # treated-pre predicted at pre model
 
+        # --- Group weights (R: w.treat.pre, w.treat.post, w.cont = w.D) ---
         if sw_gt is not None:
-            sw_gt_norm = sw_gt / np.sum(sw_gt)
-            sw_gs_norm = sw_gs / np.sum(sw_gs)
-            sw_ct_norm = sw_ct / np.sum(sw_ct)
-            sw_cs_norm = sw_cs / np.sum(sw_cs)
-
-            att_t = float(np.sum(sw_gt_norm * resid_treated_t))
-            att_s = float(np.sum(sw_gs_norm * resid_treated_s))
-            att = att_t - att_s
-
-            # Influence function
-            inf_gt = sw_gt_norm * (resid_treated_t - att_t)
-            inf_gs = -sw_gs_norm * (resid_treated_s - att_s)
-            inf_ct = -sw_ct_norm * resid_ct
-            inf_cs = sw_cs_norm * resid_cs
+            w_treat_post = sw_gt  # treated at t
+            w_treat_pre = sw_gs  # treated at s
+            w_D_gt = sw_gt  # ALL treated: t portion
+            w_D_gs = sw_gs  # ALL treated: s portion
         else:
-            att_t = float(np.mean(resid_treated_t))
-            att_s = float(np.mean(resid_treated_s))
-            att = att_t - att_s
+            w_treat_post = np.ones(n_gt)
+            w_treat_pre = np.ones(n_gs)
+            w_D_gt = np.ones(n_gt)
+            w_D_gs = np.ones(n_gs)
 
-            # Influence function
-            inf_gt = (resid_treated_t - att_t) / n_gt
-            inf_gs = -(resid_treated_s - att_s) / n_gs
-            inf_ct = -resid_ct / n_ct
-            inf_cs = resid_cs / n_cs
+        sum_w_treat_post = np.sum(w_treat_post)
+        sum_w_treat_pre = np.sum(w_treat_pre)
+        sum_w_D = np.sum(w_D_gt) + np.sum(w_D_gs)  # pool ALL treated
+
+        # --- Treated means (period-specific Hajek means) ---
+        eta_treat_post = np.sum(w_treat_post * y_gt) / sum_w_treat_post
+        eta_treat_pre = np.sum(w_treat_pre * y_gs) / sum_w_treat_pre
+
+        # --- OR correction: pools ALL treated ---
+        # out.y.post - out.y.pre for each treated obs
+        or_diff_gt = mu_post_gt - mu_pre_gt  # treated at t
+        or_diff_gs = mu_post_gs - mu_pre_gs  # treated at s
+        eta_cont = (np.sum(w_D_gt * or_diff_gt) + np.sum(w_D_gs * or_diff_gs)) / sum_w_D
+
+        # --- Point estimate ---
+        att = float(eta_treat_post - eta_treat_pre - eta_cont)
+
+        # --- Influence function (matches R reg_did_rc.R) ---
+        # All IF components are n_all-length, nonzero only for their group.
+
+        # Treated IF components (period-specific)
+        inf_treat_post = w_treat_post * (y_gt - eta_treat_post) / sum_w_treat_post
+        inf_treat_pre = w_treat_pre * (y_gs - eta_treat_pre) / sum_w_treat_pre
+
+        # inf_treat = inf_treat_post - inf_treat_pre (across groups)
+        # inf_treat_post lives at gt positions, inf_treat_pre at gs positions
+
+        # Control IF: leading term (nonzero only for treated obs)
+        inf_cont_1_gt = w_D_gt * (or_diff_gt - eta_cont) / sum_w_D
+        inf_cont_1_gs = w_D_gs * (or_diff_gs - eta_cont) / sum_w_D
+
+        # Control IF: estimation effect from OLS
+        # bread_t = (X_ctrl_t' @ diag(W_ctrl_t) @ X_ctrl_t)^{-1}
+        W_ct = sw_ct if sw_ct is not None else np.ones(n_ct)
+        W_cs = sw_cs if sw_cs is not None else np.ones(n_cs)
+        bread_t = _safe_inv(X_ct_int.T @ (W_ct[:, None] * X_ct_int))
+        bread_s = _safe_inv(X_cs_int.T @ (W_cs[:, None] * X_cs_int))
+
+        # M1 = colMeans(w_D * X) / mean(w_D) — gradient, same X basis for both
+        # In R: M1 = colMeans(w.cont * out.x) / mean(w.cont)
+        # w.cont = i.weights * D across all obs; for treated obs, out.x is their X
+        M1 = (
+            np.sum(w_D_gt[:, None] * X_gt_int, axis=0) + np.sum(w_D_gs[:, None] * X_gs_int, axis=0)
+        ) / sum_w_D
+
+        # asy_lin_rep_ols_t: nonzero only for control-t obs
+        # = W_i * (1-D_i) * 1{T=t} * (y_i - X_i'*beta_t) * X_i @ bread_t
+        asy_lin_rep_ols_t = (W_ct * resid_ct)[:, None] * X_ct_int @ bread_t
+        # asy_lin_rep_ols_s: nonzero only for control-s obs
+        asy_lin_rep_ols_s = (W_cs * resid_cs)[:, None] * X_cs_int @ bread_s
+
+        inf_cont_2_ct = asy_lin_rep_ols_t @ M1  # (n_ct,)
+        inf_cont_2_cs = asy_lin_rep_ols_s @ M1  # (n_cs,)
+
+        # --- Assemble per-group IF ---
+        # R: inf_cont = (inf_cont_1 + inf_cont_2_post - inf_cont_2_pre) / mean(w_D)
+        # Our convention divides by sum (not mean), so estimation effects need / sum_w_D
+        inf_gt = inf_treat_post - inf_cont_1_gt
+        inf_gs = -inf_treat_pre - inf_cont_1_gs
+        inf_ct = -(inf_cont_2_ct / sum_w_D)
+        inf_cs = inf_cont_2_cs / sum_w_D
 
         # Concatenate: treated (t then s), control (t then s)
         inf_treated = np.concatenate([inf_gt, inf_gs])
@@ -3046,8 +3101,9 @@ class CallawaySantAnna(
         """
         Cross-sectional doubly robust estimation for ATT(g,t).
 
-        Combines outcome regression and IPW. Consistent if either the
-        outcome model or the propensity model is correctly specified.
+        Matches R DRDID::drdid_rc (Sant'Anna & Zhao 2020, Eq 3.1).
+        Locally efficient DR estimator with 4 OLS fits (control pre/post,
+        treated pre/post) plus propensity score.
 
         Returns (att, se, inf_func_concat, idx_concat).
         """
@@ -3055,35 +3111,77 @@ class CallawaySantAnna(
         n_gs = len(y_gs)
         n_ct = len(y_ct)
         n_cs = len(y_cs)
+        n_all = n_gt + n_gs + n_ct + n_cs
 
-        # --- Outcome regression component ---
-        beta_t, resid_ct = _linear_regression(
+        # =====================================================================
+        # 1. Outcome regression: 4 OLS fits
+        # =====================================================================
+        # Control OLS: E[Y|X, D=0, T=t] and E[Y|X, D=0, T=s]
+        beta_ct, resid_ct = _linear_regression(
             X_ct,
             y_ct,
             rank_deficient_action=self.rank_deficient_action,
             weights=sw_ct,
         )
-        beta_t = np.where(np.isfinite(beta_t), beta_t, 0.0)
+        beta_ct = np.where(np.isfinite(beta_ct), beta_ct, 0.0)
 
-        beta_s, resid_cs = _linear_regression(
+        beta_cs, resid_cs = _linear_regression(
             X_cs,
             y_cs,
             rank_deficient_action=self.rank_deficient_action,
             weights=sw_cs,
         )
-        beta_s = np.where(np.isfinite(beta_s), beta_s, 0.0)
+        beta_cs = np.where(np.isfinite(beta_cs), beta_cs, 0.0)
 
+        # Treated OLS: E[Y|X, D=1, T=t] and E[Y|X, D=1, T=s]
+        beta_gt, resid_gt = _linear_regression(
+            X_gt,
+            y_gt,
+            rank_deficient_action=self.rank_deficient_action,
+            weights=sw_gt,
+        )
+        beta_gt = np.where(np.isfinite(beta_gt), beta_gt, 0.0)
+
+        beta_gs, resid_gs = _linear_regression(
+            X_gs,
+            y_gs,
+            rank_deficient_action=self.rank_deficient_action,
+            weights=sw_gs,
+        )
+        beta_gs = np.where(np.isfinite(beta_gs), beta_gs, 0.0)
+
+        # Intercept-augmented design matrices
         X_gt_int = np.column_stack([np.ones(n_gt), X_gt])
         X_gs_int = np.column_stack([np.ones(n_gs), X_gs])
         X_ct_int = np.column_stack([np.ones(n_ct), X_ct])
         X_cs_int = np.column_stack([np.ones(n_cs), X_cs])
 
-        m_gt = X_gt_int @ beta_t
-        m_gs = X_gs_int @ beta_s
-        m_ct = X_ct_int @ beta_t
-        m_cs = X_cs_int @ beta_s
+        # Control OR predictions for all groups
+        mu0_post_gt = X_gt_int @ beta_ct  # mu_{0,1}(X) for treated-post
+        mu0_pre_gt = X_gt_int @ beta_cs  # mu_{0,0}(X) for treated-post
+        mu0_post_gs = X_gs_int @ beta_ct  # mu_{0,1}(X) for treated-pre
+        mu0_pre_gs = X_gs_int @ beta_cs  # mu_{0,0}(X) for treated-pre
+        mu0_post_ct = X_ct_int @ beta_ct  # mu_{0,1}(X) for control-post
+        mu0_pre_ct = X_ct_int @ beta_cs  # mu_{0,0}(X) for control-post
+        mu0_post_cs = X_cs_int @ beta_ct  # mu_{0,1}(X) for control-pre
+        mu0_pre_cs = X_cs_int @ beta_cs  # mu_{0,0}(X) for control-pre
 
-        # --- Propensity score component ---
+        # Treated OR predictions for all groups (for local efficiency adjustment)
+        mu1_post_gt = X_gt_int @ beta_gt  # mu_{1,1}(X) for treated-post
+        mu1_pre_gt = X_gt_int @ beta_gs  # mu_{1,0}(X) for treated-post
+        mu1_post_gs = X_gs_int @ beta_gt  # mu_{1,1}(X) for treated-pre
+        mu1_pre_gs = X_gs_int @ beta_gs  # mu_{1,0}(X) for treated-pre
+
+        # mu_{0,Y}(T_i, X_i): control OR evaluated at own period
+        # For post-period obs: mu_{0,1}(X), for pre-period obs: mu_{0,0}(X)
+        mu0Y_gt = mu0_post_gt  # treated-post → use post control model
+        mu0Y_gs = mu0_pre_gs  # treated-pre → use pre control model
+        mu0Y_ct = mu0_post_ct  # control-post → use post control model
+        mu0Y_cs = mu0_pre_cs  # control-pre → use pre control model
+
+        # =====================================================================
+        # 2. Propensity score
+        # =====================================================================
         X_all = np.vstack([X_gt, X_gs, X_ct, X_cs])
         D_all = np.concatenate([np.ones(n_gt + n_gs), np.zeros(n_ct + n_cs)])
         sw_all = None
@@ -3112,128 +3210,256 @@ class CallawaySantAnna(
 
         pscore = np.clip(pscore, self.pscore_trim, 1 - self.pscore_trim)
 
+        # Split propensity scores per group
+        ps_gt = pscore[:n_gt]
+        ps_gs = pscore[n_gt : n_gt + n_gs]
         ps_ct = pscore[n_gt + n_gs : n_gt + n_gs + n_ct]
         ps_cs = pscore[n_gt + n_gs + n_ct :]
 
-        # IPW weights for controls
-        w_ct = ps_ct / (1 - ps_ct)
-        w_cs = ps_cs / (1 - ps_cs)
-
+        # =====================================================================
+        # 3. Group weights
+        # =====================================================================
         if sw_gt is not None:
-            w_ct = sw_ct * w_ct
-            w_cs = sw_cs * w_cs
-
-        # --- DR ATT ---
-        if sw_gt is not None:
-            sw_gt_sum = np.sum(sw_gt)
-            sw_gs_sum = np.sum(sw_gs)
-
-            # Period t component
-            att_t_or = float(np.sum(sw_gt * (y_gt - m_gt)) / sw_gt_sum)
-            att_t_aug = float(np.sum(w_ct * (m_ct - y_ct)) / sw_gt_sum)
-            att_t = att_t_or + att_t_aug
-
-            # Period s component
-            att_s_or = float(np.sum(sw_gs * (y_gs - m_gs)) / sw_gs_sum)
-            att_s_aug = float(np.sum(w_cs * (m_cs - y_cs)) / sw_gs_sum)
-            att_s = att_s_or + att_s_aug
-
-            att = att_t - att_s
-
-            # Influence function (plug-in)
-            sw_gt_norm = sw_gt / sw_gt_sum
-            sw_gs_norm = sw_gs / sw_gs_sum
-
-            inf_gt = sw_gt_norm * (y_gt - m_gt - att_t)
-            inf_gs = -sw_gs_norm * (y_gs - m_gs - att_s)
-            inf_ct = (w_ct / sw_gt_sum) * (m_ct - y_ct)
-            inf_cs = -(w_cs / sw_gs_sum) * (m_cs - y_cs)
+            w_treat_post = sw_gt
+            w_treat_pre = sw_gs
+            w_D_gt = sw_gt
+            w_D_gs = sw_gs
         else:
-            # Period t component
-            att_t_or = float(np.mean(y_gt - m_gt))
-            att_t_aug = float(np.sum(w_ct * (m_ct - y_ct)) / n_gt)
-            att_t = att_t_or + att_t_aug
+            w_treat_post = np.ones(n_gt)
+            w_treat_pre = np.ones(n_gs)
+            w_D_gt = np.ones(n_gt)
+            w_D_gs = np.ones(n_gs)
 
-            # Period s component
-            att_s_or = float(np.mean(y_gs - m_gs))
-            att_s_aug = float(np.sum(w_cs * (m_cs - y_cs)) / n_gs)
-            att_s = att_s_or + att_s_aug
+        sum_w_treat_post = np.sum(w_treat_post)
+        sum_w_treat_pre = np.sum(w_treat_pre)
+        sum_w_D = np.sum(w_D_gt) + np.sum(w_D_gs)
 
-            att = att_t - att_s
+        # IPW control weights: sw * ps/(1-ps) for controls
+        w_ipw_ct = ps_ct / (1 - ps_ct)
+        w_ipw_cs = ps_cs / (1 - ps_cs)
+        if sw_ct is not None:
+            w_ipw_ct = sw_ct * w_ipw_ct
+            w_ipw_cs = sw_cs * w_ipw_cs
 
-            # Influence function (plug-in)
-            inf_gt = (y_gt - m_gt - att_t) / n_gt
-            inf_gs = -(y_gs - m_gs - att_s) / n_gs
-            inf_ct = (w_ct * (m_ct - y_ct)) / n_gt
-            inf_cs = -(w_cs * (m_cs - y_cs)) / n_gs
+        # =====================================================================
+        # 4. Point estimate: tau_1 (AIPW using control ORs)
+        # =====================================================================
+        # Hajek-normalized means of (y - mu0Y) per group
+        eta_treat_post = np.sum(w_treat_post * (y_gt - mu0Y_gt)) / sum_w_treat_post
+        eta_treat_pre = np.sum(w_treat_pre * (y_gs - mu0Y_gs)) / sum_w_treat_pre
 
-        # Concatenate: treated (t then s), control (t then s)
+        sum_w_ipw_ct = np.sum(w_ipw_ct)
+        sum_w_ipw_cs = np.sum(w_ipw_cs)
+        eta_cont_post = (
+            np.sum(w_ipw_ct * (y_ct - mu0Y_ct)) / sum_w_ipw_ct if sum_w_ipw_ct > 0 else 0.0
+        )
+        eta_cont_pre = (
+            np.sum(w_ipw_cs * (y_cs - mu0Y_cs)) / sum_w_ipw_cs if sum_w_ipw_cs > 0 else 0.0
+        )
+
+        tau_1 = (eta_treat_post - eta_cont_post) - (eta_treat_pre - eta_cont_pre)
+
+        # =====================================================================
+        # 5. Point estimate: local efficiency adjustment (tau_2)
+        # =====================================================================
+        # Differences mu_{1,t}(X) - mu_{0,t}(X) for treated obs
+        or_diff_post_gt = mu1_post_gt - mu0_post_gt  # at treated-post
+        or_diff_post_gs = mu1_post_gs - mu0_post_gs  # at treated-pre
+        or_diff_pre_gt = mu1_pre_gt - mu0_pre_gt  # at treated-post
+        or_diff_pre_gs = mu1_pre_gs - mu0_pre_gs  # at treated-pre
+
+        # att_d_post = mean(w_D * (mu1_post - mu0_post)) / mean(w_D) — all treated
+        att_d_post = (np.sum(w_D_gt * or_diff_post_gt) + np.sum(w_D_gs * or_diff_post_gs)) / sum_w_D
+        # att_dt1_post — treated-post only
+        att_dt1_post = np.sum(w_treat_post * or_diff_post_gt) / sum_w_treat_post
+        # att_d_pre — all treated
+        att_d_pre = (np.sum(w_D_gt * or_diff_pre_gt) + np.sum(w_D_gs * or_diff_pre_gs)) / sum_w_D
+        # att_dt0_pre — treated-pre only
+        att_dt0_pre = np.sum(w_treat_pre * or_diff_pre_gs) / sum_w_treat_pre
+
+        tau_2 = (att_d_post - att_dt1_post) - (att_d_pre - att_dt0_pre)
+
+        att = float(tau_1 + tau_2)
+
+        # =====================================================================
+        # 6. Influence function: tau_1 components
+        # =====================================================================
+        # Treated IF (period-specific Hajek)
+        inf_treat_post = w_treat_post * (y_gt - mu0Y_gt - eta_treat_post) / sum_w_treat_post
+        inf_treat_pre = w_treat_pre * (y_gs - mu0Y_gs - eta_treat_pre) / sum_w_treat_pre
+
+        # Control IF (IPW Hajek)
+        inf_cont_post_ct = (
+            w_ipw_ct * (y_ct - mu0Y_ct - eta_cont_post) / sum_w_ipw_ct
+            if sum_w_ipw_ct > 0
+            else np.zeros(n_ct)
+        )
+        inf_cont_pre_cs = (
+            w_ipw_cs * (y_cs - mu0Y_cs - eta_cont_pre) / sum_w_ipw_cs
+            if sum_w_ipw_cs > 0
+            else np.zeros(n_cs)
+        )
+
+        # tau_1 IF per group (plug-in, before nuisance corrections)
+        inf_gt_tau1 = inf_treat_post
+        inf_gs_tau1 = -inf_treat_pre
+        inf_ct_tau1 = -inf_cont_post_ct
+        inf_cs_tau1 = inf_cont_pre_cs
+
+        # =====================================================================
+        # 7. Influence function: tau_2 leading terms
+        # =====================================================================
+        # att_d_post IF: w_D*(or_diff_post - att_d_post) / sum_w_D
+        inf_d_post_gt = w_D_gt * (or_diff_post_gt - att_d_post) / sum_w_D
+        inf_d_post_gs = w_D_gs * (or_diff_post_gs - att_d_post) / sum_w_D
+        # att_dt1_post IF: w_treat_post*(or_diff_post - att_dt1_post) / sum_w_treat_post
+        inf_dt1_post = w_treat_post * (or_diff_post_gt - att_dt1_post) / sum_w_treat_post
+        # att_d_pre IF
+        inf_d_pre_gt = w_D_gt * (or_diff_pre_gt - att_d_pre) / sum_w_D
+        inf_d_pre_gs = w_D_gs * (or_diff_pre_gs - att_d_pre) / sum_w_D
+        # att_dt0_pre IF
+        inf_dt0_pre = w_treat_pre * (or_diff_pre_gs - att_dt0_pre) / sum_w_treat_pre
+
+        # tau_2 IF per group
+        inf_gt_tau2 = (inf_d_post_gt - inf_dt1_post) - inf_d_pre_gt
+        inf_gs_tau2 = inf_d_post_gs - (-inf_dt0_pre + inf_d_pre_gs)
+        # Control obs don't contribute to tau_2 leading terms (w_D = 0 for controls)
+
+        # =====================================================================
+        # 8. Combined plug-in IF (before nuisance corrections)
+        # =====================================================================
+        inf_gt = inf_gt_tau1 + inf_gt_tau2
+        inf_gs = inf_gs_tau1 + inf_gs_tau2
+        inf_ct = inf_ct_tau1
+        inf_cs = inf_cs_tau1
+
         inf_treated = np.concatenate([inf_gt, inf_gs])
         inf_control = np.concatenate([inf_ct, inf_cs])
         inf_all = np.concatenate([inf_treated, inf_control])
 
-        # --- PS IF correction ---
-        X_all_int = np.column_stack([np.ones(len(D_all)), X_all])
-        pscore_all = pscore
+        # =====================================================================
+        # 9. PS IF correction
+        # =====================================================================
+        X_all_int = np.column_stack([np.ones(n_all), X_all])
 
-        W_ps = pscore_all * (1 - pscore_all)
+        W_ps = pscore * (1 - pscore)
         if sw_all is not None:
             W_ps = W_ps * sw_all
         H_ps = X_all_int.T @ (W_ps[:, None] * X_all_int)
         H_ps_inv = _safe_inv(H_ps)
 
-        score_ps = (D_all - pscore_all)[:, None] * X_all_int
+        score_ps = (D_all - pscore)[:, None] * X_all_int
         if sw_all is not None:
             score_ps = score_ps * sw_all[:, None]
-        asy_lin_rep_ps = score_ps @ H_ps_inv
+        asy_lin_rep_ps = score_ps @ H_ps_inv  # (n_all, p+1)
 
-        # M2_dr: uses DR residuals (m-y) instead of raw y
-        # Use separate normalizers for post vs base period (RCS has different
-        # treated counts per period — using a single normalizer mis-scales)
-        dr_resid_ct = m_ct - y_ct
-        dr_resid_cs = m_cs - y_cs
-        normalizer_t = np.sum(sw_gt) if sw_gt is not None else n_gt
-        normalizer_s = np.sum(sw_gs) if sw_gs is not None else n_gs
-        M2_dr = np.zeros(X_all_int.shape[1])
+        # M2: gradient of tau_1 control IPW w.r.t. PS parameters
+        # Only control obs contribute to M2 (through their IPW weights)
         ct_slice = slice(n_gt + n_gs, n_gt + n_gs + n_ct)
-        M2_dr += np.mean(
-            ((w_ct / normalizer_t) * dr_resid_ct)[:, None] * X_all_int[ct_slice],
-            axis=0,
-        )
         cs_slice = slice(n_gt + n_gs + n_ct, None)
-        M2_dr -= np.mean(
-            ((w_cs / normalizer_s) * dr_resid_cs)[:, None] * X_all_int[cs_slice],
-            axis=0,
-        )
 
-        inf_all = inf_all + asy_lin_rep_ps @ M2_dr
+        dr_resid_ct = y_ct - mu0Y_ct - eta_cont_post
+        dr_resid_cs = y_cs - mu0Y_cs - eta_cont_pre
 
-        # --- OR IF correction -- period t model ---
-        W_t = sw_ct if sw_ct is not None else np.ones(n_ct)
-        bread_t = _safe_inv(X_ct_int.T @ (W_t[:, None] * X_ct_int))
+        M2 = np.zeros(X_all_int.shape[1])
+        if sum_w_ipw_ct > 0:
+            M2 -= (
+                np.sum(
+                    ((w_ipw_ct * dr_resid_ct / sum_w_ipw_ct)[:, None] * X_all_int[ct_slice]),
+                    axis=0,
+                )
+                / n_all
+            )
+        if sum_w_ipw_cs > 0:
+            M2 += (
+                np.sum(
+                    ((w_ipw_cs * dr_resid_cs / sum_w_ipw_cs)[:, None] * X_all_int[cs_slice]),
+                    axis=0,
+                )
+                / n_all
+            )
 
-        sw_gt_vals = sw_gt if sw_gt is not None else np.ones(n_gt)
-        M1_t = (
-            -np.sum(sw_gt_vals[:, None] * X_gt_int, axis=0)
-            + np.sum(w_ct[:, None] * X_ct_int, axis=0)
-        ) / normalizer_t
+        inf_all = inf_all + asy_lin_rep_ps @ M2
 
-        asy_lin_rep_or_t = (W_t * (y_ct - m_ct))[:, None] * X_ct_int @ bread_t
-        inf_all[n_gt + n_gs : n_gt + n_gs + n_ct] += asy_lin_rep_or_t @ M1_t
+        # =====================================================================
+        # 10. Control OR IF corrections (tau_1 estimation effect)
+        # =====================================================================
+        # bread = (X'WX)^{-1} for each control OLS
+        W_ct_vals = sw_ct if sw_ct is not None else np.ones(n_ct)
+        W_cs_vals = sw_cs if sw_cs is not None else np.ones(n_cs)
+        bread_ct = _safe_inv(X_ct_int.T @ (W_ct_vals[:, None] * X_ct_int))
+        bread_cs = _safe_inv(X_cs_int.T @ (W_cs_vals[:, None] * X_cs_int))
 
-        # --- OR IF correction -- period s model ---
-        W_s = sw_cs if sw_cs is not None else np.ones(n_cs)
-        bread_s = _safe_inv(X_cs_int.T @ (W_s[:, None] * X_cs_int))
+        # ALR for control OLS
+        asy_lin_rep_ct = (W_ct_vals * resid_ct)[:, None] * X_ct_int @ bread_ct
+        asy_lin_rep_cs = (W_cs_vals * resid_cs)[:, None] * X_cs_int @ bread_cs
 
-        sw_gs_vals = sw_gs if sw_gs is not None else np.ones(n_gs)
-        M1_s = (
-            np.sum(sw_gs_vals[:, None] * X_gs_int, axis=0)
-            - np.sum(w_cs[:, None] * X_cs_int, axis=0)
-        ) / normalizer_s
+        # M1 for control-post model (beta_ct): gradient from tau_1
+        # Treated-post contributes -w_treat_post*X/sum_w_treat_post (via mu0Y_gt = X@beta_ct)
+        # Control-post contributes -w_ipw_ct*X/sum_w_ipw_ct (via mu0Y_ct = X@beta_ct)
+        # Also contributes from tau_2: att_d_post uses mu0_post, att_dt1_post uses mu0_post
+        # For tau_2: w_D*(-X)/sum_w_D from att_d_post + w_treat_post*X/sum_w_treat_post from att_dt1_post
+        M1_ct = np.zeros(X_all_int.shape[1] - 1 + 1)  # p+1 (with intercept)
+        # From eta_treat_post (mu0Y_gt = X@beta_ct):
+        M1_ct -= np.sum(w_treat_post[:, None] * X_gt_int, axis=0) / sum_w_treat_post
+        # From eta_cont_post (mu0Y_ct = X@beta_ct):
+        if sum_w_ipw_ct > 0:
+            M1_ct += np.sum(w_ipw_ct[:, None] * X_ct_int, axis=0) / sum_w_ipw_ct
+        # From tau_2 att_d_post: -w_D * X / sum_w_D (mu0_post at all treated)
+        M1_ct -= (
+            np.sum(w_D_gt[:, None] * X_gt_int, axis=0) + np.sum(w_D_gs[:, None] * X_gs_int, axis=0)
+        ) / sum_w_D
+        # From tau_2 att_dt1_post: +w_treat_post * X / sum_w_treat_post (mu0_post at treated-post)
+        M1_ct += np.sum(w_treat_post[:, None] * X_gt_int, axis=0) / sum_w_treat_post
 
-        asy_lin_rep_or_s = (W_s * (y_cs - m_cs))[:, None] * X_cs_int @ bread_s
-        # Apply only to control-s portion of inf_all
-        inf_all[n_gt + n_gs + n_ct :] += asy_lin_rep_or_s @ M1_s
+        # M1 for control-pre model (beta_cs):
+        M1_cs = np.zeros(X_all_int.shape[1])
+        # From eta_treat_pre (mu0Y_gs = X@beta_cs):
+        M1_cs += np.sum(w_treat_pre[:, None] * X_gs_int, axis=0) / sum_w_treat_pre
+        # From eta_cont_pre (mu0Y_cs = X@beta_cs):
+        if sum_w_ipw_cs > 0:
+            M1_cs -= np.sum(w_ipw_cs[:, None] * X_cs_int, axis=0) / sum_w_ipw_cs
+        # From tau_2 att_d_pre: +w_D * X / sum_w_D (mu0_pre at all treated)
+        M1_cs += (
+            np.sum(w_D_gt[:, None] * X_gt_int, axis=0) + np.sum(w_D_gs[:, None] * X_gs_int, axis=0)
+        ) / sum_w_D
+        # From tau_2 att_dt0_pre: -w_treat_pre * X / sum_w_treat_pre (mu0_pre at treated-pre)
+        M1_cs -= np.sum(w_treat_pre[:, None] * X_gs_int, axis=0) / sum_w_treat_pre
+
+        inf_all[n_gt + n_gs : n_gt + n_gs + n_ct] += asy_lin_rep_ct @ M1_ct
+        inf_all[n_gt + n_gs + n_ct :] += asy_lin_rep_cs @ M1_cs
+
+        # =====================================================================
+        # 11. Treated OR IF corrections (tau_2 estimation effect)
+        # =====================================================================
+        W_gt_vals = sw_gt if sw_gt is not None else np.ones(n_gt)
+        W_gs_vals = sw_gs if sw_gs is not None else np.ones(n_gs)
+        bread_gt = _safe_inv(X_gt_int.T @ (W_gt_vals[:, None] * X_gt_int))
+        bread_gs = _safe_inv(X_gs_int.T @ (W_gs_vals[:, None] * X_gs_int))
+
+        asy_lin_rep_gt = (W_gt_vals * resid_gt)[:, None] * X_gt_int @ bread_gt
+        asy_lin_rep_gs = (W_gs_vals * resid_gs)[:, None] * X_gs_int @ bread_gs
+
+        # M1 for treated-post model (beta_gt): mu_{1,1}(X)
+        # From att_d_post: +w_D*X/sum_w_D (mu1_post at all treated)
+        # From att_dt1_post: -w_treat_post*X/sum_w_treat_post (mu1_post at treated-post)
+        M1_gt = np.zeros(X_all_int.shape[1])
+        M1_gt += (
+            np.sum(w_D_gt[:, None] * X_gt_int, axis=0) + np.sum(w_D_gs[:, None] * X_gs_int, axis=0)
+        ) / sum_w_D
+        M1_gt -= np.sum(w_treat_post[:, None] * X_gt_int, axis=0) / sum_w_treat_post
+
+        # M1 for treated-pre model (beta_gs): mu_{1,0}(X)
+        # From att_d_pre: -w_D*X/sum_w_D
+        # From att_dt0_pre: +w_treat_pre*X/sum_w_treat_pre
+        M1_gs = np.zeros(X_all_int.shape[1])
+        M1_gs -= (
+            np.sum(w_D_gt[:, None] * X_gt_int, axis=0) + np.sum(w_D_gs[:, None] * X_gs_int, axis=0)
+        ) / sum_w_D
+        M1_gs += np.sum(w_treat_pre[:, None] * X_gs_int, axis=0) / sum_w_treat_pre
+
+        inf_all[:n_gt] += asy_lin_rep_gt @ M1_gt
+        inf_all[n_gt : n_gt + n_gs] += asy_lin_rep_gs @ M1_gs
 
         se = float(np.sqrt(np.sum(inf_all**2)))
 

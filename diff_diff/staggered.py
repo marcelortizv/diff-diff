@@ -183,9 +183,11 @@ class CallawaySantAnna(
         in IPW and DR estimation. Must be in ``(0, 0.5)``.
     panel : bool, default=True
         Whether the data is a balanced/unbalanced panel (units observed
-        across multiple time periods). Set to ``False`` for repeated
-        cross-sections where each observation has a unique unit ID and
-        units do not repeat across periods. Uses cross-sectional DRDID
+        across multiple time periods). Set to ``False`` for stationary
+        repeated cross-sections where each observation has a unique unit
+        ID and units do not repeat across periods. Requires that the
+        cross-sectional samples are drawn from the same population in
+        each period (stationarity). Uses cross-sectional DRDID
         (Sant'Anna & Zhao 2020, Section 4) with per-observation influence
         functions.
 
@@ -1322,6 +1324,17 @@ class CallawaySantAnna(
 
         # Reset stale state from prior fit (prevents leaking event-study VCV)
         self._event_study_vcov = None
+
+        if not self.panel:
+            warnings.warn(
+                "panel=False uses repeated cross-section DRDID estimators "
+                "(Sant'Anna & Zhao 2020, Section 4) which assume stationary "
+                "cross-sectional sampling: the population distribution of "
+                "(Y, X, G) must be stable across periods. This assumption "
+                "is not data-checkable.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Normalize empty covariates list to None
         if covariates is not None and len(covariates) == 0:

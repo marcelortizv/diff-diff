@@ -627,6 +627,7 @@ class CallawaySantAnnaAggregationMixin:
         agg_ses_list = []
         agg_n_groups = []
         _psi_vectors = []  # Per-event-time combined IF vectors for VCV
+        _psi_event_times = []  # Event times that contributed a psi column
         for e, effect_list in sorted_periods:
             gt_pairs = [x[0] for x in effect_list]
             effs = np.array([x[1] for x in effect_list])
@@ -666,6 +667,7 @@ class CallawaySantAnnaAggregationMixin:
             agg_ses_list.append(agg_se)
             agg_n_groups.append(len(effect_list))
             _psi_vectors.append(psi_e)
+            _psi_event_times.append(e)
 
         # Batch inference for all relative periods
         if not agg_effects_list:
@@ -753,9 +755,7 @@ class CallawaySantAnnaAggregationMixin:
 
         # Store the event-time index that matches VCV columns (for subsetting
         # in HonestDiD when some event times are filtered out)
-        self._event_study_vcov_index = (
-            [e for e, _ in sorted_periods] if event_study_vcov is not None else None
-        )
+        self._event_study_vcov_index = _psi_event_times if event_study_vcov is not None else None
 
         # Attach VCV to self for CallawaySantAnna to pick up
         self._event_study_vcov = event_study_vcov

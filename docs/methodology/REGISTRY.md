@@ -1353,6 +1353,11 @@ confidence bands (sup-t) for event study.
   sample covariance (ddof=1). Per-(g,t) SE uses R's GMM formula
   `sqrt(1 / (n * sum(Omega_inv)))` for multiple comparison groups, or
   `sqrt(sum(IF^2) / n^2)` for single comparison group.
+- **Deviation from R:** Propensity scores are clipped to `[pscore_trim, 1-pscore_trim]`
+  (default 0.01). R's `triplediff` uses hard exclusion (`keep_ps`) for control units
+  with `pscore >= 0.995` but does not apply a lower bound. The soft-clipping approach
+  retains all observations with bounded weights, which is more conservative under
+  moderate overlap violations.
 - **Note:** The `cluster` parameter is accepted but not currently wired to the
   analytical SE computation. The multiplier bootstrap provides unit-level
   clustering. Full cluster-robust analytical SEs are deferred.

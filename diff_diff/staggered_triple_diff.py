@@ -238,6 +238,15 @@ class StaggeredTripleDifference(
             df, outcome, unit, time, first_treat, eligibility, covariates
         )
 
+        if self.cluster is not None:
+            warnings.warn(
+                "cluster parameter is accepted but cluster-robust analytical SEs "
+                "are not yet implemented for staggered DDD. Use n_bootstrap > 0 "
+                "for unit-level clustered inference via multiplier bootstrap.",
+                UserWarning,
+                stacklevel=2,
+            )
+
         if first_treat != "first_treat":
             df["first_treat"] = df[first_treat]
         df["first_treat"] = df["first_treat"].replace([np.inf, float("inf")], 0)
@@ -462,6 +471,34 @@ class StaggeredTripleDifference(
                                     eff + cband_crit_value * bs_se,
                                 )
 
+                # Update group effects with bootstrap SEs
+                if (
+                    group_effects
+                    and bootstrap_results.group_effect_ses is not None
+                    and bootstrap_results.group_effect_cis is not None
+                    and bootstrap_results.group_effect_p_values is not None
+                ):
+                    grp_keys = [
+                        g for g in group_effects
+                        if g in bootstrap_results.group_effect_ses
+                    ]
+                    for g_key in grp_keys:
+                        group_effects[g_key]["se"] = (
+                            bootstrap_results.group_effect_ses[g_key]
+                        )
+                        group_effects[g_key]["conf_int"] = (
+                            bootstrap_results.group_effect_cis[g_key]
+                        )
+                        group_effects[g_key]["p_value"] = (
+                            bootstrap_results.group_effect_p_values[g_key]
+                        )
+                        t_val, _, _ = safe_inference(
+                            group_effects[g_key]["effect"],
+                            bootstrap_results.group_effect_ses[g_key],
+                            alpha=self.alpha,
+                        )
+                        group_effects[g_key]["t_stat"] = t_val
+
         n_treated_units = int(np.sum(
             (unit_cohorts > 0) & (eligibility_per_unit == 1)
         ))
@@ -486,6 +523,7 @@ class StaggeredTripleDifference(
             n_eligible=n_eligible,
             n_ineligible=n_ineligible,
             alpha=self.alpha,
+            control_group=self.control_group,
             base_period=self.base_period,
             estimation_method=self.estimation_method,
             event_study_effects=event_study_effects,
@@ -536,6 +574,43 @@ class StaggeredTripleDifference(
                 "Need both eligible (Q=1) and ineligible (Q=0) units. "
                 f"Only found Q={df[eligibility].unique()[0]}."
             )
+
+        # Check unique (unit, time) pairs — no duplicate rows
+        dup = df.duplicated(subset=[unit, time], keep=False)
+        if dup.any():
+            raise ValueError(
+                f"Duplicate (unit, time) rows found. "
+                f"{int(dup.sum())} duplicates detected. Panel must have unique rows."
+            )
+
+        # Check balanced panel — equal period count per unit
+        periods_per_unit = df.groupby(unit)[time].nunique()
+        if periods_per_unit.nunique() > 1:
+            raise ValueError(
+                "Unbalanced panel detected. All units must be observed in "
+                "all periods. Period counts range from "
+                f"{periods_per_unit.min()} to {periods_per_unit.max()}."
+            )
+
+        # Check time-invariant first_treat
+        ft_by_unit = df.groupby(unit)[first_treat].nunique()
+        varying_ft = ft_by_unit[ft_by_unit > 1]
+        if len(varying_ft) > 0:
+            raise ValueError(
+                f"first_treat must be time-invariant within units. "
+                f"Found {len(varying_ft)} units with varying first_treat."
+            )
+
+        # Check time-invariant covariates
+        if covariates:
+            for cov in covariates:
+                cov_nunique = df.groupby(unit)[cov].nunique()
+                varying_cov = cov_nunique[cov_nunique > 1]
+                if len(varying_cov) > 0:
+                    raise ValueError(
+                        f"Covariate '{cov}' must be time-invariant within units. "
+                        f"Found {len(varying_cov)} units with varying values."
+                    )
 
     # ------------------------------------------------------------------
     # Precomputation

@@ -72,6 +72,7 @@ class StaggeredTripleDiffResults:
     n_eligible: int
     n_ineligible: int
     alpha: float = 0.05
+    control_group: str = "notyettreated"
     base_period: str = "varying"
     estimation_method: str = "dr"
     event_study_effects: Optional[Dict[int, Dict[str, Any]]] = field(default=None)
@@ -125,6 +126,7 @@ class StaggeredTripleDiffResults:
             f"{'Enabling cohorts:':<30} {len(self.groups):>10}",
             f"{'Time periods:':<30} {len(self.time_periods):>10}",
             f"{'Estimation method:':<30} {self.estimation_method:>10}",
+            f"{'Control group:':<30} {self.control_group:>10}",
             f"{'Base period:':<30} {self.base_period:>10}",
             "",
         ]
@@ -322,6 +324,7 @@ class StaggeredTripleDiffResults:
             "groups": self.groups,
             "time_periods": self.time_periods,
             "estimation_method": self.estimation_method,
+            "control_group": self.control_group,
             "base_period": self.base_period,
             "alpha": self.alpha,
             "pscore_trim": self.pscore_trim,

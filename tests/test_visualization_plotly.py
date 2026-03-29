@@ -318,12 +318,205 @@ class TestPlotlyEventStudyHover:
 
         effects = {"pre": 0.0, "post": 0.5}
         se = {"pre": 0.1, "post": 0.15}
-        fig = plot_event_study(
-            effects=effects, se=se, backend="plotly", show=False
-        )
+        fig = plot_event_study(effects=effects, se=se, backend="plotly", show=False)
         # At least one point trace should have customdata with original labels
         point_traces = [t for t in fig.data if t.mode == "markers"]
         assert len(point_traces) > 0
         for trace in point_traces:
             assert trace.customdata is not None, "Missing customdata on point trace"
             assert trace.hovertemplate is not None, "Missing hovertemplate"
+
+
+# ── Marker Mapping ──────────────────────────────────────────────────────────
+
+
+class TestMarkerMapping:
+    """Unit tests for _mpl_marker_to_plotly_symbol."""
+
+    def test_common_markers(self):
+        from diff_diff.visualization._common import _mpl_marker_to_plotly_symbol
+
+        assert _mpl_marker_to_plotly_symbol("o") == "circle"
+        assert _mpl_marker_to_plotly_symbol("s") == "square"
+        assert _mpl_marker_to_plotly_symbol("D") == "diamond"
+        assert _mpl_marker_to_plotly_symbol("^") == "triangle-up"
+        assert _mpl_marker_to_plotly_symbol("v") == "triangle-down"
+        assert _mpl_marker_to_plotly_symbol("+") == "cross"
+        assert _mpl_marker_to_plotly_symbol("x") == "x"
+        assert _mpl_marker_to_plotly_symbol("*") == "star"
+
+    def test_dot_marker(self):
+        from diff_diff.visualization._common import _mpl_marker_to_plotly_symbol
+
+        assert _mpl_marker_to_plotly_symbol(".") == "circle"
+
+    def test_unknown_marker_returns_circle(self):
+        from diff_diff.visualization._common import _mpl_marker_to_plotly_symbol
+
+        assert _mpl_marker_to_plotly_symbol("Z") == "circle"
+        assert _mpl_marker_to_plotly_symbol("???") == "circle"
+
+
+# ── Plotly Styling Kwargs ───────────────────────────────────────────────────
+
+
+class TestPlotlyEventStudyStyling:
+    """Verify styling kwargs reach plotly traces."""
+
+    def test_marker_and_size_threaded(self):
+        from diff_diff import plot_event_study
+
+        effects = {-1: 0.0, 0: 0.5, 1: 0.6}
+        se = {-1: 0.1, 0: 0.15, 1: 0.15}
+        fig = plot_event_study(
+            effects=effects,
+            se=se,
+            marker="s",
+            markersize=12,
+            backend="plotly",
+            show=False,
+        )
+        point_traces = [t for t in fig.data if t.mode == "markers"]
+        assert len(point_traces) > 0
+        for trace in point_traces:
+            assert trace.marker.size == 12
+            assert trace.marker.symbol == "square"
+
+    def test_default_marker_values(self):
+        from diff_diff import plot_event_study
+
+        effects = {0: 0.5}
+        se = {0: 0.1}
+        fig = plot_event_study(effects=effects, se=se, backend="plotly", show=False)
+        point_traces = [t for t in fig.data if t.mode == "markers"]
+        assert len(point_traces) > 0
+        # Default: marker="o" -> circle, markersize=8
+        for trace in point_traces:
+            assert trace.marker.size == 8
+            assert trace.marker.symbol == "circle"
+
+
+class TestPlotlyHonestEventStudyStyling:
+    """Verify styling kwargs reach honest event study plotly traces."""
+
+    def test_marker_symbol_threaded(self, honest_results):
+        from diff_diff.visualization import plot_honest_event_study
+
+        fig = plot_honest_event_study(
+            honest_results, marker="D", markersize=14, backend="plotly", show=False
+        )
+        point_traces = [t for t in fig.data if t.mode == "markers"]
+        assert len(point_traces) > 0
+        for trace in point_traces:
+            assert trace.marker.size == 14
+            assert trace.marker.symbol == "diamond"
+
+
+class TestPlotlySensitivityStyling:
+    """Verify ci_linewidth reaches plotly CI line traces."""
+
+    def test_ci_linewidth_threaded(self, sensitivity_results):
+        from diff_diff.visualization import plot_sensitivity
+
+        fig = plot_sensitivity(sensitivity_results, ci_linewidth=3.0, backend="plotly", show=False)
+        # CI traces are lines (not fills) with name "Robust CI"
+        ci_traces = [t for t in fig.data if t.mode == "lines" and t.name == "Robust CI"]
+        assert len(ci_traces) > 0
+        for trace in ci_traces:
+            assert trace.line.width == 3.0
+
+
+class TestPlotlyBaconStyling:
+    """Verify marker/markersize reach Bacon scatter plotly traces."""
+
+    def test_marker_and_size_threaded(self, bacon_results):
+        from diff_diff.visualization import plot_bacon
+
+        fig = plot_bacon(
+            bacon_results,
+            marker="^",
+            markersize=100,
+            backend="plotly",
+            show=False,
+        )
+        scatter_traces = [t for t in fig.data if t.mode == "markers"]
+        assert len(scatter_traces) > 0
+        for trace in scatter_traces:
+            assert trace.marker.symbol == "triangle-up"
+            # sqrt(100) = 10
+            assert trace.marker.size == 10
+
+
+class TestPlotlyPowerCurveStyling:
+    """Verify linewidth and show_grid reach plotly power curve."""
+
+    def test_linewidth_threaded(self):
+        from diff_diff.visualization import plot_power_curve
+
+        fig = plot_power_curve(
+            effect_sizes=[0.1, 0.2, 0.3],
+            powers=[0.3, 0.6, 0.9],
+            linewidth=3.5,
+            backend="plotly",
+            show=False,
+        )
+        line_traces = [t for t in fig.data if t.mode == "lines"]
+        assert len(line_traces) > 0
+        assert line_traces[0].line.width == 3.5
+
+    def test_show_grid_false(self):
+        from diff_diff.visualization import plot_power_curve
+
+        fig = plot_power_curve(
+            effect_sizes=[0.1, 0.2, 0.3],
+            powers=[0.3, 0.6, 0.9],
+            show_grid=False,
+            backend="plotly",
+            show=False,
+        )
+        assert fig.layout.xaxis.showgrid is False
+        assert fig.layout.yaxis.showgrid is False
+
+    def test_show_grid_true(self):
+        from diff_diff.visualization import plot_power_curve
+
+        fig = plot_power_curve(
+            effect_sizes=[0.1, 0.2, 0.3],
+            powers=[0.3, 0.6, 0.9],
+            show_grid=True,
+            backend="plotly",
+            show=False,
+        )
+        assert fig.layout.xaxis.showgrid is True
+        assert fig.layout.yaxis.showgrid is True
+
+
+class TestPlotlyPretrendsPowerStyling:
+    """Verify linewidth and show_grid reach plotly pretrends power curve."""
+
+    def test_linewidth_threaded(self):
+        from diff_diff.visualization import plot_pretrends_power
+
+        fig = plot_pretrends_power(
+            M_values=[0.0, 0.5, 1.0],
+            powers=[0.1, 0.5, 0.8],
+            linewidth=4.0,
+            backend="plotly",
+            show=False,
+        )
+        line_traces = [t for t in fig.data if t.mode == "lines"]
+        assert len(line_traces) > 0
+        assert line_traces[0].line.width == 4.0
+
+    def test_show_grid_false(self):
+        from diff_diff.visualization import plot_pretrends_power
+
+        fig = plot_pretrends_power(
+            M_values=[0.0, 0.5, 1.0],
+            powers=[0.1, 0.5, 0.8],
+            show_grid=False,
+            backend="plotly",
+            show=False,
+        )
+        assert fig.layout.xaxis.showgrid is False
+        assert fig.layout.yaxis.showgrid is False

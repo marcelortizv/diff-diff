@@ -165,8 +165,10 @@ def plot_power_curve(
             color=color,
             mde_color=mde_color,
             target_color=target_color,
+            linewidth=linewidth,
             show_mde_line=show_mde_line,
             show_target_line=show_target_line,
+            show_grid=show_grid,
             show=show,
         )
 
@@ -291,8 +293,10 @@ def _render_power_curve_plotly(
     color,
     mde_color,
     target_color,
+    linewidth,
     show_mde_line,
     show_target_line,
+    show_grid,
     show,
 ):
     """Render power curve with plotly."""
@@ -307,7 +311,7 @@ def _render_power_curve_plotly(
             x=effect_sizes,
             y=powers,
             mode="lines",
-            line=dict(color=color, width=2),
+            line=dict(color=color, width=linewidth),
             name="Power",
         )
     )
@@ -331,7 +335,8 @@ def _render_power_curve_plotly(
         )
 
     _plotly_default_layout(fig, title=title, xlabel=xlabel, ylabel=ylabel)
-    fig.update_yaxes(range=[0, 1.05], tickformat=".0%")
+    fig.update_xaxes(showgrid=show_grid)
+    fig.update_yaxes(range=[0, 1.05], tickformat=".0%", showgrid=show_grid)
 
     if show:
         fig.show()
@@ -482,8 +487,10 @@ def plot_pretrends_power(
             color=color,
             mdv_color=mdv_color,
             target_color=target_color,
+            linewidth=linewidth,
             show_mdv_line=show_mdv_line,
             show_target_line=show_target_line,
+            show_grid=show_grid,
             show=show,
         )
 
@@ -602,8 +609,10 @@ def _render_pretrends_power_plotly(
     color,
     mdv_color,
     target_color,
+    linewidth,
     show_mdv_line,
     show_target_line,
+    show_grid,
     show,
 ):
     """Render pre-trends power curve with plotly."""
@@ -619,7 +628,7 @@ def _render_pretrends_power_plotly(
                 x=M_values,
                 y=powers,
                 mode="lines",
-                line=dict(color=color, width=2),
+                line=dict(color=color, width=linewidth),
                 name="Power",
             )
         )
@@ -643,7 +652,8 @@ def _render_pretrends_power_plotly(
         )
 
     _plotly_default_layout(fig, title=title, xlabel=xlabel, ylabel=ylabel)
-    fig.update_yaxes(range=[0, 1.05], tickformat=".0%")
+    fig.update_xaxes(showgrid=show_grid)
+    fig.update_yaxes(range=[0, 1.05], tickformat=".0%", showgrid=show_grid)
 
     if show:
         fig.show()

@@ -111,6 +111,7 @@ def plot_sensitivity(
             bounds_color=bounds_color,
             bounds_alpha=bounds_alpha,
             ci_color=ci_color,
+            ci_linewidth=ci_linewidth,
             breakdown_color=breakdown_color,
             original_color=original_color,
             show=show,
@@ -242,6 +243,7 @@ def _render_sensitivity_plotly(
     bounds_color,
     bounds_alpha,
     ci_color,
+    ci_linewidth,
     breakdown_color,
     original_color,
     show,
@@ -291,7 +293,7 @@ def _render_sensitivity_plotly(
                 x=M_list,
                 y=list(ci_arr[:, 0]),
                 mode="lines",
-                line=dict(color=ci_color, width=1.5),
+                line=dict(color=ci_color, width=ci_linewidth),
                 name="Robust CI",
             )
         )
@@ -300,7 +302,7 @@ def _render_sensitivity_plotly(
                 x=M_list,
                 y=list(ci_arr[:, 1]),
                 mode="lines",
-                line=dict(color=ci_color, width=1.5),
+                line=dict(color=ci_color, width=ci_linewidth),
                 showlegend=False,
             )
         )
@@ -449,6 +451,8 @@ def plot_bacon(
             xlabel=xlabel,
             ylabel=ylabel,
             colors=colors,
+            marker=marker,
+            markersize=markersize,
             alpha=alpha,
             show_weighted_avg=show_weighted_avg,
             show_twfe_line=show_twfe_line,
@@ -699,13 +703,19 @@ def _render_bacon_plotly(
     xlabel,
     ylabel,
     colors,
+    marker,
+    markersize,
     alpha,
     show_weighted_avg,
     show_twfe_line,
     show,
 ):
     """Render Bacon decomposition plot with plotly."""
-    from diff_diff.visualization._common import _plotly_default_layout, _require_plotly
+    from diff_diff.visualization._common import (
+        _mpl_marker_to_plotly_symbol,
+        _plotly_default_layout,
+        _require_plotly,
+    )
 
     go = _require_plotly()
 
@@ -727,6 +737,10 @@ def _render_bacon_plotly(
             "later_vs_earlier": "Later vs Earlier (forbidden)",
         }
 
+        # Convert matplotlib scatter area (points^2) to plotly diameter (px)
+        plotly_size = max(1, int(round(markersize**0.5)))
+        symbol = _mpl_marker_to_plotly_symbol(marker)
+
         for ctype, points in by_type.items():
             if not points:
                 continue
@@ -737,7 +751,12 @@ def _render_bacon_plotly(
                     x=estimates,
                     y=weights,
                     mode="markers",
-                    marker=dict(color=colors[ctype], size=10, opacity=alpha),
+                    marker=dict(
+                        color=colors[ctype],
+                        size=plotly_size,
+                        symbol=symbol,
+                        opacity=alpha,
+                    ),
                     name=labels[ctype],
                 )
             )

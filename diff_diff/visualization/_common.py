@@ -283,6 +283,42 @@ def _color_to_rgba(color, alpha=1.0):
     )
 
 
+# Matplotlib marker code -> plotly symbol name mapping
+_MPL_TO_PLOTLY_SYMBOL = {
+    "o": "circle",
+    "s": "square",
+    "D": "diamond",
+    "d": "diamond",
+    "^": "triangle-up",
+    "v": "triangle-down",
+    "<": "triangle-left",
+    ">": "triangle-right",
+    "p": "pentagon",
+    "h": "hexagon",
+    "+": "cross",
+    "x": "x",
+    "*": "star",
+    ".": "circle",
+}
+
+
+def _mpl_marker_to_plotly_symbol(marker):
+    """Convert a matplotlib marker code to a plotly symbol name.
+
+    Parameters
+    ----------
+    marker : str
+        Matplotlib marker shorthand (e.g., ``"o"``, ``"s"``, ``"D"``).
+
+    Returns
+    -------
+    str
+        Plotly symbol name (e.g., ``"circle"``, ``"square"``, ``"diamond"``).
+        Returns ``"circle"`` for unrecognized markers.
+    """
+    return _MPL_TO_PLOTLY_SYMBOL.get(marker, "circle")
+
+
 # Default color constants
 DEFAULT_BLUE = "#2563eb"
 DEFAULT_RED = "#dc2626"

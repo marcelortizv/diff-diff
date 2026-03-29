@@ -272,6 +272,8 @@ def plot_event_study(
             xlabel=xlabel,
             ylabel=ylabel,
             color=color,
+            marker=marker,
+            markersize=markersize,
             shade_pre=shade_pre,
             shade_color=shade_color,
             show_zero_line=show_zero_line,
@@ -422,6 +424,8 @@ def _render_event_study_plotly(
     xlabel,
     ylabel,
     color,
+    marker,
+    markersize,
     shade_pre,
     shade_color,
     show_zero_line,
@@ -431,6 +435,7 @@ def _render_event_study_plotly(
     """Render event study plot with plotly."""
     from diff_diff.visualization._common import (
         _color_to_rgba,
+        _mpl_marker_to_plotly_symbol,
         _plotly_default_layout,
         _require_plotly,
     )
@@ -504,13 +509,15 @@ def _render_event_study_plotly(
 
     hover_tpl = "Period: %{customdata}<br>Effect: %{y:.4f}<extra></extra>"
 
+    symbol = _mpl_marker_to_plotly_symbol(marker)
+
     if non_ref_x:
         fig.add_trace(
             go.Scatter(
                 x=non_ref_x,
                 y=non_ref_e,
                 mode="markers",
-                marker=dict(color=color, size=10),
+                marker=dict(color=color, size=markersize, symbol=symbol),
                 name="Effect",
                 customdata=non_ref_labels,
                 hovertemplate=hover_tpl,
@@ -525,7 +532,8 @@ def _render_event_study_plotly(
                 mode="markers",
                 marker=dict(
                     color="white",
-                    size=10,
+                    size=markersize,
+                    symbol=symbol,
                     line=dict(color=color, width=2),
                 ),
                 name="Reference",
@@ -842,6 +850,8 @@ def plot_honest_event_study(
             ylabel=ylabel,
             original_color=original_color,
             honest_color=honest_color,
+            marker=marker,
+            markersize=markersize,
             show=show,
         )
 
@@ -987,11 +997,14 @@ def _render_honest_event_study_plotly(
     ylabel,
     original_color,
     honest_color,
+    marker,
+    markersize,
     show,
 ):
     """Render honest event study plot with plotly."""
     from diff_diff.visualization._common import (
         _color_to_rgba,
+        _mpl_marker_to_plotly_symbol,
         _plotly_default_layout,
         _require_plotly,
     )
@@ -1036,13 +1049,15 @@ def _render_honest_event_study_plotly(
     ref_p = [p for p, r in zip(periods, is_ref) if r]
     ref_e = [e for e, r in zip(effects, is_ref) if r]
 
+    symbol = _mpl_marker_to_plotly_symbol(marker)
+
     if non_ref_p:
         fig.add_trace(
             go.Scatter(
                 x=non_ref_p,
                 y=non_ref_e,
                 mode="markers",
-                marker=dict(color=honest_color, size=10),
+                marker=dict(color=honest_color, size=markersize, symbol=symbol),
                 name="Effect",
             )
         )
@@ -1053,7 +1068,12 @@ def _render_honest_event_study_plotly(
                 x=ref_p,
                 y=ref_e,
                 mode="markers",
-                marker=dict(color="white", size=10, line=dict(color=honest_color, width=2)),
+                marker=dict(
+                    color="white",
+                    size=markersize,
+                    symbol=symbol,
+                    line=dict(color=honest_color, width=2),
+                ),
                 name="Reference",
             )
         )

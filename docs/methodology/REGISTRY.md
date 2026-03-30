@@ -1318,14 +1318,19 @@ functions across comparison groups. Minimizes asymptotic variance subject to `su
 Event study (Equation 4.13): cohort-share-weighted average across cohorts for each
 relative time `e = t - g`. Reuses `CallawaySantAnnaAggregationMixin._aggregate_event_study()`.
 
-Overall ATT (Equation 4.14): weighted average across post-treatment (g,t) pairs.
-Reuses `CallawaySantAnnaAggregationMixin._aggregate_simple()`.
+Overall ATT: cohort-size-weighted average across post-treatment (g,t) pairs.
+Reuses `CallawaySantAnnaAggregationMixin._aggregate_simple()`. Note: this is the
+simple post-treatment aggregation, not the paper's Equation 4.14 (which averages
+over event-study effects).
 
 Group effects: average across post-treatment time periods for each cohort.
 Reuses `CallawaySantAnnaAggregationMixin._aggregate_by_group()`.
 
-All aggregation SEs include the WIF (Weight Influence Function) adjustment for
-uncertainty in cohort-share weights, inherited from the CallawaySantAnna mixin.
+Overall and event-study aggregation SEs include the WIF (Weight Influence Function)
+adjustment for uncertainty in cohort-share weights. Per-cohort group-effect SEs also
+include WIF via the inherited mixin; R's `agg_ddd(type="group")` uses `wif=NULL` for
+per-cohort aggregation since within-cohort weights are fixed. This makes our per-cohort
+group-effect SEs slightly conservative relative to R.
 
 *Standard errors:*
 

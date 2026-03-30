@@ -1018,7 +1018,9 @@ def generate_staggered_ddd_data(
     for g_val in [0.0] + [float(g) for g in cohort_periods]:
         mask = unit_cohort == g_val
         n_g = int(np.sum(mask))
-        n_eligible = max(1, int(n_g * eligibility_frac))
+        if n_g == 0:
+            continue
+        n_eligible = max(1, min(int(n_g * eligibility_frac), n_g))
         indices = np.where(mask)[0]
         eligible_idx = rng.choice(indices, size=n_eligible, replace=False)
         unit_elig[eligible_idx] = 1

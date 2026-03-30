@@ -681,6 +681,13 @@ def _extract_event_study_params(
                 pre_times = [t for t in rel_times if t < ref_period]
                 post_times = [t for t in rel_times if t > ref_period]
 
+                if len(pre_times) == 0:
+                    raise ValueError(
+                        "No pre-period effects with finite estimates found in "
+                        "CallawaySantAnna event study. HonestDiD requires at "
+                        "least one identified pre-period coefficient."
+                    )
+
                 effects = []
                 ses = []
                 for t in rel_times:
@@ -1452,7 +1459,9 @@ class HonestDiD:
                     ]
                     if pre_effects:
                         return max(pre_effects)
-                return results.overall_se
+                # No valid pre-effects — should have been caught by
+                # _extract_event_study_params pre-period validation
+                return 0.0
         except ImportError:
             pass
 

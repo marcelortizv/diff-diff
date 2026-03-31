@@ -1,0 +1,535 @@
+"""Survey support tests for StaggeredTripleDifference estimator.
+
+Tests follow the patterns from test_survey_phase4.py and test_survey_phase7a.py:
+uniform weight equivalence, scale invariance, nontrivial weight effects,
+full design (strata/PSU/FPC), replicate weights, and bootstrap + survey.
+"""
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from diff_diff import StaggeredTripleDifference
+from diff_diff.survey import SurveyDesign
+
+# ---------------------------------------------------------------------------
+# Data generation
+# ---------------------------------------------------------------------------
+
+
+def _make_staggered_ddd_data(n_units=200, n_periods=5, seed=42):
+    """Generate balanced panel for staggered DDD with survey columns.
+
+    Creates 3 cohorts:
+      - g=3 (treated at period 3), ~40% of units
+      - g=4 (treated at period 4), ~30% of units
+      - g=0 (never-treated), ~30% of units
+
+    Each unit is either eligible (Q=1, ~50%) or ineligible (Q=0).
+    Treatment effect = 2.0 for eligible units in post-treatment periods.
+    """
+    rng = np.random.default_rng(seed)
+
+    # Assign cohorts
+    cohort_probs = [0.4, 0.3, 0.3]
+    cohorts = rng.choice([3, 4, 0], size=n_units, p=cohort_probs)
+
+    # Assign eligibility (binary, time-invariant)
+    eligibility = rng.binomial(1, 0.5, size=n_units)
+
+    # Survey design columns (unit-level, constant within unit)
+    # Variable weights: higher for some units
+    weights = 1.0 + rng.exponential(0.5, size=n_units)
+    # Strata: 4 strata
+    strata = rng.choice(4, size=n_units)
+    # PSU: 2 PSUs per stratum = 8 PSUs total
+    psu = strata * 2 + rng.choice(2, size=n_units)
+
+    rows = []
+    for i in range(n_units):
+        for t in range(1, n_periods + 1):
+            # Outcome: unit FE + time FE + treatment effect + noise
+            unit_fe = rng.normal(0, 1)
+            time_fe = 0.5 * t
+            # Treatment effect for eligible treated units in post period
+            g = cohorts[i]
+            q = eligibility[i]
+            te = 2.0 if (g > 0 and t >= g and q == 1) else 0.0
+            y = unit_fe + time_fe + te + rng.normal(0, 0.5)
+
+            rows.append(
+                {
+                    "unit": i,
+                    "period": t,
+                    "outcome": y,
+                    "first_treat": cohorts[i],
+                    "eligibility": eligibility[i],
+                    "weight": weights[i],
+                    "stratum": strata[i],
+                    "psu": psu[i],
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
+@pytest.fixture(scope="module")
+def sddd_data():
+    return _make_staggered_ddd_data()
+
+
+# ---------------------------------------------------------------------------
+# Smoke tests
+# ---------------------------------------------------------------------------
+
+
+class TestSmokeSDDDSurvey:
+    """Basic smoke tests: survey-weighted estimation produces finite results."""
+
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_finite_results(self, sddd_data, method):
+        sd = SurveyDesign(weights="weight")
+        est = StaggeredTripleDifference(estimation_method=method)
+        res = est.fit(
+            sddd_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            survey_design=sd,
+        )
+        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.overall_se)
+        assert res.overall_se > 0
+
+    @pytest.mark.parametrize("agg", ["simple", "event_study", "group", "all"])
+    def test_aggregation(self, sddd_data, agg):
+        sd = SurveyDesign(weights="weight")
+        est = StaggeredTripleDifference(estimation_method="reg")
+        res = est.fit(
+            sddd_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            aggregate=agg,
+            survey_design=sd,
+        )
+        assert np.isfinite(res.overall_att)
+        if agg in ("event_study", "all"):
+            assert res.event_study_effects is not None
+        if agg in ("group", "all"):
+            assert res.group_effects is not None
+
+
+# ---------------------------------------------------------------------------
+# Uniform weight equivalence
+# ---------------------------------------------------------------------------
+
+
+class TestUniformWeightEquivalence:
+    """Uniform weights should reproduce unweighted results exactly."""
+
+    @pytest.mark.parametrize("method", ["reg", "ipw", "dr"])
+    def test_uniform_weights_match_unweighted(self, sddd_data, method):
+        data = sddd_data.copy()
+        data["uniform_w"] = 1.0
+
+        est = StaggeredTripleDifference(estimation_method=method)
+
+        # Unweighted
+        res_uw = est.fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+        )
+
+        # Uniform weights
+        sd = SurveyDesign(weights="uniform_w")
+        res_w = est.fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            survey_design=sd,
+        )
+
+        np.testing.assert_allclose(
+            res_w.overall_att,
+            res_uw.overall_att,
+            atol=1e-10,
+            err_msg=f"ATT mismatch for {method}",
+        )
+        np.testing.assert_allclose(
+            res_w.overall_se,
+            res_uw.overall_se,
+            rtol=1e-6,
+            err_msg=f"SE mismatch for {method}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Scale invariance
+# ---------------------------------------------------------------------------
+
+
+class TestScaleInvariance:
+    """Multiplying all weights by a constant should not change results."""
+
+    def test_scale_invariance(self, sddd_data):
+        data = sddd_data.copy()
+        data["weight_2x"] = data["weight"] * 2.0
+
+        est = StaggeredTripleDifference(estimation_method="dr")
+
+        sd1 = SurveyDesign(weights="weight")
+        res1 = est.fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            survey_design=sd1,
+        )
+
+        sd2 = SurveyDesign(weights="weight_2x")
+        res2 = est.fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            survey_design=sd2,
+        )
+
+        np.testing.assert_allclose(
+            res2.overall_att,
+            res1.overall_att,
+            atol=1e-12,
+        )
+        np.testing.assert_allclose(
+            res2.overall_se,
+            res1.overall_se,
+            rtol=1e-6,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Nontrivial weights change SE
+# ---------------------------------------------------------------------------
+
+
+class TestNontrivialWeightsChangeSE:
+    """Variable survey weights should produce different SEs than unweighted."""
+
+    def test_weighted_se_differs(self, sddd_data):
+        est = StaggeredTripleDifference(estimation_method="reg")
+
+        res_uw = est.fit(
+            sddd_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+        )
+
+        sd = SurveyDesign(weights="weight")
+        res_w = est.fit(
+            sddd_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            survey_design=sd,
+        )
+
+        assert abs(res_w.overall_se - res_uw.overall_se) > 1e-6, (
+            f"Expected SEs to differ: weighted={res_w.overall_se}, "
+            f"unweighted={res_uw.overall_se}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Full survey design (strata/PSU/FPC)
+# ---------------------------------------------------------------------------
+
+
+class TestFullDesign:
+    """Strata/PSU/FPC survey design produces finite results with metadata."""
+
+    def test_strata_psu(self, sddd_data):
+        sd = SurveyDesign(
+            weights="weight",
+            strata="stratum",
+            psu="psu",
+        )
+        est = StaggeredTripleDifference(estimation_method="reg")
+        res = est.fit(
+            sddd_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            aggregate="simple",
+            survey_design=sd,
+        )
+        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.overall_se)
+        assert res.survey_metadata is not None
+        assert res.survey_metadata.df_survey is not None
+        assert res.survey_metadata.df_survey > 0
+
+    def test_metadata_populated(self, sddd_data):
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+        est = StaggeredTripleDifference(estimation_method="dr")
+        res = est.fit(
+            sddd_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            survey_design=sd,
+        )
+        sm = res.survey_metadata
+        assert sm is not None
+        assert sm.effective_n > 0
+        assert sm.n_strata > 0
+        assert sm.n_psu > 0
+
+
+# ---------------------------------------------------------------------------
+# Design-based aggregation SEs
+# ---------------------------------------------------------------------------
+
+
+class TestDesignBasedAggSE:
+    """Aggregated SEs with strata/PSU differ from pweight-only SEs."""
+
+    def test_design_se_differs_from_pweight_only(self, sddd_data):
+        est = StaggeredTripleDifference(estimation_method="reg")
+
+        # pweight only
+        sd_pw = SurveyDesign(weights="weight")
+        res_pw = est.fit(
+            sddd_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            aggregate="simple",
+            survey_design=sd_pw,
+        )
+
+        # Full design
+        sd_full = SurveyDesign(
+            weights="weight",
+            strata="stratum",
+            psu="psu",
+        )
+        res_full = est.fit(
+            sddd_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            aggregate="simple",
+            survey_design=sd_full,
+        )
+
+        # Point estimates should be identical (same weights)
+        np.testing.assert_allclose(
+            res_full.overall_att,
+            res_pw.overall_att,
+            atol=1e-10,
+        )
+
+        # Aggregated SEs should differ (design-based variance)
+        assert abs(res_full.overall_se - res_pw.overall_se) > 1e-6, (
+            f"Expected aggregated SEs to differ: full={res_full.overall_se}, "
+            f"pweight-only={res_pw.overall_se}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Replicate weights
+# ---------------------------------------------------------------------------
+
+
+class TestReplicateWeights:
+    """Replicate weight methods produce finite results."""
+
+    def test_brr_replicate(self, sddd_data):
+        data = sddd_data.copy()
+        rng = np.random.default_rng(99)
+        n_units = data["unit"].nunique()
+        R = 20
+        # Generate unit-level replicate weights
+        unit_ids = sorted(data["unit"].unique())
+        rep_matrix = 1.0 + rng.standard_normal((n_units, R)) * 0.1
+        rep_matrix = np.abs(rep_matrix)  # Ensure positive
+        for r in range(R):
+            unit_w = dict(zip(unit_ids, rep_matrix[:, r]))
+            data[f"rep_{r}"] = data["unit"].map(unit_w)
+
+        rep_cols = [f"rep_{r}" for r in range(R)]
+        sd = SurveyDesign(
+            weights="weight",
+            replicate_weights=rep_cols,
+            replicate_method="BRR",
+        )
+        est = StaggeredTripleDifference(estimation_method="reg")
+        res = est.fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            aggregate="simple",
+            survey_design=sd,
+        )
+        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.overall_se)
+        assert res.overall_se > 0
+
+
+# ---------------------------------------------------------------------------
+# pweight-only validation
+# ---------------------------------------------------------------------------
+
+
+class TestPweightOnlyValidation:
+    """fweight/aweight rejected with ValueError."""
+
+    def test_fweight_rejected(self, sddd_data):
+        data = sddd_data.copy()
+        data["fweight"] = 1
+        sd = SurveyDesign(weights="fweight", weight_type="fweight")
+        est = StaggeredTripleDifference(estimation_method="reg")
+        with pytest.raises(ValueError, match="pweight"):
+            est.fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                survey_design=sd,
+            )
+
+    def test_aweight_rejected(self, sddd_data):
+        data = sddd_data.copy()
+        data["aweight"] = 1.0
+        sd = SurveyDesign(weights="aweight", weight_type="aweight")
+        est = StaggeredTripleDifference(estimation_method="reg")
+        with pytest.raises(ValueError, match="pweight"):
+            est.fit(
+                data,
+                "outcome",
+                "unit",
+                "period",
+                "first_treat",
+                "eligibility",
+                survey_design=sd,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap + survey
+# ---------------------------------------------------------------------------
+
+
+class TestBootstrapSurvey:
+    """Bootstrap with survey design produces bootstrap results."""
+
+    def test_bootstrap_with_survey(self, sddd_data):
+        sd = SurveyDesign(weights="weight")
+        est = StaggeredTripleDifference(
+            estimation_method="reg",
+            n_bootstrap=49,
+            seed=42,
+        )
+        res = est.fit(
+            sddd_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            aggregate="simple",
+            survey_design=sd,
+        )
+        assert res.bootstrap_results is not None
+        assert np.isfinite(res.overall_se)
+        assert res.overall_se > 0
+
+
+# ---------------------------------------------------------------------------
+# Control group variants
+# ---------------------------------------------------------------------------
+
+
+class TestControlGroupSurvey:
+    """Both control_group settings work with survey."""
+
+    @pytest.mark.parametrize("cg", ["nevertreated", "notyettreated"])
+    def test_control_group(self, sddd_data, cg):
+        sd = SurveyDesign(weights="weight")
+        est = StaggeredTripleDifference(
+            estimation_method="reg",
+            control_group=cg,
+        )
+        res = est.fit(
+            sddd_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            survey_design=sd,
+        )
+        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.overall_se)
+
+
+# ---------------------------------------------------------------------------
+# Base period variants
+# ---------------------------------------------------------------------------
+
+
+class TestBasePeriodSurvey:
+    """Both base_period settings work with survey."""
+
+    @pytest.mark.parametrize("bp", ["varying", "universal"])
+    def test_base_period(self, sddd_data, bp):
+        sd = SurveyDesign(weights="weight")
+        est = StaggeredTripleDifference(
+            estimation_method="reg",
+            base_period=bp,
+        )
+        res = est.fit(
+            sddd_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            "eligibility",
+            survey_design=sd,
+        )
+        assert np.isfinite(res.overall_att)
+        assert np.isfinite(res.overall_se)

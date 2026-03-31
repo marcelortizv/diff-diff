@@ -926,35 +926,39 @@ class TestCallawaySantAnnaSurvey:
         assert np.isfinite(result.overall_att)
         assert np.isfinite(result.overall_se)
 
-    def test_ipw_covariates_survey_raises(self, staggered_survey_data, survey_design_weights_only):
-        """IPW + covariates + survey should raise NotImplementedError."""
+    def test_ipw_covariates_survey_works(self, staggered_survey_data, survey_design_weights_only):
+        """IPW + covariates + survey works (Phase 7a: nuisance IF corrections)."""
         data = staggered_survey_data.copy()
         data["x1"] = np.random.default_rng(42).normal(0, 1, len(data))
-        with pytest.raises(NotImplementedError, match="covariates"):
-            CallawaySantAnna(estimation_method="ipw").fit(
-                data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                covariates=["x1"],
-                survey_design=survey_design_weights_only,
-            )
+        result = CallawaySantAnna(estimation_method="ipw").fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            covariates=["x1"],
+            survey_design=survey_design_weights_only,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.overall_se > 0
 
-    def test_dr_covariates_survey_raises(self, staggered_survey_data, survey_design_weights_only):
-        """DR + covariates + survey should raise NotImplementedError."""
+    def test_dr_covariates_survey_works(self, staggered_survey_data, survey_design_weights_only):
+        """DR + covariates + survey works (Phase 7a: nuisance IF corrections)."""
         data = staggered_survey_data.copy()
         data["x1"] = np.random.default_rng(42).normal(0, 1, len(data))
-        with pytest.raises(NotImplementedError, match="covariates"):
-            CallawaySantAnna(estimation_method="dr").fit(
-                data,
-                "outcome",
-                "unit",
-                "period",
-                "first_treat",
-                covariates=["x1"],
-                survey_design=survey_design_weights_only,
-            )
+        result = CallawaySantAnna(estimation_method="dr").fit(
+            data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            covariates=["x1"],
+            survey_design=survey_design_weights_only,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.overall_se > 0
 
     def test_reg_covariates_survey_works(self, staggered_survey_data, survey_design_weights_only):
         """Regression + covariates + survey should work (has nuisance IF correction)."""
@@ -1517,13 +1521,22 @@ class TestCallawaySantAnnaFullDesignBootstrap:
     def test_bootstrap_full_design_cs(self, staggered_survey_data):
         """Bootstrap + full survey (strata+PSU+FPC) works for CS."""
         sd = SurveyDesign(
-            weights="weight", strata="stratum", psu="psu", fpc="fpc",
+            weights="weight",
+            strata="stratum",
+            psu="psu",
+            fpc="fpc",
         )
         result = CallawaySantAnna(
-            estimation_method="reg", n_bootstrap=30, seed=42,
+            estimation_method="reg",
+            n_bootstrap=30,
+            seed=42,
         ).fit(
-            staggered_survey_data, "outcome", "unit", "period",
-            "first_treat", survey_design=sd,
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "period",
+            "first_treat",
+            survey_design=sd,
         )
         assert np.isfinite(result.overall_att)
         assert np.isfinite(result.overall_se)

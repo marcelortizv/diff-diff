@@ -196,8 +196,8 @@ class CallawaySantAnnaBootstrapMixin:
         # units don't appear in any influence function.
         if precomputed is not None:
             all_units = precomputed["all_units"]
-            n_units = len(all_units)
-            unit_to_idx = precomputed["unit_to_idx"]
+            n_units = precomputed.get("canonical_size", len(all_units))
+            unit_to_idx = precomputed["unit_to_idx"]  # None for RCS
         else:
             # Fallback: collect units from influence functions
             all_units_set = set()
@@ -211,8 +211,9 @@ class CallawaySantAnnaBootstrapMixin:
             )
             unit_to_idx = {u: i for i, u in enumerate(all_units)}
 
-        # Get list of (g,t) pairs
-        gt_pairs = list(group_time_effects.keys())
+        # Get list of (g,t) pairs that have influence function info
+        # (skip zero-mass cells that recorded NaN ATT without IF)
+        gt_pairs = [gt for gt in group_time_effects.keys() if gt in influence_func_info]
         n_gt = len(gt_pairs)
 
         # Identify post-treatment (g,t) pairs for overall ATT
@@ -235,12 +236,16 @@ class CallawaySantAnnaBootstrapMixin:
                 g = gt[0]
                 if g not in _cohort_mass_cache:
                     _cohort_mass_cache[g] = float(np.sum(survey_w[unit_cohorts == g]))
-            all_n_treated = np.array(
-                [_cohort_mass_cache[gt[0]] for gt in gt_pairs], dtype=float
-            )
+            all_n_treated = np.array([_cohort_mass_cache[gt[0]] for gt in gt_pairs], dtype=float)
         else:
+            # Use agg_weight if available (RCS: fixed cohort mass);
+            # fall back to n_treated for panel data
             all_n_treated = np.array(
-                [group_time_effects[gt]["n_treated"] for gt in gt_pairs], dtype=float
+                [
+                    group_time_effects[gt].get("agg_weight", group_time_effects[gt]["n_treated"])
+                    for gt in gt_pairs
+                ],
+                dtype=float,
             )
         post_n_treated = all_n_treated[post_treatment_mask]
 
@@ -426,8 +431,9 @@ class CallawaySantAnnaBootstrapMixin:
 
         # Batch compute bootstrap statistics for ATT(g,t)
         batch_ses, batch_ci_lo, batch_ci_hi, batch_pv = _compute_effect_bootstrap_stats_batch_func(
-            original_atts, bootstrap_atts_gt, alpha=self.alpha,
-
+            original_atts,
+            bootstrap_atts_gt,
+            alpha=self.alpha,
         )
         gt_ses = {}
         gt_cis = {}
@@ -444,8 +450,10 @@ class CallawaySantAnnaBootstrapMixin:
             overall_p_value = np.nan
         else:
             overall_se, overall_ci, overall_p_value = _compute_effect_bootstrap_stats_func(
-                original_overall, bootstrap_overall, alpha=self.alpha, context="overall ATT",
-    
+                original_overall,
+                bootstrap_overall,
+                alpha=self.alpha,
+                context="overall ATT",
             )
 
         # Batch compute bootstrap statistics for event study effects
@@ -457,8 +465,9 @@ class CallawaySantAnnaBootstrapMixin:
             es_effects = np.array([event_study_info[e]["effect"] for e in rel_periods])
             es_boot_matrix = np.column_stack([bootstrap_event_study[e] for e in rel_periods])
             es_ses, es_ci_lo, es_ci_hi, es_pv = _compute_effect_bootstrap_stats_batch_func(
-                es_effects, es_boot_matrix, alpha=self.alpha,
-    
+                es_effects,
+                es_boot_matrix,
+                alpha=self.alpha,
             )
             event_study_ses = {e: float(es_ses[i]) for i, e in enumerate(rel_periods)}
             event_study_cis = {
@@ -475,8 +484,9 @@ class CallawaySantAnnaBootstrapMixin:
             grp_effects = np.array([group_agg_info[g]["effect"] for g in group_list])
             grp_boot_matrix = np.column_stack([bootstrap_group[g] for g in group_list])
             grp_ses, grp_ci_lo, grp_ci_hi, grp_pv = _compute_effect_bootstrap_stats_batch_func(
-                grp_effects, grp_boot_matrix, alpha=self.alpha,
-    
+                grp_effects,
+                grp_boot_matrix,
+                alpha=self.alpha,
             )
             group_effect_ses = {g: float(grp_ses[i]) for i, g in enumerate(group_list)}
             group_effect_cis = {
@@ -569,7 +579,10 @@ class CallawaySantAnnaBootstrapMixin:
                 if g not in _cohort_mass:
                     _cohort_mass[g] = float(np.sum(survey_w[unit_cohorts == g]))
                 return _cohort_mass[g]
-            return group_time_effects[(g, t)]["n_treated"]
+            # Use agg_weight if available (RCS: fixed cohort mass)
+            return group_time_effects[(g, t)].get(
+                "agg_weight", group_time_effects[(g, t)]["n_treated"]
+            )
 
         # Organize by relative time
         effects_by_e: Dict[int, List[Tuple[int, float, float]]] = {}

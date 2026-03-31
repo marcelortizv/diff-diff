@@ -54,11 +54,17 @@ Deferred items from PR reviews that were not addressed before merge.
 |-------|----------|----|----------|
 | ImputationDiD dense `(A0'A0).toarray()` scales O((U+T+K)^2), OOM risk on large panels | `imputation.py` | #141 | Medium (deferred — only triggers when sparse solver fails) |
 | Multi-absorb weighted demeaning needs iterative alternating projections for N > 1 absorbed FE with survey weights; unweighted multi-absorb also uses single-pass (pre-existing, exact only for balanced panels) | `estimators.py` | #218 | Medium |
-| CallawaySantAnna survey + covariates + IPW/DR: DRDID panel nuisance-estimation IF corrections not implemented. Currently gated with NotImplementedError. Regression method with covariates works. | `staggered.py` | #233 | Medium — tracked in Survey Phase 7a |
-| EfficientDiD `control_group="last_cohort"` trims at `last_g - anticipation` but REGISTRY says `t >= last_g`. With `anticipation=0` (default) these are identical. Needs design decision for `anticipation>0`. | `efficient_did.py` | #230 | Low |
-| TripleDifference power: `generate_ddd_data` is a fixed 2×2×2 cross-sectional DGP — no multi-period or unbalanced-group support. | `prep_dgp.py`, `power.py` | #208 | Low |
-| Survey design resolution/collapse patterns inconsistent across panel estimators — extract shared helpers for panel-to-unit collapse, post-filter re-resolution, metadata recomputation | `continuous_did.py`, `efficient_did.py`, `stacked_did.py` | #226 | Low |
-| TROP: `fit()` and `_fit_global()` share ~150 lines of near-identical data setup. Extract shared helpers to eliminate cross-file sync risk. | `trop.py`, `trop_global.py`, `trop_local.py` | — | Low |
+| Replicate-weight survey df — **Resolved**. `df_survey = rank(replicate_weights) - 1` matching R's `survey::degf()`. For IF paths, `n_valid - 1` when dropped replicates reduce effective count. | `survey.py` | #238 | Resolved |
+| CallawaySantAnna survey: strata/PSU/FPC — **Resolved**. Aggregated SEs (overall, event study, group) use `compute_survey_if_variance()`. Bootstrap uses PSU-level multiplier weights. | `staggered.py` | #237 | Resolved |
+| CallawaySantAnna survey + covariates + IPW/DR — **Resolved**. DRDID panel nuisance IF corrections (PS + OR) implemented for both survey and non-survey DR paths (Phase 7a). IPW path unblocked. | `staggered.py` | #233 | Resolved |
+| SyntheticDiD/TROP survey: strata/PSU/FPC — **Resolved**. Rao-Wu rescaled bootstrap implemented for both. TROP uses cross-classified pseudo-strata. Rust TROP remains pweight-only (Python fallback for full design). | `synthetic_did.py`, `trop.py` | — | Resolved |
+| EfficientDiD hausman_pretest() clustered covariance stale `n_cl` — **Resolved**. Recompute `n_cl` and remap indices after `row_finite` filtering via `np.unique(return_inverse=True)`. | `efficient_did.py` | #230 | Resolved |
+| EfficientDiD `control_group="last_cohort"` trims at `last_g - anticipation` but REGISTRY says `t >= last_g`. With `anticipation=0` (default) these are identical. With `anticipation>0`, code is arguably more conservative (excludes anticipation-contaminated periods). Either align REGISTRY with code or change code to `t < last_g` — needs design decision. | `efficient_did.py` | #230 | Low |
+| TripleDifference power: `generate_ddd_data` is a fixed 2×2×2 cross-sectional DGP — no multi-period or unbalanced-group support. Add a `generate_ddd_panel_data` for panel DDD power analysis. | `prep_dgp.py`, `power.py` | #208 | Low |
+| ContinuousDiD event-study aggregation anticipation filter — **Resolved**. `_aggregate_event_study()` now filters `e < -anticipation` when `anticipation > 0`, matching CallawaySantAnna behavior. Bootstrap paths also filtered. | `continuous_did.py` | #226 | Resolved |
+| Survey design resolution/collapse patterns are inconsistent across panel estimators — ContinuousDiD rebuilds unit-level design in SE code, EfficientDiD builds once in fit(), StackedDiD re-resolves on stacked data; extract shared helpers for panel-to-unit collapse, post-filter re-resolution, and metadata recomputation | `continuous_did.py`, `efficient_did.py`, `stacked_did.py` | #226 | Low |
+| Survey metadata formatting dedup — **Resolved**. Extracted `_format_survey_block()` helper in `results.py`, replaced 13 occurrences across 11 files. | `results.py` + 10 results files | — | Resolved |
+| TROP: `fit()` and `_fit_global()` share ~150 lines of near-identical data setup (panel pivoting, absorbing-state validation, first-treatment detection, effective rank, NaN warnings). Both bootstrap methods also duplicate the stratified resampling loop. Extract shared helpers to eliminate cross-file sync risk. | `trop.py`, `trop_global.py`, `trop_local.py` | — | Low |
 | StaggeredTripleDifference R cross-validation: CSV fixtures not committed (gitignored); tests skip without local R + triplediff. Commit fixtures or generate deterministically. | `tests/test_methodology_staggered_triple_diff.py` | #245 | Medium |
 | StaggeredTripleDifference R parity: benchmark only tests no-covariate path (xformla=~1). Add covariate-adjusted scenarios and aggregation SE parity assertions. | `benchmarks/R/benchmark_staggered_triplediff.R` | #245 | Medium |
 | StaggeredTripleDifference: per-cohort group-effect SEs include WIF (conservative vs R's wif=NULL). Documented in REGISTRY. Could override mixin for exact R match. | `staggered_triple_diff.py` | #245 | Low |
@@ -163,8 +169,8 @@ Features in R's `did` package that block porting additional tests:
 
 | Feature | R tests blocked | Priority | Status |
 |---------|----------------|----------|--------|
-| Repeated cross-sections (`panel=FALSE`) | ~7 tests in test-att_gt.R + test-user_bug_fixes.R | High | Planned — Survey Phase 7b |
-| Sampling/population weights | 7 tests incl. all JEL replication | Medium | Mostly resolved (Phases 1-6); CS IPW/DR + covariates + survey in Phase 7a |
+| Repeated cross-sections (`panel=FALSE`) | ~7 tests in test-att_gt.R + test-user_bug_fixes.R | High | **Resolved** — Phase 7b: `panel=False` on CallawaySantAnna |
+| Sampling/population weights | 7 tests incl. all JEL replication | Medium | **Resolved** (Phases 1-6 + 7a: CS IPW/DR + covariates + survey) |
 | Calendar time aggregation | 1 test in test-att_gt.R | Low | |
 
 ---

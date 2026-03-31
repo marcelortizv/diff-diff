@@ -72,10 +72,10 @@ TripleDifference IPW/DR from Phase 3 deferred work.
 
 ### Phase 5 Deferred Work
 
-| Estimator | Deferred Capability | Blocker |
-|-----------|-------------------|---------|
-| SyntheticDiD | strata/PSU/FPC + survey-aware bootstrap | Bootstrap + Survey Interaction |
-| TROP | strata/PSU/FPC + survey-aware bootstrap | Bootstrap + Survey Interaction |
+| Estimator | Deferred Capability | Status |
+|-----------|-------------------|--------|
+| SyntheticDiD | strata/PSU/FPC + survey-aware bootstrap | Resolved in Phase 6 |
+| TROP | strata/PSU/FPC + survey-aware bootstrap | Resolved in Phase 6 |
 
 ## Phase 6: Advanced Features
 
@@ -104,7 +104,8 @@ JKn requires explicit `replicate_strata` (per-replicate stratum assignment).
   TripleDifference (analytical only, no bootstrap). Rejected with
   `NotImplementedError` in DifferenceInDifferences, TwoWayFixedEffects,
   MultiPeriodDiD, StackedDiD, SunAbraham, ImputationDiD, TwoStageDiD,
-  SyntheticDiD, TROP.
+  SyntheticDiD, TROP. Expansion to regression-based estimators (SA,
+  Imputation, TwoStage, Stacked) is straightforward but deferred.
 
 ### DEFF Diagnostics ✅ (2026-03-26)
 Per-coefficient design effects comparing survey vcov to SRS (HC1) vcov.
@@ -120,3 +121,75 @@ estimation (unlike simple subsetting, which would drop design information).
 - Mask: bool array/Series, column name, or callable
 - Returns (SurveyDesign, DataFrame) pair with synthetic `_subpop_weight` column
 - Weight validation relaxed: zero weights allowed (negative still rejected)
+
+---
+
+## Phase 7: Completing the Survey Story
+
+These items close the remaining gaps that matter for practitioners using major
+population surveys (ACS, CPS, BRFSS, MEPS) with modern DiD methods. Together
+they make diff-diff the only package — R or Python — with full design-based
+variance estimation for heterogeneity-robust DiD estimators.
+
+### 7a. CallawaySantAnna Covariates + IPW/DR + Survey ✅
+
+**Implemented.** DRDID panel nuisance-estimation IF corrections (PS + OR)
+for both survey and non-survey IPW/DR paths. Survey-weighted propensity
+score estimation via `solve_logit()`, survey-weighted outcome regression,
+and IFs that account for nuisance parameter estimation uncertainty under
+the survey design (Sant'Anna & Zhao 2020, Theorem 3.1).
+
+**Reference:** Sant'Anna, P.H.C. & Zhao, J. (2020). "Doubly Robust
+Difference-in-Differences Estimators." *Journal of Econometrics* 219(1).
+
+### 7b. Repeated Cross-Sections ✅
+
+**Priority: High.** Many major surveys (BRFSS, ACS annual cross-sections,
+CPS monthly) are not panels — units are not followed over time. The R `did`
+package supports `panel=FALSE` for these settings. diff-diff currently
+requires panel data for all staggered estimators.
+
+**Implemented.** `CallawaySantAnna(panel=False)` for repeated cross-section
+surveys. Uses cross-sectional DRDID (Sant'Anna & Zhao 2020, Section 4):
+`reg` matches `DRDID::reg_did_rc`, `dr` matches `DRDID::drdid_rc` (locally
+efficient with 4 OLS fits), `ipw` matches `DRDID::std_ipw_did_rc`. Survey
+weights, covariates, and all estimation methods supported.
+
+**Reference:** Sant'Anna, P.H.C. & Zhao, J. (2020). Sections 3 (panel) vs
+4 (repeated cross-sections). Callaway, B. & Sant'Anna, P.H.C. (2021).
+Section 4.1.
+
+### 7c. Survey-Aware DiD Tutorial
+
+**Priority: High.** diff-diff is the only package (R or Python) with
+design-based variance estimation for modern DiD estimators, but no one
+knows this. A tutorial demonstrating the full workflow with realistic
+survey data would make the capability discoverable.
+
+**What's needed:**
+- Jupyter notebook: `docs/tutorials/16_survey_did.ipynb`
+- Sections:
+  1. Why survey design matters for DiD (variance inflation from clustering,
+     weight effects on point estimates — cite Solon, Haider & Wooldridge 2015)
+  2. Setting up `SurveyDesign` (weights, strata, PSU, FPC)
+  3. Basic DiD with survey design (compare naive vs. design-based SEs)
+  4. Staggered DiD with survey weights (CallawaySantAnna)
+  5. Replicate weights workflow (BRR/JKn for MEPS/ACS PUMS users)
+  6. Subpopulation analysis
+  7. DEFF diagnostics — interpreting design effects
+  8. Comparison: show that R's `did` package with `weightsname` gives
+     survey-naive variance while diff-diff gives design-based variance
+- Use realistic synthetic data mimicking ACS/CPS structure (stratified
+  multi-stage design with known treatment effect)
+- Cross-reference from README, choosing_estimator.rst, and quickstart.rst
+
+### 7d. HonestDiD with Survey Variance ✅
+
+**Implemented.** Survey df and full event-study VCV from IF vectors
+propagated to HonestDiD sensitivity analysis. When CallawaySantAnna is fit
+with a survey design, HonestDiD uses t-distribution critical values with
+survey degrees of freedom. Bootstrap/replicate designs fall back to
+diagonal VCV with a warning.
+
+**Reference:** Rambachan, A. & Roth, J. (2023). "A More Credible Approach
+to Parallel Trends." *Review of Economic Studies* 90(5).

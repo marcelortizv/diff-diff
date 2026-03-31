@@ -136,6 +136,7 @@ def generate_staggered_data(
     time_trend: float = 0.1,
     noise_sd: float = 0.5,
     seed: Optional[int] = None,
+    panel: bool = True,
 ) -> pd.DataFrame:
     """
     Generate synthetic data for staggered adoption DiD analysis.
@@ -170,6 +171,10 @@ def generate_staggered_data(
         Standard deviation of idiosyncratic noise.
     seed : int, optional
         Random seed for reproducibility.
+    panel : bool, default=True
+        If True (default), generate balanced panel data (same units across
+        all periods). If False, generate repeated cross-section data where
+        each period draws independent observations with globally unique IDs.
 
     Returns
     -------
@@ -219,6 +224,56 @@ def generate_staggered_data(
     n_never = int(n_units * never_treated_frac)
     n_treated = n_units - n_never
 
+    if not panel:
+        # --- Repeated cross-section mode ---
+        # Each period draws n_units independent observations with unique IDs.
+        # Cohorts are assigned from the same distribution as panel.
+        records = []
+        for period in range(n_periods):
+            # For each period, draw fresh cohort assignments
+            ft_period = np.zeros(n_units, dtype=int)
+            if n_treated > 0:
+                cohort_assignments = rng.choice(len(cohort_periods), size=n_treated)
+                ft_period[n_never:] = [cohort_periods[c] for c in cohort_assignments]
+
+            # Unique unit IDs per period
+            for i in range(n_units):
+                uid = f"u{period}_{i}"
+                unit_first_treat = ft_period[i]
+                is_ever_treated = unit_first_treat > 0
+
+                is_treated = is_ever_treated and period >= unit_first_treat
+
+                # Outcome: unit_fe_proxy (drawn fresh) + time trend + treatment + noise
+                unit_fe_proxy = rng.normal(0, unit_fe_sd)
+                y = 10.0 + unit_fe_proxy + time_trend * period
+
+                effect = 0.0
+                if is_treated:
+                    time_since_treatment = period - unit_first_treat
+                    if dynamic_effects:
+                        effect = treatment_effect * (1 + effect_growth * time_since_treatment)
+                    else:
+                        effect = treatment_effect
+                    y += effect
+
+                y += rng.normal(0, noise_sd)
+
+                records.append(
+                    {
+                        "unit": uid,
+                        "period": period,
+                        "outcome": y,
+                        "first_treat": unit_first_treat,
+                        "treated": int(is_treated),
+                        "treat": int(is_ever_treated),
+                        "true_effect": effect,
+                    }
+                )
+
+        return pd.DataFrame(records)
+
+    # --- Panel mode (default) ---
     # Assign treatment cohorts
     first_treat = np.zeros(n_units, dtype=int)
     if n_treated > 0:

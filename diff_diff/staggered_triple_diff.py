@@ -442,7 +442,7 @@ class StaggeredTripleDifference(
         df_agg.loc[df_agg[eligibility] == 0, "first_treat"] = 0
 
         # Overall ATT via aggregation mixin
-        overall_att, overall_se = self._aggregate_simple(
+        overall_att, overall_se, _effective_df = self._aggregate_simple(
             group_time_effects, influence_func_info, df_agg, unit, precomputed_agg
         )
         overall_t_stat, overall_p_value, overall_conf_int = safe_inference(

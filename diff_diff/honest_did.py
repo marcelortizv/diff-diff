@@ -2133,39 +2133,19 @@ class HonestDiD:
             beta_pre, beta_post, l_vec, num_pre, Mbar
         )
 
-        # CI construction: try ARP hybrid, fall back to naive FLCI.
-        # The ARP moment inequality transformation requires careful
-        # calibration; if the ARP CI is degenerate (empty or point),
-        # we fall back to the conservative naive FLCI approach.
+        # CI construction for Delta^RM.
+        # The paper recommends ARP conditional/hybrid confidence sets
+        # (Sections 3.2.1-3.2.2). The ARP infrastructure is implemented
+        # (_arp_confidence_set) but the moment inequality transformation
+        # requires further calibration to produce valid CIs consistently.
+        # Currently uses conservative naive FLCI (extends identified set
+        # by z*se); ARP will be enabled once calibrated.
+        # TODO: enable ARP hybrid for RM once transformation is validated
         se = np.sqrt(l_vec @ sigma_post @ l_vec)
-        ci_lb, ci_ub = None, None
-
-        if sigma_full.shape[0] == num_pre + num_post:
-            pre_diffs = _compute_pre_first_differences(beta_pre)
-            max_fd = np.max(pre_diffs) if len(pre_diffs) > 0 else 0.0
-
-            if max_fd > 0:
-                A_rm, d_rm = _construct_constraints_rm_component(
-                    num_pre, num_post, Mbar, max_fd
-                )
-                beta_hat = np.concatenate([beta_pre, beta_post])
-                try:
-                    arp_lb, arp_ub = _arp_confidence_set(
-                        beta_hat, sigma_full, A_rm, d_rm, l_vec,
-                        num_pre, self.alpha,
-                    )
-                    # Validate: ARP CI should be at least as wide as identified set
-                    if arp_ub - arp_lb > 1e-10:
-                        ci_lb, ci_ub = arp_lb, arp_ub
-                except Exception:
-                    pass
-
-        # Fallback to naive FLCI if ARP didn't produce valid CI
-        if ci_lb is None:
-            if np.isfinite(lb) and np.isfinite(ub):
-                ci_lb, ci_ub = _compute_flci(lb, ub, se, self.alpha, df=df)
-            else:
-                ci_lb, ci_ub = -np.inf, np.inf
+        if np.isfinite(lb) and np.isfinite(ub):
+            ci_lb, ci_ub = _compute_flci(lb, ub, se, self.alpha, df=df)
+        else:
+            ci_lb, ci_ub = -np.inf, np.inf
 
         return lb, ub, ci_lb, ci_ub
 

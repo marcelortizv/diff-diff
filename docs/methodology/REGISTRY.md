@@ -404,9 +404,17 @@ The multiplier bootstrap uses random weights w_i with E[w]=0 and Var(w)=1:
     of 0 or 1, or when IRLS fails to converge
   - Trimming: Propensity scores clipped to `[pscore_trim, 1-pscore_trim]` (default
     0.01) before weight computation. Warning emitted when scores are trimmed.
-  - Fallback: If IRLS fails entirely (LinAlgError/ValueError), falls back to
-    unconditional propensity score with warning. Exception: when
-    `rank_deficient_action="error"`, the error is re-raised instead of falling back.
+  - **Events Per Variable (EPV) diagnostics:** Per-cohort EPV =
+    min(n_treated, n_control) / (n_covariates + 1) checked before IRLS.
+    Default threshold: 10 (Peduzzi et al. 1996). Warns when EPV < threshold;
+    errors when `rank_deficient_action="error"`. Pre-estimation check via
+    `diagnose_propensity()`. Results stored in `results.epv_diagnostics`.
+  - Fallback: Controlled by `pscore_fallback` parameter (default `"error"`).
+    If IRLS fails entirely (LinAlgError/ValueError) and `pscore_fallback="error"`,
+    the error is raised. If `pscore_fallback="unconditional"`, falls back to
+    unconditional propensity score (all covariates dropped) with warning.
+  - **Note:** `pscore_fallback` default changed from unconditional to error.
+    Set `pscore_fallback="unconditional"` for legacy behavior.
 - Control group with `control_group="not_yet_treated"`:
   - Always excludes cohort g from controls when computing ATT(g,t)
   - This applies to both pre-treatment (t < g) and post-treatment (t >= g) periods

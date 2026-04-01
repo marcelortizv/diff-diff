@@ -1675,6 +1675,130 @@ class TestCheckPropensityDiagnostics:
             _check_propensity_diagnostics(pscore, trim_bound=0.01)
 
 
+class TestEPVDiagnostics:
+    """Tests for Events Per Variable (EPV) check in solve_logit."""
+
+    def test_epv_warning_below_threshold(self):
+        """Warning emitted when EPV < threshold."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        # 40 events (minority class), 9 params (8 covariates + intercept) → EPV = 4.4
+        n = 200
+        X = rng.standard_normal((n, 8))
+        y = np.concatenate([np.ones(40), np.zeros(n - 40)])
+        with pytest.warns(UserWarning, match="Low Events Per Variable"):
+            solve_logit(X, y, epv_threshold=10)
+
+    def test_epv_no_warning_above_threshold(self):
+        """No EPV warning when EPV >= threshold."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        # 100 events, 3 params (2 covariates + intercept) → EPV = 33.3
+        n = 200
+        X = rng.standard_normal((n, 2))
+        y = np.concatenate([np.ones(100), np.zeros(100)])
+        import warnings
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            solve_logit(X, y, epv_threshold=10)
+        epv_warns = [x for x in w if "Events Per Variable" in str(x.message)]
+        assert len(epv_warns) == 0
+
+    def test_epv_error_in_strict_mode(self):
+        """ValueError raised when rank_deficient_action='error' and EPV low."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        n = 200
+        X = rng.standard_normal((n, 8))
+        y = np.concatenate([np.ones(30), np.zeros(n - 30)])
+        with pytest.raises(ValueError, match="Low Events Per Variable"):
+            solve_logit(X, y, rank_deficient_action="error", epv_threshold=10)
+
+    def test_epv_threshold_configurable(self):
+        """Custom threshold changes warning behavior."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        n = 200
+        X = rng.standard_normal((n, 2))
+        # 15 events, 3 params → EPV = 5.0
+        y = np.concatenate([np.ones(15), np.zeros(n - 15)])
+
+        # Default threshold 10 → should warn (EPV=5)
+        with pytest.warns(UserWarning, match="Low Events Per Variable"):
+            solve_logit(X, y, epv_threshold=10)
+
+        # Threshold 3 → should not warn (EPV=5 >= 3)
+        import warnings
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            solve_logit(X, y, epv_threshold=3)
+        epv_warns = [x for x in w if "Events Per Variable" in str(x.message)]
+        assert len(epv_warns) == 0
+
+    def test_epv_context_label_in_warning(self):
+        """Context label appears in warning message."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        n = 200
+        X = rng.standard_normal((n, 8))
+        y = np.concatenate([np.ones(30), np.zeros(n - 30)])
+        with pytest.warns(UserWarning, match="cohort g=2004"):
+            solve_logit(X, y, epv_threshold=10, context_label="cohort g=2004")
+
+    def test_epv_diagnostics_out_populated(self):
+        """diagnostics_out dict receives correct keys and values."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        n = 200
+        X = rng.standard_normal((n, 4))
+        y = np.concatenate([np.ones(20), np.zeros(n - 20)])
+        diag = {}
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            solve_logit(X, y, diagnostics_out=diag)
+
+        assert "epv" in diag
+        assert "n_events" in diag
+        assert "k" in diag
+        assert "is_low" in diag
+        assert diag["n_events"] == 20  # minority class
+        assert diag["k"] == 5  # 4 covariates + intercept
+        assert abs(diag["epv"] - 4.0) < 0.01
+        assert diag["is_low"] is True
+
+    def test_epv_uses_post_drop_k(self):
+        """EPV uses k after rank-deficient column drop."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        n = 200
+        X = rng.standard_normal((n, 3))
+        # Make column 2 a duplicate of column 1 → will be dropped
+        X[:, 2] = X[:, 1]
+        y = np.concatenate([np.ones(30), np.zeros(n - 30)])
+        diag = {}
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            solve_logit(X, y, diagnostics_out=diag, rank_deficient_action="silent")
+
+        # Should be 3 params (2 kept covariates + intercept), not 4
+        assert diag["k"] == 3
+        assert diag["n_events"] == 30
+        assert abs(diag["epv"] - 10.0) < 0.01
+
+
 class TestNoDotRuntimeWarnings:
     """Verify np.dot replacement avoids Apple M4 BLAS ufunc FPE bug."""
 

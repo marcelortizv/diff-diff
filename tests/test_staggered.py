@@ -3492,7 +3492,9 @@ class TestIRLSPropensityScore:
 
         data = generate_staggered_data_with_covariates(seed=42)
 
-        cs = CallawaySantAnna(estimation_method="dr")
+        cs = CallawaySantAnna(
+            estimation_method="dr", pscore_fallback="unconditional"
+        )
 
         with patch("diff_diff.staggered.solve_logit", side_effect=ValueError("test")):
             import warnings
@@ -3508,7 +3510,9 @@ class TestIRLSPropensityScore:
                     covariates=["x1"],
                 )
 
-            fallback_warns = [x for x in w if "Falling back to unconditional" in str(x.message)]
+            fallback_warns = [
+                x for x in w if "covariates dropped" in str(x.message)
+            ]
             assert len(fallback_warns) > 0, "Expected fallback warning in DR path"
             assert results.overall_att is not None
 
@@ -3569,3 +3573,241 @@ class TestIRLSPropensityScore:
         assert (
             abs(results.overall_att - true_effect) < 5.0
         ), f"ATT={results.overall_att} too far from true effect {true_effect}"
+
+
+class TestEPVDiagnostics:
+    """Tests for Events Per Variable (EPV) diagnostics in CallawaySantAnna."""
+
+    def test_cs_epv_diagnostics_in_results(self):
+        """fit() with small cohorts populates results.epv_diagnostics."""
+        # Create data with very small cohorts to trigger low EPV
+        data = generate_staggered_data_with_covariates(
+            n_units=30, n_periods=6, n_cohorts=3, seed=42
+        )
+        cs = CallawaySantAnna(estimation_method="ipw", pscore_fallback="unconditional")
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x2"],
+            )
+        # With small cohorts and covariates, epv_diagnostics should be populated
+        assert results.epv_diagnostics is not None
+        assert len(results.epv_diagnostics) > 0
+        # Check structure of diagnostic entries
+        for key, diag in results.epv_diagnostics.items():
+            assert "epv" in diag
+            assert "n_events" in diag
+            assert "k" in diag
+            assert "is_low" in diag
+
+    def test_cs_epv_summary_method(self):
+        """results.epv_summary() returns correct DataFrame."""
+        data = generate_staggered_data_with_covariates(
+            n_units=30, n_periods=6, n_cohorts=3, seed=42
+        )
+        cs = CallawaySantAnna(estimation_method="ipw", pscore_fallback="unconditional")
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x2"],
+            )
+        df = results.epv_summary()
+        assert isinstance(df, pd.DataFrame)
+        expected_cols = {"group", "time", "epv", "n_events", "n_params", "is_low"}
+        assert expected_cols.issubset(set(df.columns))
+
+    def test_cs_epv_summary_show_all(self):
+        """epv_summary(show_all=True) returns all entries, not just low ones."""
+        data = generate_staggered_data_with_covariates(
+            n_units=100, n_periods=6, n_cohorts=2, seed=42
+        )
+        cs = CallawaySantAnna(estimation_method="ipw", pscore_fallback="unconditional")
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1"],
+            )
+        if results.epv_diagnostics:
+            df_all = results.epv_summary(show_all=True)
+            df_low = results.epv_summary(show_all=False)
+            assert len(df_all) >= len(df_low)
+
+    def test_cs_epv_no_diagnostics_for_reg(self):
+        """estimation_method='reg' produces no EPV diagnostics."""
+        data = generate_staggered_data_with_covariates(seed=42)
+        cs = CallawaySantAnna(estimation_method="reg")
+        results = cs.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            covariates=["x1"],
+        )
+        assert results.epv_diagnostics is None
+
+    def test_cs_pscore_fallback_error_default(self):
+        """Default pscore_fallback='error' raises when logit fails."""
+        from unittest.mock import patch
+
+        data = generate_staggered_data_with_covariates(seed=42)
+        cs = CallawaySantAnna(estimation_method="ipw")  # default fallback='error'
+
+        with patch("diff_diff.staggered.solve_logit", side_effect=ValueError("test")):
+            with pytest.raises(ValueError, match="test"):
+                cs.fit(
+                    data,
+                    outcome="outcome",
+                    unit="unit",
+                    time="time",
+                    first_treat="first_treat",
+                    covariates=["x1"],
+                )
+
+    def test_cs_pscore_fallback_unconditional_opt_in(self):
+        """pscore_fallback='unconditional' restores old fallback behavior."""
+        from unittest.mock import patch
+
+        data = generate_staggered_data_with_covariates(seed=42)
+        cs = CallawaySantAnna(
+            estimation_method="dr", pscore_fallback="unconditional"
+        )
+
+        with patch("diff_diff.staggered.solve_logit", side_effect=ValueError("test")):
+            import warnings
+
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                results = cs.fit(
+                    data,
+                    outcome="outcome",
+                    unit="unit",
+                    time="time",
+                    first_treat="first_treat",
+                    covariates=["x1"],
+                )
+            fallback_warns = [
+                x for x in w if "covariates dropped" in str(x.message)
+            ]
+            assert len(fallback_warns) > 0
+            assert results.overall_att is not None
+
+    def test_cs_diagnose_propensity(self):
+        """diagnose_propensity() returns DataFrame with EPV per cohort."""
+        data = generate_staggered_data_with_covariates(seed=42)
+        cs = CallawaySantAnna(estimation_method="ipw")
+        df = cs.diagnose_propensity(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            covariates=["x1", "x2"],
+        )
+        assert isinstance(df, pd.DataFrame)
+        assert "group" in df.columns
+        assert "epv" in df.columns
+        assert "status" in df.columns
+        assert len(df) > 0
+        assert all(df["status"].isin(["ok", "low", "critical"]))
+
+    def test_cs_diagnose_propensity_identifies_critical(self):
+        """diagnose_propensity flags critical EPV for tiny cohorts."""
+        # Create data with very tiny cohort
+        np.random.seed(99)
+        n_units = 60
+        n_periods = 6
+        units = np.repeat(np.arange(n_units), n_periods)
+        times = np.tile(np.arange(n_periods), n_units)
+        # 1 unit treated at period 3, rest never treated
+        first_treat = np.zeros(n_units)
+        first_treat[0] = 3
+        first_treat_exp = np.repeat(first_treat, n_periods)
+        post = (times >= first_treat_exp) & (first_treat_exp > 0)
+        outcome = np.random.randn(len(units)) + post.astype(float)
+        x1 = np.repeat(np.random.randn(n_units), n_periods)
+        x2 = np.repeat(np.random.randn(n_units), n_periods)
+        x3 = np.repeat(np.random.randn(n_units), n_periods)
+
+        data = pd.DataFrame({
+            "unit": units, "time": times, "first_treat": first_treat_exp,
+            "outcome": outcome, "x1": x1, "x2": x2, "x3": x3,
+        })
+
+        cs = CallawaySantAnna(estimation_method="ipw")
+        df = cs.diagnose_propensity(
+            data, outcome="outcome", unit="unit", time="time",
+            first_treat="first_treat", covariates=["x1", "x2", "x3"],
+        )
+        # With 1 treated unit and 3 covariates: EPV = 1/4 = 0.25 → critical
+        assert any(df["status"] == "critical")
+
+    def test_cs_epv_in_summary_output(self):
+        """summary() includes EPV diagnostic block when low EPV detected."""
+        data = generate_staggered_data_with_covariates(
+            n_units=30, n_periods=6, n_cohorts=3, seed=42
+        )
+        cs = CallawaySantAnna(estimation_method="ipw", pscore_fallback="unconditional")
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x2"],
+            )
+        if results.epv_diagnostics:
+            low_epv = {
+                k: v for k, v in results.epv_diagnostics.items() if v.get("is_low")
+            }
+            if low_epv:
+                summary = results.summary()
+                assert "EPV" in summary
+                assert "Propensity Score Diagnostics" in summary
+
+    def test_cs_epv_in_to_dataframe(self):
+        """EPV column appears in group_time DataFrame when diagnostics available."""
+        data = generate_staggered_data_with_covariates(
+            n_units=30, n_periods=6, n_cohorts=3, seed=42
+        )
+        cs = CallawaySantAnna(estimation_method="ipw", pscore_fallback="unconditional")
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x2"],
+            )
+        if results.epv_diagnostics:
+            df = results.to_dataframe(level="group_time")
+            assert "epv" in df.columns

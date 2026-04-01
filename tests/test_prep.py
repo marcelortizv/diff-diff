@@ -1374,9 +1374,28 @@ class TestGenerateSurveyDidData:
             generate_survey_did_data(cohort_periods=[2.5], seed=42)
 
     def test_numpy_integer_cohort_periods(self):
-        """Test that numpy integer cohort periods are accepted."""
+        """Test that numpy integer cohort periods are accepted (list and array)."""
         from diff_diff.prep import generate_survey_did_data
 
+        # As list of numpy integers
         periods = np.array([3, 5], dtype=np.int64)
         data = generate_survey_did_data(cohort_periods=list(periods), seed=42)
         assert len(data) == 200 * 8
+
+        # As numpy array directly
+        data2 = generate_survey_did_data(cohort_periods=periods, seed=42)
+        assert len(data2) == 200 * 8
+
+    def test_default_cohort_periods_small_n_periods(self):
+        """Test default cohort_periods adapts to small n_periods."""
+        from diff_diff.prep import generate_survey_did_data
+
+        # n_periods=4: default should derive valid cohorts, not [3, 5]
+        data4 = generate_survey_did_data(n_periods=4, seed=42)
+        assert len(data4) == 200 * 4
+        cohorts = set(data4.groupby("unit")["first_treat"].first().unique())
+        assert all(0 < c < 4 for c in cohorts if c != 0)
+
+        # n_periods=5
+        data5 = generate_survey_did_data(n_periods=5, seed=42)
+        assert len(data5) == 200 * 5

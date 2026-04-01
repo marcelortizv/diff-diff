@@ -1219,7 +1219,13 @@ def generate_survey_did_data(
     rng = np.random.default_rng(seed)
 
     if cohort_periods is None:
-        cohort_periods = [3, 5]
+        # Derive defaults from n_periods, mirroring generate_staggered_data()
+        if n_periods >= 8:
+            cohort_periods = [3, 5]
+        else:
+            cohort_periods = [max(1, n_periods // 3), max(2, 2 * n_periods // 3)]
+    # Coerce array-like to list (handles np.array inputs)
+    cohort_periods = list(cohort_periods)
     if not cohort_periods:
         raise ValueError("cohort_periods must be a non-empty list of integers")
     for cp in cohort_periods:

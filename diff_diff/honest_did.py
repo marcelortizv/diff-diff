@@ -198,7 +198,17 @@ class HonestDiDResults:
     survey_metadata: Optional[Any] = field(default=None, repr=False)
     df_survey: Optional[int] = field(default=None, repr=False)
 
+    def _ci_is_finite(self) -> bool:
+        """Check if CI endpoints are finite (not NaN/inf)."""
+        return np.isfinite(self.ci_lb) and np.isfinite(self.ci_ub)
+
     def __repr__(self) -> str:
+        if not self._ci_is_finite():
+            return (
+                f"HonestDiDResults(bounds=[{self.lb}, {self.ub}], "
+                f"CI=[{self.ci_lb}, {self.ci_ub}] (undefined), "
+                f"M={self.M})"
+            )
         sig = "" if self.ci_lb <= 0 <= self.ci_ub else "*"
         return (
             f"HonestDiDResults(bounds=[{self.lb:.4f}, {self.ub:.4f}], "
@@ -208,7 +218,12 @@ class HonestDiDResults:
 
     @property
     def is_significant(self) -> bool:
-        """Check if CI excludes zero (effect is robust to violations)."""
+        """Check if CI excludes zero (effect is robust to violations).
+
+        Returns False for undefined (NaN) CIs.
+        """
+        if not self._ci_is_finite():
+            return False
         return not (self.ci_lb <= 0 <= self.ci_ub)
 
     @property
@@ -441,7 +456,7 @@ class SensitivityResults:
                     "ub": ub,
                     "ci_lb": ci_lb,
                     "ci_ub": ci_ub,
-                    "is_significant": not (ci_lb <= 0 <= ci_ub),
+                    "is_significant": (np.isfinite(ci_lb) and np.isfinite(ci_ub) and not (ci_lb <= 0 <= ci_ub)),
                 }
             )
         return pd.DataFrame(rows)
@@ -2408,8 +2423,13 @@ class HonestDiD:
 
         Uses binary search for precision.
         """
-        # Check if any CI includes zero
-        includes_zero = [ci_lb <= 0 <= ci_ub for ci_lb, ci_ub in ci_list]
+        # Check if any CI includes zero (NaN CIs are treated as undefined, not significant)
+        def _ci_includes_zero(ci_lb, ci_ub):
+            if not (np.isfinite(ci_lb) and np.isfinite(ci_ub)):
+                return True  # Undefined CIs are not "significant"
+            return ci_lb <= 0 <= ci_ub
+
+        includes_zero = [_ci_includes_zero(ci_lb, ci_ub) for ci_lb, ci_ub in ci_list]
 
         if not any(includes_zero):
             # Always significant - no breakdown
@@ -2431,7 +2451,7 @@ class HonestDiD:
                 for _ in range(20):  # 20 iterations for precision
                     mid = (lo + hi) / 2
                     result = self.fit(results, M=mid)
-                    if result.ci_lb <= 0 <= result.ci_ub:
+                    if _ci_includes_zero(result.ci_lb, result.ci_ub):
                         hi = mid
                     else:
                         lo = mid
@@ -2461,14 +2481,19 @@ class HonestDiD:
         float or None
             Breakdown value, or None if effect is always significant.
         """
+        def _ci_covers_zero(r):
+            if not (np.isfinite(r.ci_lb) and np.isfinite(r.ci_ub)):
+                return True  # Undefined CIs are not "significant"
+            return r.ci_lb <= 0 <= r.ci_ub
+
         # Check at M=0
         result_0 = self.fit(results, M=0)
-        if result_0.ci_lb <= 0 <= result_0.ci_ub:
+        if _ci_covers_zero(result_0):
             return 0.0
 
         # Check if significant even for large M
         result_large = self.fit(results, M=10)
-        if not (result_large.ci_lb <= 0 <= result_large.ci_ub):
+        if not _ci_covers_zero(result_large):
             return None  # Always significant
 
         # Binary search
@@ -2477,7 +2502,7 @@ class HonestDiD:
         while hi - lo > tol:
             mid = (lo + hi) / 2
             result = self.fit(results, M=mid)
-            if result.ci_lb <= 0 <= result.ci_ub:
+            if _ci_covers_zero(result):
                 hi = mid
             else:
                 lo = mid

@@ -418,6 +418,10 @@ class TestOptimalFLCI:
         # Non-linear pre-trends should make M=0 infeasible
         assert np.isnan(r.lb) and np.isnan(r.ub), f"Expected NaN bounds, got [{r.lb}, {r.ub}]"
         assert np.isnan(r.ci_lb) and np.isnan(r.ci_ub), f"Expected NaN CI, got [{r.ci_lb}, {r.ci_ub}]"
+        # NaN CIs must NOT be classified as significant
+        assert not r.is_significant, "NaN CI should not be significant"
+        assert r.significance_stars == "", "NaN CI should have no significance stars"
+        assert "undefined" in repr(r).lower(), "NaN CI repr should indicate undefined"
 
     def test_smoothness_df_survey_zero_returns_nan(self):
         """Smoothness with df_survey=0 should return NaN CI."""

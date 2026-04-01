@@ -1223,7 +1223,7 @@ def generate_survey_did_data(
     if not cohort_periods:
         raise ValueError("cohort_periods must be a non-empty list of integers")
     for cp in cohort_periods:
-        if not isinstance(cp, int) or isinstance(cp, bool):
+        if isinstance(cp, bool) or not isinstance(cp, (int, np.integer)):
             raise ValueError(
                 f"cohort_periods must contain integers, got {cp!r}"
             )

@@ -1372,3 +1372,11 @@ class TestGenerateSurveyDidData:
 
         with pytest.raises(ValueError, match="must contain integers"):
             generate_survey_did_data(cohort_periods=[2.5], seed=42)
+
+    def test_numpy_integer_cohort_periods(self):
+        """Test that numpy integer cohort periods are accepted."""
+        from diff_diff.prep import generate_survey_did_data
+
+        periods = np.array([3, 5], dtype=np.int64)
+        data = generate_survey_did_data(cohort_periods=list(periods), seed=42)
+        assert len(data) == 200 * 8

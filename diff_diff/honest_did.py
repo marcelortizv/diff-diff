@@ -73,18 +73,18 @@ class DeltaRM:
     """
     Relative magnitudes restriction on trend violations (Delta^{RM}).
 
-    Post-treatment violations are bounded by Mbar times the maximum
-    absolute pre-treatment violation:
-        |delta_post| <= Mbar * max(|delta_pre|)
+    Post-treatment consecutive first differences are bounded by Mbar
+    times the maximum pre-treatment first difference:
+        |delta_{t+1} - delta_t| <= Mbar * max_{s<0} |delta_{s+1} - delta_s|
 
-    When Mbar=0, this enforces exact parallel trends post-treatment.
-    Mbar=1 means post-period violations can be as large as the worst
-    observed pre-period violation.
+    When Mbar=0, this enforces zero post-treatment first differences.
+    Mbar=1 means post-period first differences can be as large as the
+    worst observed pre-period first difference.
 
     Parameters
     ----------
     Mbar : float
-        Scaling factor for maximum pre-period violation.
+        Scaling factor for maximum pre-period first difference.
 
     Examples
     --------
@@ -110,7 +110,7 @@ class DeltaSDRM:
 
     Imposes both:
     1. Smoothness: |delta_{t+1} - 2*delta_t + delta_{t-1}| <= M
-    2. Relative magnitudes: |delta_post| <= Mbar * max(|delta_pre|)
+    2. Relative magnitudes: |delta_{t+1} - delta_t| <= Mbar * max_{s<0} |delta_{s+1} - delta_s|
 
     This is more restrictive than either constraint alone.
 
@@ -119,7 +119,7 @@ class DeltaSDRM:
     M : float
         Maximum allowed second difference (smoothness).
     Mbar : float
-        Scaling factor for maximum pre-period violation (relative magnitudes).
+        Scaling factor for maximum pre-period first difference (relative magnitudes).
 
     Examples
     --------
@@ -198,7 +198,17 @@ class HonestDiDResults:
     survey_metadata: Optional[Any] = field(default=None, repr=False)
     df_survey: Optional[int] = field(default=None, repr=False)
 
+    def _ci_is_finite(self) -> bool:
+        """Check if CI endpoints are finite (not NaN/inf)."""
+        return np.isfinite(self.ci_lb) and np.isfinite(self.ci_ub)
+
     def __repr__(self) -> str:
+        if not self._ci_is_finite():
+            return (
+                f"HonestDiDResults(bounds=[{self.lb}, {self.ub}], "
+                f"CI=[{self.ci_lb}, {self.ci_ub}] (undefined), "
+                f"M={self.M})"
+            )
         sig = "" if self.ci_lb <= 0 <= self.ci_ub else "*"
         return (
             f"HonestDiDResults(bounds=[{self.lb:.4f}, {self.ub:.4f}], "
@@ -208,7 +218,12 @@ class HonestDiDResults:
 
     @property
     def is_significant(self) -> bool:
-        """Check if CI excludes zero (effect is robust to violations)."""
+        """Check if CI excludes zero (effect is robust to violations).
+
+        Returns False for undefined (NaN) CIs.
+        """
+        if not self._ci_is_finite():
+            return False
         return not (self.ci_lb <= 0 <= self.ci_ub)
 
     @property
@@ -288,7 +303,7 @@ class HonestDiDResults:
 
         if self.method == "relative_magnitude":
             lines.append(
-                f"Post-treatment violations bounded at {self.M:.1f}x max pre-period violation."
+                f"Post-treatment first differences bounded at {self.M:.1f}x max pre-period first difference."
             )
         elif self.method == "smoothness":
             if self.M == 0:
@@ -441,7 +456,7 @@ class SensitivityResults:
                     "ub": ub,
                     "ci_lb": ci_lb,
                     "ci_ub": ci_ub,
-                    "is_significant": not (ci_lb <= 0 <= ci_ub),
+                    "is_significant": (np.isfinite(ci_lb) and np.isfinite(ci_ub) and not (ci_lb <= 0 <= ci_ub)),
                 }
             )
         return pd.DataFrame(rows)
@@ -808,45 +823,100 @@ def _extract_event_study_params(
         )
 
 
-def _construct_A_sd(num_periods: int) -> np.ndarray:
+def _construct_A_sd(num_pre_periods: int, num_post_periods: int) -> np.ndarray:
     """
     Construct constraint matrix for smoothness (second differences).
 
-    For T periods, creates matrix A such that:
-    A @ delta gives the second differences.
+    Builds the matrix A such that A @ delta gives the second differences,
+    accounting for the normalization delta_0 = 0 at the pre-post boundary.
+
+    The delta vector is [delta_{-T}, ..., delta_{-1}, delta_1, ..., delta_{Tbar}]
+    (delta_0 = 0 is omitted). Second differences at the boundary use delta_0 = 0:
+      t=-1: delta_{-2} - 2*delta_{-1} + 0  (if num_pre >= 2)
+      t= 0: delta_{-1} + delta_1           (bridge constraint, always present)
+      t= 1: 0 - 2*delta_1 + delta_2        (if num_post >= 2)
 
     Parameters
     ----------
-    num_periods : int
-        Number of time periods.
+    num_pre_periods : int
+        Number of pre-treatment periods (T).
+    num_post_periods : int
+        Number of post-treatment periods (Tbar).
 
     Returns
     -------
     A : np.ndarray
-        Constraint matrix of shape (num_periods - 2, num_periods).
+        Constraint matrix of shape (n_constraints, num_pre + num_post).
+        n_constraints = num_pre + num_post - 1 for sufficient periods,
+        accounting for the delta_0 = 0 boundary.
     """
-    if num_periods < 3:
-        return np.zeros((0, num_periods))
+    T = num_pre_periods
+    Tbar = num_post_periods
+    total = T + Tbar
 
-    n_constraints = num_periods - 2
-    A = np.zeros((n_constraints, num_periods))
+    if total < 2:
+        return np.zeros((0, total))
 
-    for i in range(n_constraints):
-        # Second difference: delta_{t+1} - 2*delta_t + delta_{t-1}
-        A[i, i] = 1  # delta_{t-1}
-        A[i, i + 1] = -2  # delta_t
-        A[i, i + 2] = 1  # delta_{t+1}
+    rows = []
 
-    return A
+    # Pure pre-period second differences: t = -T+1, ..., -2
+    # These involve delta[i-1], delta[i], delta[i+1] all in the pre-period block
+    # Row i corresponds to: delta_{-(T-i)} - 2*delta_{-(T-i-1)} + delta_{-(T-i-2)}
+    for i in range(T - 2):
+        row = np.zeros(total)
+        row[i] = 1        # delta_{t-1}
+        row[i + 1] = -2   # delta_t
+        row[i + 2] = 1    # delta_{t+1}
+        rows.append(row)
+
+    # Boundary constraint at t = -1: delta_{-2} - 2*delta_{-1} + delta_0
+    # With delta_0 = 0: delta_{-2} - 2*delta_{-1}
+    if T >= 2:
+        row = np.zeros(total)
+        row[T - 2] = 1    # delta_{-2}
+        row[T - 1] = -2   # delta_{-1}
+        # delta_0 = 0, no entry needed
+        rows.append(row)
+
+    # Bridge constraint at t = 0: delta_{-1} - 2*delta_0 + delta_1
+    # With delta_0 = 0: delta_{-1} + delta_1
+    if T >= 1 and Tbar >= 1:
+        row = np.zeros(total)
+        row[T - 1] = 1    # delta_{-1}
+        row[T] = 1         # delta_1
+        rows.append(row)
+
+    # Boundary constraint at t = 1: delta_0 - 2*delta_1 + delta_2
+    # With delta_0 = 0: -2*delta_1 + delta_2
+    if Tbar >= 2:
+        row = np.zeros(total)
+        row[T] = -2        # delta_1
+        row[T + 1] = 1     # delta_2
+        rows.append(row)
+
+    # Pure post-period second differences: event times t = 2, ..., Tbar-1
+    # delta_{t+1} - 2*delta_t + delta_{t-1}, all within the post-period block
+    for t in range(2, Tbar):
+        row = np.zeros(total)
+        row[T + t - 2] = 1    # delta_{t-1}
+        row[T + t - 1] = -2   # delta_t
+        row[T + t] = 1        # delta_{t+1}
+        rows.append(row)
+
+    if not rows:
+        return np.zeros((0, total))
+
+    return np.array(rows)
 
 
 def _construct_constraints_sd(
     num_pre_periods: int, num_post_periods: int, M: float
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Construct smoothness constraint matrices.
+    Construct smoothness constraint matrices for Delta^SD(M).
 
-    Returns A, b such that delta in DeltaSD iff |A @ delta| <= b.
+    Returns A, b such that delta in DeltaSD(M) iff |A @ delta| <= b.
+    Accounts for delta_0 = 0 normalization at the pre-post boundary.
 
     Parameters
     ----------
@@ -855,7 +925,7 @@ def _construct_constraints_sd(
     num_post_periods : int
         Number of post-treatment periods.
     M : float
-        Smoothness parameter.
+        Smoothness parameter (max second difference).
 
     Returns
     -------
@@ -864,11 +934,11 @@ def _construct_constraints_sd(
     b_ineq : np.ndarray
         Inequality constraint vector.
     """
-    total_periods = num_pre_periods + num_post_periods
-    A_base = _construct_A_sd(total_periods)
+    A_base = _construct_A_sd(num_pre_periods, num_post_periods)
 
     if A_base.shape[0] == 0:
-        return np.zeros((0, total_periods)), np.zeros(0)
+        total = num_pre_periods + num_post_periods
+        return np.zeros((0, total)), np.zeros(0)
 
     # |A @ delta| <= M becomes:
     # A @ delta <= M  and  -A @ delta <= M
@@ -878,11 +948,21 @@ def _construct_constraints_sd(
     return A_ineq, b_ineq
 
 
-def _construct_constraints_rm(
-    num_pre_periods: int, num_post_periods: int, Mbar: float, max_pre_violation: float
+def _construct_constraints_rm_component(
+    num_pre_periods: int,
+    num_post_periods: int,
+    Mbar: float,
+    max_pre_first_diff: float,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Construct relative magnitudes constraint matrices.
+    Construct constraint matrices for one component of Delta^RM.
+
+    Delta^RM constrains post-treatment FIRST DIFFERENCES (not levels):
+        |delta_{t+1} - delta_t| <= Mbar * max_pre_first_diff, for all t >= 0
+
+    With delta_0 = 0 normalization:
+        |delta_1| <= bound                         (t=0)
+        |delta_{t+1} - delta_t| <= bound           (t=1, ..., Tbar-1)
 
     Parameters
     ----------
@@ -892,8 +972,8 @@ def _construct_constraints_rm(
         Number of post-treatment periods.
     Mbar : float
         Relative magnitude scaling factor.
-    max_pre_violation : float
-        Maximum absolute pre-period violation (estimated from data).
+    max_pre_first_diff : float
+        The pre-period first difference for this union component.
 
     Returns
     -------
@@ -902,26 +982,140 @@ def _construct_constraints_rm(
     b_ineq : np.ndarray
         Inequality constraint vector.
     """
-    total_periods = num_pre_periods + num_post_periods
+    T = num_pre_periods
+    Tbar = num_post_periods
+    total = T + Tbar
+    bound = Mbar * max_pre_first_diff
 
-    # Bound post-period violations: |delta_post| <= Mbar * max_pre_violation
-    bound = Mbar * max_pre_violation
+    rows = []
 
-    # Create constraints for each post-period
-    # delta_post[i] <= bound  and  -delta_post[i] <= bound
-    n_constraints = 2 * num_post_periods
-    A_ineq = np.zeros((n_constraints, total_periods))
-    b_ineq = np.full(n_constraints, bound)
+    # t=0: |delta_1 - delta_0| = |delta_1| <= bound (delta_0 = 0)
+    if Tbar >= 1:
+        row_pos = np.zeros(total)
+        row_pos[T] = 1  # delta_1 <= bound
+        rows.append(row_pos)
+        row_neg = np.zeros(total)
+        row_neg[T] = -1  # -delta_1 <= bound
+        rows.append(row_neg)
 
-    for i in range(num_post_periods):
-        post_idx = num_pre_periods + i
-        A_ineq[2 * i, post_idx] = 1  # delta <= bound
-        A_ineq[2 * i + 1, post_idx] = -1  # -delta <= bound
+    # t=1, ..., Tbar-1: |delta_{t+1} - delta_t| <= bound
+    for t in range(1, Tbar):
+        row_pos = np.zeros(total)
+        row_pos[T + t] = 1       # delta_{t+1}
+        row_pos[T + t - 1] = -1  # -delta_t
+        rows.append(row_pos)
+        row_neg = np.zeros(total)
+        row_neg[T + t] = -1      # -delta_{t+1}
+        row_neg[T + t - 1] = 1   # delta_t
+        rows.append(row_neg)
 
+    if not rows:
+        return np.zeros((0, total)), np.zeros(0)
+
+    A_ineq = np.array(rows)
+    b_ineq = np.full(len(rows), bound)
     return A_ineq, b_ineq
 
 
+def _compute_pre_first_differences(beta_pre: np.ndarray) -> np.ndarray:
+    """
+    Compute pre-period first differences for Delta^RM.
+
+    With delta_0 = 0 normalization, the pre-period first differences are:
+        fd_s = delta_{s+1} - delta_s  for s = -T, ..., -1
+
+    Since delta_pre = beta_pre (by no-anticipation):
+        fd_{-T}   = beta_{-T+1} - beta_{-T}
+        ...
+        fd_{-2}   = beta_{-1} - beta_{-2}
+        fd_{-1}   = delta_0 - beta_{-1} = -beta_{-1}  (boundary through delta_0=0)
+
+    Parameters
+    ----------
+    beta_pre : np.ndarray
+        Pre-period coefficient estimates [beta_{-T}, ..., beta_{-1}].
+
+    Returns
+    -------
+    first_diffs : np.ndarray
+        Absolute first differences |fd_{-T}|, ..., |fd_{-1}|.
+    """
+    if len(beta_pre) == 0:
+        return np.array([])
+
+    diffs = []
+    # Interior first differences: fd_s = beta_{s+1} - beta_s
+    for i in range(len(beta_pre) - 1):
+        diffs.append(abs(beta_pre[i + 1] - beta_pre[i]))
+    # Boundary: fd_{-1} = delta_0 - delta_{-1} = 0 - beta_{-1} = -beta_{-1}
+    diffs.append(abs(beta_pre[-1]))
+
+    return np.array(diffs)
+
+
+def _solve_rm_bounds_union(
+    beta_pre: np.ndarray,
+    beta_post: np.ndarray,
+    l_vec: np.ndarray,
+    num_pre_periods: int,
+    Mbar: float,
+    lp_method: str = "highs",
+) -> Tuple[float, float]:
+    """
+    Solve identified set bounds for Delta^RM via union of polyhedra.
+
+    Delta^RM is a union of polyhedra (one per location of the max pre-period
+    first difference). Per Lemma 2.2 of Rambachan & Roth (2023), the
+    identified set is the union of component identified sets.
+
+    With delta_pre = beta_pre pinned, each pre-period first difference is
+    a known scalar, so each component LP has simple box constraints on
+    post-treatment first differences.
+
+    Parameters
+    ----------
+    beta_pre : np.ndarray
+        Pre-period coefficients.
+    beta_post : np.ndarray
+        Post-period coefficients.
+    l_vec : np.ndarray
+        Weighting vector.
+    num_pre_periods : int
+        Number of pre-periods.
+    Mbar : float
+        Relative magnitudes scaling factor.
+    lp_method : str
+        LP solver method.
+
+    Returns
+    -------
+    lb : float
+        Lower bound (min over all components).
+    ub : float
+        Upper bound (max over all components).
+    """
+    pre_diffs = _compute_pre_first_differences(beta_pre)
+    num_post = len(beta_post)
+
+    if len(pre_diffs) == 0 or np.max(pre_diffs) == 0:
+        theta = np.dot(l_vec, beta_post)
+        return theta, theta
+
+    # After pinning delta_pre = beta_pre, the RM bound is determined by
+    # max(pre_diffs). Smaller components give tighter constraints and thus
+    # narrower bounds that are nested inside the max-component bounds.
+    # One LP call suffices (Lemma 2.2 union simplifies to max component).
+    max_pre_fd = float(np.max(pre_diffs))
+    A_ineq, b_ineq = _construct_constraints_rm_component(
+        num_pre_periods, num_post, Mbar, max_pre_fd
+    )
+    return _solve_bounds_lp(
+        beta_pre, beta_post, l_vec, A_ineq, b_ineq, num_pre_periods, lp_method
+    )
+
+
 def _solve_bounds_lp(
+    beta_pre: np.ndarray,
     beta_post: np.ndarray,
     l_vec: np.ndarray,
     A_ineq: np.ndarray,
@@ -932,15 +1126,19 @@ def _solve_bounds_lp(
     """
     Solve for identified set bounds using linear programming.
 
-    The parameter of interest is theta = l' @ (beta_post - delta_post).
-    We find min and max over delta in the constraint set.
+    Computes the bounds of the identified set S(beta, Delta) per
+    Rambachan & Roth (2023) Equations 5-6:
 
-    Note: The optimization is over delta for ALL periods (pre + post), but
-    only the post-period components contribute to the objective function.
-    This correctly handles smoothness constraints that link pre and post periods.
+        theta^lb = l'beta_post - max{ l'delta_post : delta in Delta, delta_pre = beta_pre }
+        theta^ub = l'beta_post - min{ l'delta_post : delta in Delta, delta_pre = beta_pre }
+
+    The equality constraint delta_pre = beta_pre pins the pre-treatment violations
+    to the observed pre-treatment coefficients (since tau_pre = 0 by no-anticipation).
 
     Parameters
     ----------
+    beta_pre : np.ndarray
+        Pre-period coefficient estimates (pinned as equality constraints).
     beta_post : np.ndarray
         Post-period coefficient estimates.
     l_vec : np.ndarray
@@ -958,54 +1156,58 @@ def _solve_bounds_lp(
     Returns
     -------
     lb : float
-        Lower bound.
+        Lower bound of identified set.
     ub : float
-        Upper bound.
+        Upper bound of identified set.
     """
     num_post = len(beta_post)
     total_periods = A_ineq.shape[1] if A_ineq.shape[0] > 0 else num_pre_periods + num_post
 
-    # theta = l' @ beta_post - l' @ delta_post
-    # We optimize over delta (all periods including pre for smoothness constraints)
-
-    # Extract post-period part of constraints
-    # For delta in R^total_periods, we want min/max of -l' @ delta_post
-    # where delta_post = delta[num_pre_periods:]
-
+    # Objective: min/max -l' @ delta_post over delta in R^total_periods
     c = np.zeros(total_periods)
-    c[num_pre_periods : num_pre_periods + num_post] = -l_vec  # min -l'@delta = max l'@delta
+    c[num_pre_periods : num_pre_periods + num_post] = -l_vec
 
-    # For upper bound: max l'@(beta - delta) = l'@beta + max(-l'@delta)
-    # For lower bound: min l'@(beta - delta) = l'@beta + min(-l'@delta)
+    # Equality constraints: delta_pre = beta_pre (Rambachan & Roth Eqs 5-6)
+    A_eq = np.zeros((num_pre_periods, total_periods))
+    for i in range(num_pre_periods):
+        A_eq[i, i] = 1.0
+    b_eq = beta_pre
 
-    if A_ineq.shape[0] == 0:
-        # No constraints - unbounded
+    if A_ineq.shape[0] == 0 and num_pre_periods == 0:
         return -np.inf, np.inf
 
-    # Solve for lower bound of -l'@delta (which gives upper bound of theta)
+    lp_kwargs = dict(
+        A_ub=A_ineq if A_ineq.shape[0] > 0 else None,
+        b_ub=b_ineq if A_ineq.shape[0] > 0 else None,
+        A_eq=A_eq,
+        b_eq=b_eq,
+        bounds=(None, None),
+        method=lp_method,
+    )
+
+    # Solve for min(-l'@delta_post) → gives upper bound of theta
     try:
-        result_min = optimize.linprog(
-            c, A_ub=A_ineq, b_ub=b_ineq, bounds=(None, None), method=lp_method
-        )
+        result_min = optimize.linprog(c, **lp_kwargs)
         if result_min.success:
             min_val = result_min.fun
+        elif result_min.status == 2:
+            # Infeasible: beta_pre inconsistent with Delta at this M
+            return np.nan, np.nan
         else:
             min_val = -np.inf
     except (ValueError, TypeError):
-        # Optimization failed - return unbounded
         min_val = -np.inf
 
-    # Solve for upper bound of -l'@delta (which gives lower bound of theta)
+    # Solve for max(-l'@delta_post) → gives lower bound of theta
     try:
-        result_max = optimize.linprog(
-            -c, A_ub=A_ineq, b_ub=b_ineq, bounds=(None, None), method=lp_method
-        )
+        result_max = optimize.linprog(-c, **lp_kwargs)
         if result_max.success:
             max_val = -result_max.fun
+        elif result_max.status == 2:
+            return np.nan, np.nan
         else:
             max_val = np.inf
     except (ValueError, TypeError):
-        # Optimization failed - return unbounded
         max_val = np.inf
 
     theta_base = np.dot(l_vec, beta_post)
@@ -1065,69 +1267,681 @@ def _compute_flci(
     return ci_lb, ci_ub
 
 
-def _compute_clf_ci(
-    beta_post: np.ndarray,
-    sigma_post: np.ndarray,
-    l_vec: np.ndarray,
-    Mbar: float,
-    max_pre_violation: float,
-    alpha: float = 0.05,
-    n_draws: int = 1000,
-    df: Optional[int] = None,
-) -> Tuple[float, float, float, float]:
+def _cv_alpha(t: float, alpha: float, df: Optional[int] = None) -> float:
     """
-    Compute Conditional Least Favorable (C-LF) confidence interval.
+    Compute the (1-alpha) quantile of the folded distribution |X|.
 
-    For relative magnitudes, accounts for estimation of max_pre_violation.
+    When df is None: X ~ N(t, 1) (folded normal).
+    When df > 0: X ~ nct(df, t) (folded non-central t, for survey inference).
+    Per Rambachan & Roth (2023) Equation 18.
 
     Parameters
     ----------
-    beta_post : np.ndarray
-        Post-period coefficient estimates.
-    sigma_post : np.ndarray
-        Variance-covariance matrix for post-period coefficients.
-    l_vec : np.ndarray
-        Weighting vector.
-    Mbar : float
-        Relative magnitude parameter.
-    max_pre_violation : float
-        Estimated max pre-period violation.
+    t : float
+        Non-centrality parameter (bias / se ratio).
     alpha : float
         Significance level.
-    n_draws : int
-        Number of Monte Carlo draws for conditional CI.
     df : int, optional
-        Degrees of freedom for t-distribution critical value.
+        Degrees of freedom for non-central t. None = normal theory.
 
     Returns
     -------
-    lb : float
-        Lower bound of identified set.
-    ub : float
-        Upper bound of identified set.
-    ci_lb : float
-        Lower bound of confidence interval.
-    ci_ub : float
-        Upper bound of confidence interval.
+    cv : float
+        Critical value such that P(|X| <= cv) = 1 - alpha.
     """
-    # For simplicity, use FLCI approach with adjustment for estimation uncertainty
-    # A full implementation would condition on the estimated max_pre_violation
+    from scipy.stats import norm
 
-    theta = np.dot(l_vec, beta_post)
-    se = np.sqrt(l_vec @ sigma_post @ l_vec)
+    target = 1 - alpha
+    t = abs(t)
 
-    bound = Mbar * max_pre_violation
+    if df is not None and df > 0:
+        # Folded non-central t: P(|nct(df,t)| <= x) = F(x;df,t) - F(-x;df,t)
+        from scipy.stats import nct as nct_dist
 
-    # Simple bounds: theta +/- bound
-    lb = theta - bound
-    ub = theta + bound
+        x = nct_dist.ppf(1 - alpha / 2, df, t) + 1.0  # generous start
+        for _ in range(30):
+            f = nct_dist.cdf(x, df, t) - nct_dist.cdf(-x, df, t) - target
+            fprime = nct_dist.pdf(x, df, t) + nct_dist.pdf(-x, df, t)
+            if fprime < 1e-15:
+                break
+            x_new = x - f / fprime
+            x_new = max(x_new, 0.0)
+            if abs(x_new - x) < 1e-10:
+                break
+            x = x_new
+        return x
 
-    # CI with estimation uncertainty
-    z = _get_critical_value(alpha, df)
-    ci_lb = lb - z * se
-    ci_ub = ub + z * se
+    # Folded normal: P(|N(t,1)| <= x) = Phi(x-t) - Phi(-x-t)
+    x = norm.ppf(1 - alpha / 2) + t
 
-    return lb, ub, ci_lb, ci_ub
+    for _ in range(20):
+        f = norm.cdf(x - t) - norm.cdf(-x - t) - target
+        fprime = norm.pdf(x - t) + norm.pdf(-x - t)
+        if fprime < 1e-15:
+            break
+        x_new = x - f / fprime
+        x_new = max(x_new, 0.0)
+        if abs(x_new - x) < 1e-12:
+            break
+        x = x_new
+
+    return x
+
+
+def _build_fd_transform(num_pre: int, num_post: int) -> np.ndarray:
+    """
+    Build the matrix C mapping first-differences to levels: delta = C @ fd.
+
+    The fd vector has T+Tbar components:
+        fd = [fd_{-T}, ..., fd_{-1}, fd_0, ..., fd_{Tbar-1}]
+    where fd_s = delta_{s+1} - delta_s (with delta_0 = 0).
+
+    The delta vector is:
+        delta = [delta_{-T}, ..., delta_{-1}, delta_1, ..., delta_{Tbar}]
+
+    Pre-period (backward from delta_0=0):
+        delta_{-1} = -fd_{T-1}
+        delta_{-k} = -(fd_{T-1} + fd_{T-2} + ... + fd_{T-k})
+
+    Post-period (forward from delta_0=0):
+        delta_1 = fd_T
+        delta_k = fd_T + fd_{T+1} + ... + fd_{T+k-1}
+    """
+    T = num_pre
+    Tbar = num_post
+    total = T + Tbar
+    C = np.zeros((total, total))
+
+    # Pre-period: delta_{-k} = -(fd_{T-1} + fd_{T-2} + ... + fd_{T-k})
+    for k in range(1, T + 1):
+        delta_idx = T - k  # delta_{-k} is at index T-k
+        for j in range(k):
+            fd_idx = T - 1 - j  # fd_{T-1-j}
+            C[delta_idx, fd_idx] = -1.0
+
+    # Post-period: delta_k = fd_T + fd_{T+1} + ... + fd_{T+k-1}
+    for k in range(1, Tbar + 1):
+        delta_idx = T + k - 1  # delta_k is at index T+k-1
+        for j in range(k):
+            fd_idx = T + j  # fd_{T+j}
+            C[delta_idx, fd_idx] = 1.0
+
+    return C
+
+
+def _build_fd_smoothness_constraints(
+    num_fd: int, M: float
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Build smoothness constraints in first-difference space.
+
+    Delta^SD(M) in fd-space: |fd_{i+1} - fd_i| <= M for all consecutive pairs.
+    This is a bounded polyhedron (unlike level-space Delta^SD which is unbounded).
+    """
+    if num_fd < 2:
+        return np.zeros((0, num_fd)), np.zeros(0)
+
+    n_constraints = num_fd - 1
+    rows = []
+    for i in range(n_constraints):
+        row_pos = np.zeros(num_fd)
+        row_pos[i + 1] = 1
+        row_pos[i] = -1
+        rows.append(row_pos)
+        row_neg = np.zeros(num_fd)
+        row_neg[i + 1] = -1
+        row_neg[i] = 1
+        rows.append(row_neg)
+
+    A = np.array(rows)
+    b = np.full(len(rows), M)
+    return A, b
+
+
+def _w_to_v(w: np.ndarray, l: np.ndarray, num_pre: int) -> np.ndarray:
+    """
+    Map slope weights w to the full estimator direction v.
+
+    The estimator is: theta_hat = l'beta_post - sum_s w_s (beta_s - beta_{s-1})
+    for s = -T+1, ..., 0 (T slopes total, including boundary slope s=0
+    where beta_0 = 0).
+
+    This gives v = (v_pre, l) where v_pre is determined by differencing w.
+
+    Parameters
+    ----------
+    w : np.ndarray
+        Weights on slopes (length T). Includes the boundary slope at s=0.
+    l : np.ndarray
+        Target parameter weights (length Tbar).
+    num_pre : int
+        Number of pre-periods (T).
+    """
+    T = num_pre
+    Tbar = len(l)
+    v = np.zeros(T + Tbar)
+
+    if len(w) > 0:
+        # v[0] = w[0] (beta_{-T} from slope s=-T+1)
+        v[0] = w[0]
+        # v[k] = -w[k-1] + w[k] for k=1,...,T-1
+        for k in range(1, T):
+            v[k] = -w[k - 1] + w[k]
+
+    v[T:] = l
+    return v
+
+
+def _compute_worst_case_bias(
+    w: np.ndarray,
+    l: np.ndarray,
+    num_pre: int,
+    num_post: int,
+    M: float,
+) -> float:
+    """
+    Compute worst-case bias of the FLCI affine estimator for Delta^SD.
+
+    Per Rambachan & Roth (2023) Eq. 17, the bias is max |v'delta| over
+    Delta^SD(M). This is computed in first-difference space where Delta^SD
+    is a bounded polyhedron |fd_{i+1} - fd_i| <= M.
+
+    The bias direction in fd-space is C'v, where C maps fd -> delta and
+    v is the estimator direction derived from slope weights w.
+
+    Parameters
+    ----------
+    w : np.ndarray
+        Slope weights (length T), sum(w) = sum_j j*l_j (Eq. 17 neutrality).
+    l : np.ndarray
+        Target parameter weights.
+    num_pre : int
+        Number of pre-periods (T).
+    num_post : int
+        Number of post-periods (Tbar).
+    M : float
+        Smoothness parameter.
+
+    Returns
+    -------
+    bias : float
+        Maximum worst-case bias (finite for M >= 0).
+    """
+    if M == 0:
+        return 0.0  # Linear trends => zero bias when sum(w)=1
+
+    total = num_pre + num_post
+    v = _w_to_v(w, l, num_pre)
+    C = _build_fd_transform(num_pre, num_post)
+    A_fd, b_fd = _build_fd_smoothness_constraints(total, M)
+
+    # Bias direction in fd-space: max (C'v)' fd subject to smoothness
+    bias_dir_fd = C.T @ v
+
+    if A_fd.shape[0] == 0:
+        return 0.0
+
+    # Centrosymmetric: max |c'fd| = max c'fd
+    try:
+        res = optimize.linprog(
+            -bias_dir_fd,
+            A_ub=A_fd,
+            b_ub=b_fd,
+            bounds=(None, None),
+            method="highs",
+        )
+        return -res.fun if res.success else np.inf
+    except (ValueError, TypeError):
+        return np.inf
+
+
+def _compute_optimal_flci(
+    beta_pre: np.ndarray,
+    beta_post: np.ndarray,
+    sigma: np.ndarray,
+    l_vec: np.ndarray,
+    num_pre: int,
+    num_post: int,
+    M: float,
+    alpha: float = 0.05,
+    df: Optional[int] = None,
+) -> Tuple[float, float]:
+    """
+    Compute the optimal Fixed Length Confidence Interval for Delta^SD.
+
+    Per Rambachan & Roth (2023) Section 4.1, the optimal FLCI is:
+        CI = (a + v'beta_hat) ± chi
+    where (a, v) minimize the half-length chi subject to coverage.
+
+    The estimator is parameterized in terms of slope weights w on
+    pre-treatment first differences (Section 4.1.1):
+        theta_hat = l'beta_post - sum_s w_s (beta_s - beta_{s-1})
+    with constraint sum(w) = sum_j j*l_j (linear trend neutrality, Eq. 17).
+
+    The bias is computed in first-difference space where Delta^SD is
+    a bounded polyhedron, making the LP well-posed.
+
+    When df is provided, uses the folded non-central t distribution
+    for survey inference (replaces the folded normal).
+
+    Parameters
+    ----------
+    beta_pre : np.ndarray
+        Pre-period coefficients.
+    beta_post : np.ndarray
+        Post-period coefficients.
+    sigma : np.ndarray
+        Full variance-covariance matrix (pre + post periods).
+    l_vec : np.ndarray
+        Target parameter weights.
+    num_pre : int
+        Number of pre-periods (T).
+    num_post : int
+        Number of post-periods (Tbar).
+    M : float
+        Smoothness parameter.
+    alpha : float
+        Significance level.
+    df : int, optional
+        Survey degrees of freedom for folded t inference.
+
+    Returns
+    -------
+    ci_lb : float
+        Lower bound of FLCI.
+    ci_ub : float
+        Upper bound of FLCI.
+    """
+    T = num_pre
+    Tbar = num_post
+
+    # Survey df gating: df<=0 sentinel → NaN inference
+    if df is not None and df <= 0:
+        return np.nan, np.nan
+
+    # T slopes total (s = -T+1, ..., 0), including boundary slope s=0.
+    # Linear-trend neutrality requires sum(w) = sum_j j*l_j (Eq. 17).
+    n_slopes = T
+    target_sum = float(np.dot(np.arange(1, Tbar + 1), l_vec))
+
+    def flci_half_length(w_free):
+        """Compute FLCI half-length for given free slope weights."""
+        # Reconstruct full w with constraint sum(w) = target_sum
+        if n_slopes == 1:
+            w = np.array([target_sum])
+        elif len(w_free) == n_slopes - 1:
+            w = np.concatenate([w_free, [target_sum - np.sum(w_free)]])
+        else:
+            w = w_free
+
+        # Map w -> v for variance
+        v = _w_to_v(w, l_vec, T)
+        sigma_v = np.sqrt(float(v @ sigma @ v))
+        if sigma_v <= 0:
+            return np.inf
+
+        # Compute bias in fd-space
+        bias = _compute_worst_case_bias(w, l_vec, T, Tbar, M)
+        if not np.isfinite(bias):
+            return np.inf
+
+        t = float(bias / sigma_v)
+        cv = _cv_alpha(t, alpha, df=df)
+        return float(sigma_v * cv)
+
+    from scipy.optimize import minimize as scipy_minimize
+
+    if n_slopes == 1:
+        # Only one slope weight, determined by constraint.
+        w_opt = np.array([target_sum])
+        chi = flci_half_length(w_opt)
+    else:
+        # Optimize over T-1 free parameters (last w determined by sum constraint)
+        x0 = np.full(n_slopes - 1, target_sum / n_slopes)
+
+        result = scipy_minimize(
+            flci_half_length,
+            x0=x0,
+            method="Nelder-Mead",
+            options={"maxiter": 500, "xatol": 1e-5, "fatol": 1e-6},
+        )
+        w_opt = np.concatenate([result.x, [target_sum - np.sum(result.x)]])
+        chi = flci_half_length(result.x)
+
+    # Build the estimator value: theta_hat = v'beta
+    beta_full = np.concatenate([beta_pre, beta_post])
+    v_opt = _w_to_v(w_opt, l_vec, T)
+    theta_hat = float(v_opt @ beta_full)
+
+    if not np.isfinite(chi):
+        return np.nan, np.nan
+
+    return theta_hat - chi, theta_hat + chi
+
+
+def _setup_moment_inequalities(
+    beta_hat: np.ndarray,
+    sigma_hat: np.ndarray,
+    A: np.ndarray,
+    d: np.ndarray,
+    l: np.ndarray,
+    theta_bar: float,
+    num_pre: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Transform H0: theta = theta_bar into moment inequality form.
+
+    Per Rambachan & Roth (2023) Equations 12-13.
+
+    Returns
+    -------
+    Y_tilde : np.ndarray
+        Transformed statistic.
+    X_tilde : np.ndarray
+        Transformed nuisance matrix.
+    Sigma_tilde : np.ndarray
+        Transformed covariance.
+    """
+    num_post = len(beta_hat) - num_pre
+
+    # Y_n = A @ beta_hat - d
+    Y_n = A @ beta_hat - d
+
+    # Build A_tilde: transform to eliminate tau_post nuisance
+    # A_tilde_{(.,1)} corresponds to the target direction
+    # A_tilde_{(.,rest)} corresponds to nuisance parameters
+    L_post = np.zeros((len(beta_hat), num_post))
+    L_post[num_pre:, :] = np.eye(num_post)
+
+    A_tilde = A @ L_post  # shape: (n_constraints, num_post)
+
+    # Change of basis: first column = l direction, rest = complement
+    # Use QR on l to get orthogonal complement
+    l_full = l.reshape(-1, 1)
+    Q, _ = np.linalg.qr(np.hstack([l_full, np.eye(num_post)[:, :num_post - 1]]))
+
+    A_tilde_rotated = A_tilde @ Q  # Rotate into (l, complement) basis
+
+    # Y_tilde(theta_bar) = Y_n - A_tilde_{col1} * theta_bar
+    Y_tilde = Y_n - A_tilde_rotated[:, 0] * theta_bar
+
+    # X_tilde = remaining columns (nuisance)
+    X_tilde = A_tilde_rotated[:, 1:]
+
+    # Sigma_tilde
+    Sigma_tilde = A @ sigma_hat @ A.T
+
+    return Y_tilde, X_tilde, Sigma_tilde
+
+
+def _enumerate_vertices(
+    X_tilde: np.ndarray,
+    sigma_tilde_diag: np.ndarray,
+    n_moments: int,
+) -> List[np.ndarray]:
+    """
+    Enumerate basic feasible solutions of the dual LP.
+
+    The dual feasible set is:
+        {gamma >= 0 : gamma' @ X_tilde = 0, gamma' @ sigma_tilde_diag = 1}
+
+    For small problems (typical n_moments <= 15), we enumerate all
+    possible bases using combinatorial search.
+
+    Parameters
+    ----------
+    X_tilde : np.ndarray
+        Nuisance constraint matrix, shape (n_moments, n_nuisance).
+    sigma_tilde_diag : np.ndarray
+        sqrt(diag(Sigma_tilde)), shape (n_moments,).
+    n_moments : int
+        Number of moment inequalities.
+
+    Returns
+    -------
+    vertices : list of np.ndarray
+        Feasible vertices (gamma vectors).
+    """
+    import itertools
+
+    n_nuisance = X_tilde.shape[1] if X_tilde.ndim > 1 else 0
+    n_eq = n_nuisance + 1  # nuisance zero conditions + normalization
+
+    if n_eq > n_moments:
+        return []
+
+    vertices = []
+
+    # Each vertex has exactly n_eq non-zero (basic) variables
+    for basis_idx in itertools.combinations(range(n_moments), n_eq):
+        basis_idx = list(basis_idx)
+
+        # Build the system for basic variables
+        # gamma[basis_idx]' @ X_tilde[basis_idx, :] = 0
+        # gamma[basis_idx]' @ sigma_tilde_diag[basis_idx] = 1
+        if n_nuisance > 0:
+            A_sys = np.vstack([
+                X_tilde[basis_idx, :].T,
+                sigma_tilde_diag[basis_idx].reshape(1, -1),
+            ])
+        else:
+            A_sys = sigma_tilde_diag[basis_idx].reshape(1, -1)
+
+        b_sys = np.zeros(n_eq)
+        b_sys[-1] = 1.0  # normalization
+
+        try:
+            gamma_basic = np.linalg.solve(A_sys, b_sys)
+        except np.linalg.LinAlgError:
+            continue
+
+        # Check feasibility: gamma >= 0
+        if np.all(gamma_basic >= -1e-10):
+            gamma = np.zeros(n_moments)
+            gamma[basis_idx] = np.maximum(gamma_basic, 0)
+            vertices.append(gamma)
+
+    return vertices
+
+
+def _compute_arp_test(
+    Y_tilde: np.ndarray,
+    X_tilde: np.ndarray,
+    Sigma_tilde: np.ndarray,
+    alpha: float,
+    kappa: Optional[float] = None,
+) -> bool:
+    """
+    Run the ARP conditional-LF hybrid test.
+
+    Tests H0 using the ARP framework from Rambachan & Roth (2023)
+    Sections 3.2.1-3.2.2.
+
+    Parameters
+    ----------
+    Y_tilde : np.ndarray
+        Transformed statistic.
+    X_tilde : np.ndarray
+        Nuisance matrix.
+    Sigma_tilde : np.ndarray
+        Transformed covariance.
+    alpha : float
+        Significance level.
+    kappa : float, optional
+        First-stage LF test size. Default: alpha / 10.
+
+    Returns
+    -------
+    reject : bool
+        True if H0 is rejected.
+    """
+    from scipy.stats import norm, truncnorm
+
+    if kappa is None:
+        kappa = alpha / 10.0
+
+    n_moments = len(Y_tilde)
+    sigma_tilde_diag = np.sqrt(np.maximum(np.diag(Sigma_tilde), 0))
+
+    # Avoid division by zero
+    if np.any(sigma_tilde_diag <= 0):
+        return False
+
+    # Enumerate vertices of the dual feasible set
+    vertices = _enumerate_vertices(X_tilde, sigma_tilde_diag, n_moments)
+
+    if not vertices:
+        # Cannot enumerate vertices; fall back to conservative non-rejection
+        return False
+
+    # Compute eta_hat = max_{gamma in vertices} gamma' @ Y_tilde
+    eta_values = [gamma @ Y_tilde for gamma in vertices]
+    eta_hat = max(eta_values)
+    opt_idx = np.argmax(eta_values)
+    gamma_star = vertices[opt_idx]
+
+    # Stage 1: LF test (size kappa)
+    # c_LF = 1-kappa quantile of max_{gamma in V} gamma' @ xi, xi ~ N(0, Sigma_tilde)
+    rng = np.random.default_rng(42)  # Fixed seed for reproducibility
+    n_sim = 5000
+    L = np.linalg.cholesky(Sigma_tilde + 1e-12 * np.eye(n_moments))
+    max_draws = np.zeros(n_sim)
+    for i in range(n_sim):
+        xi = L @ rng.standard_normal(n_moments)
+        max_draws[i] = max(gamma @ xi for gamma in vertices)
+    c_LF = np.quantile(max_draws, 1 - kappa)
+
+    if eta_hat > c_LF:
+        return True  # Reject via LF test
+
+    # Stage 2: Conditional test (size (alpha - kappa) / (1 - kappa))
+    alpha_cond = (alpha - kappa) / (1 - kappa)
+
+    # Compute conditional variance and truncation bounds
+    gamma_var = gamma_star @ Sigma_tilde @ gamma_star
+    if gamma_var <= 0:
+        return False
+
+    sigma_gamma = np.sqrt(gamma_var)
+
+    # Truncation bounds: v_lo is the next-best vertex value
+    other_eta = [ev for j, ev in enumerate(eta_values) if j != opt_idx]
+    v_lo = max(other_eta) if other_eta else -np.inf
+
+    # v_up for hybrid: min(v_up_cond, c_LF)
+    v_up = c_LF  # Upper truncation from first stage non-rejection
+
+    if v_lo >= v_up:
+        # Degenerate truncation interval
+        return False
+
+    # Truncated normal critical value
+    # Under H0, the worst case is mu = 0 (least favorable)
+    a = (v_lo - 0) / sigma_gamma
+    b = (v_up - 0) / sigma_gamma
+
+    try:
+        c_cond = truncnorm.ppf(1 - alpha_cond, a, b, loc=0, scale=sigma_gamma)
+    except (ValueError, RuntimeError):
+        return False
+
+    return eta_hat > max(0, c_cond)
+
+
+def _arp_confidence_set(
+    beta_hat: np.ndarray,
+    sigma_hat: np.ndarray,
+    A: np.ndarray,
+    d: np.ndarray,
+    l: np.ndarray,
+    num_pre: int,
+    alpha: float = 0.05,
+    kappa: Optional[float] = None,
+    n_grid: int = 200,
+) -> Tuple[float, float]:
+    """
+    Compute ARP hybrid confidence set by test inversion.
+
+    Per Rambachan & Roth (2023), the confidence set is:
+        C = {theta_bar : ARP hybrid test does not reject H0: theta = theta_bar}
+
+    Parameters
+    ----------
+    beta_hat : np.ndarray
+        Full event-study coefficient vector [pre, post].
+    sigma_hat : np.ndarray
+        Full covariance matrix.
+    A : np.ndarray
+        Polyhedral constraint matrix (for Delta).
+    d : np.ndarray
+        Polyhedral constraint vector.
+    l : np.ndarray
+        Target parameter weights.
+    num_pre : int
+        Number of pre-periods.
+    alpha : float
+        Significance level.
+    kappa : float, optional
+        Hybrid test first-stage size.
+    n_grid : int
+        Number of grid points for test inversion.
+
+    Returns
+    -------
+    ci_lb : float
+        Lower bound of confidence set.
+    ci_ub : float
+        Upper bound of confidence set.
+    """
+    num_post = len(beta_hat) - num_pre
+    beta_post = beta_hat[num_pre:]
+
+    # Point estimate and SE for grid centering
+    theta_hat = l @ beta_post
+    se = np.sqrt(l @ sigma_hat[num_pre:, num_pre:] @ l)
+
+    # Grid centered on point estimate
+    grid_half = max(5 * se, 1.0)
+    theta_grid = np.linspace(theta_hat - grid_half, theta_hat + grid_half, n_grid)
+
+    # Test inversion: find theta_bar values not rejected
+    accepted = []
+    for theta_bar in theta_grid:
+        Y_tilde, X_tilde, Sigma_tilde = _setup_moment_inequalities(
+            beta_hat, sigma_hat, A, d, l, theta_bar, num_pre
+        )
+        reject = _compute_arp_test(Y_tilde, X_tilde, Sigma_tilde, alpha, kappa)
+        if not reject:
+            accepted.append(theta_bar)
+
+    if not accepted:
+        # Everything rejected — empty confidence set (unusual)
+        return theta_hat, theta_hat
+
+    ci_lb = min(accepted)
+    ci_ub = max(accepted)
+
+    # Refine boundaries with bisection
+    for _ in range(15):
+        # Refine lower bound
+        mid = (ci_lb - grid_half / n_grid + ci_lb) / 2 if ci_lb > theta_grid[0] else ci_lb
+        if mid < ci_lb:
+            Y_tilde, X_tilde, Sigma_tilde = _setup_moment_inequalities(
+                beta_hat, sigma_hat, A, d, l, mid, num_pre
+            )
+            if not _compute_arp_test(Y_tilde, X_tilde, Sigma_tilde, alpha, kappa):
+                ci_lb = mid
+
+        # Refine upper bound
+        mid = (ci_ub + grid_half / n_grid + ci_ub) / 2 if ci_ub < theta_grid[-1] else ci_ub
+        if mid > ci_ub:
+            Y_tilde, X_tilde, Sigma_tilde = _setup_moment_inequalities(
+                beta_hat, sigma_hat, A, d, l, mid, num_pre
+            )
+            if not _compute_arp_test(Y_tilde, X_tilde, Sigma_tilde, alpha, kappa):
+                ci_ub = mid
+
+    return ci_lb, ci_ub
 
 
 # =============================================================================
@@ -1146,13 +1960,13 @@ class HonestDiD:
     ----------
     method : {"smoothness", "relative_magnitude", "combined"}
         Type of restriction on trend violations:
-        - "smoothness": Bounds on second differences (Delta^SD)
-        - "relative_magnitude": Post violations <= M * max pre violation (Delta^RM)
+        - "smoothness": Bounds on second differences of trend violations (Delta^SD)
+        - "relative_magnitude": Post first differences <= M * max pre first difference (Delta^RM)
         - "combined": Both restrictions (Delta^SDRM)
     M : float, optional
         Restriction parameter. Interpretation depends on method:
         - smoothness: Max second difference
-        - relative_magnitude: Scaling factor for max pre-period violation
+        - relative_magnitude: Scaling factor for max pre-period first difference
         Default is 1.0 for relative_magnitude, 0.0 for smoothness.
     alpha : float
         Significance level for confidence intervals.
@@ -1258,15 +2072,16 @@ class HonestDiD:
         )
 
         # beta_hat contains [pre-period effects, post-period effects] in order.
-        # Extract just the post-period effects for HonestDiD bounds.
-        if len(beta_hat) == num_post:
-            # Already just post-period effects
-            beta_post = beta_hat
-        elif len(beta_hat) == num_pre + num_post:
-            # Full event study, extract post-periods
+        # Extract pre and post components for the identified set LP.
+        # The LP pins delta_pre = beta_pre (Rambachan & Roth Eqs 5-6).
+        if len(beta_hat) == num_pre + num_post:
+            beta_pre = beta_hat[:num_pre]
             beta_post = beta_hat[num_pre:]
+        elif len(beta_hat) == num_post:
+            beta_pre = np.zeros(num_pre)
+            beta_post = beta_hat
         else:
-            # Assume it's post-period effects
+            beta_pre = np.zeros(num_pre)
             beta_post = beta_hat
             num_post = len(beta_hat)
 
@@ -1276,7 +2091,6 @@ class HonestDiD:
         elif sigma.shape[0] == num_pre + num_post:
             sigma_post = sigma[num_pre:, num_pre:]
         else:
-            # Construct diagonal from available dimensions
             sigma_post = sigma[: len(beta_post), : len(beta_post)]
 
         # Update num_post to match actual data
@@ -1304,13 +2118,16 @@ class HonestDiD:
         # Compute bounds based on method
         if self.method == "smoothness":
             lb, ub, ci_lb, ci_ub = self._compute_smoothness_bounds(
-                beta_post, sigma_post, l_vec, num_pre, num_post, M, df=df_survey
+                beta_pre, beta_post, sigma, sigma_post, l_vec,
+                num_pre, num_post, M, df=df_survey,
             )
             ci_method = "FLCI"
 
         elif self.method == "relative_magnitude":
             lb, ub, ci_lb, ci_ub = self._compute_rm_bounds(
+                beta_pre,
                 beta_post,
+                sigma,
                 sigma_post,
                 l_vec,
                 num_pre,
@@ -1320,11 +2137,13 @@ class HonestDiD:
                 results,
                 df=df_survey,
             )
-            ci_method = "C-LF"
+            ci_method = "FLCI"
 
         else:  # combined
             lb, ub, ci_lb, ci_ub = self._compute_combined_bounds(
+                beta_pre,
                 beta_post,
+                sigma,
                 sigma_post,
                 l_vec,
                 num_pre,
@@ -1357,7 +2176,9 @@ class HonestDiD:
 
     def _compute_smoothness_bounds(
         self,
+        beta_pre: np.ndarray,
         beta_post: np.ndarray,
+        sigma_full: np.ndarray,
         sigma_post: np.ndarray,
         l_vec: np.ndarray,
         num_pre: int,
@@ -1365,22 +2186,43 @@ class HonestDiD:
         M: float,
         df: Optional[int] = None,
     ) -> Tuple[float, float, float, float]:
-        """Compute bounds under smoothness restriction."""
+        """Compute bounds under smoothness restriction (Delta^SD).
+
+        Uses the optimal FLCI from Rambachan & Roth (2023) Section 4.1,
+        which jointly optimizes the affine estimator direction to minimize
+        CI width. Falls back to naive FLCI if the full covariance matrix
+        is not available.
+        """
         # Construct constraints
         A_ineq, b_ineq = _construct_constraints_sd(num_pre, num_post, M)
 
-        # Solve for bounds
-        lb, ub = _solve_bounds_lp(beta_post, l_vec, A_ineq, b_ineq, num_pre)
+        # Solve for identified set bounds with delta_pre = beta_pre pinned
+        lb, ub = _solve_bounds_lp(
+            beta_pre, beta_post, l_vec, A_ineq, b_ineq, num_pre
+        )
 
-        # Compute FLCI
-        se = np.sqrt(l_vec @ sigma_post @ l_vec)
-        ci_lb, ci_ub = _compute_flci(lb, ub, se, self.alpha, df=df)
+        # Propagate infeasibility: if bounds are NaN, CI is NaN too
+        if np.isnan(lb) or np.isnan(ub):
+            return np.nan, np.nan, np.nan, np.nan
+
+        # Compute optimal FLCI (Rambachan & Roth Section 4.1)
+        if sigma_full.shape[0] == num_pre + num_post:
+            ci_lb, ci_ub = _compute_optimal_flci(
+                beta_pre, beta_post, sigma_full, l_vec,
+                num_pre, num_post, M, self.alpha, df=df,
+            )
+        else:
+            # Fallback to naive FLCI when full sigma unavailable
+            se = np.sqrt(l_vec @ sigma_post @ l_vec)
+            ci_lb, ci_ub = _compute_flci(lb, ub, se, self.alpha, df=df)
 
         return lb, ub, ci_lb, ci_ub
 
     def _compute_rm_bounds(
         self,
+        beta_pre: np.ndarray,
         beta_post: np.ndarray,
+        sigma_full: np.ndarray,
         sigma_post: np.ndarray,
         l_vec: np.ndarray,
         num_pre: int,
@@ -1390,34 +2232,43 @@ class HonestDiD:
         results: Any,
         df: Optional[int] = None,
     ) -> Tuple[float, float, float, float]:
-        """Compute bounds under relative magnitudes restriction."""
-        # Estimate max pre-period violation from pre-trends
-        # For relative magnitudes, we use the pre-period coefficients
-        max_pre_violation = self._estimate_max_pre_violation(results, pre_periods)
+        """Compute bounds under relative magnitudes restriction (Delta^RM).
 
-        if max_pre_violation == 0:
-            # No pre-period violations detected - use point estimate
-            theta = np.dot(l_vec, beta_post)
-            se = np.sqrt(l_vec @ sigma_post @ l_vec)
-            z = _get_critical_value(self.alpha, df)
-            return theta, theta, theta - z * se, theta + z * se
+        Uses union-of-polyhedra decomposition per Lemma 2.2 of
+        Rambachan & Roth (2023). Delta^RM constrains post-treatment
+        first differences relative to the max pre-treatment first difference.
 
-        # Compute bounds
-        lb, ub, ci_lb, ci_ub = _compute_clf_ci(
-            beta_post,
-            sigma_post,
-            l_vec,
-            Mbar,
-            max_pre_violation,
-            self.alpha,
-            df=df,
+        CI construction uses naive FLCI (conservative). The paper recommends
+        ARP hybrid confidence sets (Sections 3.2.1-3.2.2); infrastructure
+        is implemented but disabled pending calibration of the moment
+        inequality transformation.
+        """
+        # Solve identified set via union of polyhedra
+        lb, ub = _solve_rm_bounds_union(
+            beta_pre, beta_post, l_vec, num_pre, Mbar
         )
+
+        # CI construction for Delta^RM.
+        # The paper recommends ARP conditional/hybrid confidence sets
+        # (Sections 3.2.1-3.2.2). The ARP infrastructure is implemented
+        # (_arp_confidence_set) but the moment inequality transformation
+        # requires further calibration to produce valid CIs consistently.
+        # Currently uses conservative naive FLCI (extends identified set
+        # by z*se); ARP will be enabled once calibrated.
+        # TODO: enable ARP hybrid for RM once transformation is validated
+        se = np.sqrt(l_vec @ sigma_post @ l_vec)
+        if np.isfinite(lb) and np.isfinite(ub):
+            ci_lb, ci_ub = _compute_flci(lb, ub, se, self.alpha, df=df)
+        else:
+            ci_lb, ci_ub = -np.inf, np.inf
 
         return lb, ub, ci_lb, ci_ub
 
     def _compute_combined_bounds(
         self,
+        beta_pre: np.ndarray,
         beta_post: np.ndarray,
+        sigma_full: np.ndarray,
         sigma_post: np.ndarray,
         l_vec: np.ndarray,
         num_pre: int,
@@ -1428,14 +2279,27 @@ class HonestDiD:
         df: Optional[int] = None,
     ) -> Tuple[float, float, float, float]:
         """Compute bounds under combined smoothness + RM restriction."""
+        import warnings
+
+        warnings.warn(
+            "HonestDiD method='combined' (Delta^SDRM) uses naive FLCI on the "
+            "intersection of Delta^SD and Delta^RM bounds. The paper proves "
+            "FLCI is NOT consistent for Delta^SDRM (Proposition 4.2). "
+            "Consider using method='smoothness' or method='relative_magnitude' "
+            "separately for paper-supported inference.",
+            UserWarning,
+            stacklevel=3,
+        )
         # Get smoothness bounds
         lb_sd, ub_sd, _, _ = self._compute_smoothness_bounds(
-            beta_post, sigma_post, l_vec, num_pre, num_post, M, df=df
+            beta_pre, beta_post, sigma_full, sigma_post, l_vec,
+            num_pre, num_post, M, df=df,
         )
 
         # Get RM bounds (use M as Mbar for combined)
         lb_rm, ub_rm, _, _ = self._compute_rm_bounds(
-            beta_post, sigma_post, l_vec, num_pre, num_post, M, pre_periods, results, df=df
+            beta_pre, beta_post, sigma_full, sigma_post, l_vec,
+            num_pre, num_post, M, pre_periods, results, df=df,
         )
 
         # Combined bounds are intersection
@@ -1559,8 +2423,13 @@ class HonestDiD:
 
         Uses binary search for precision.
         """
-        # Check if any CI includes zero
-        includes_zero = [ci_lb <= 0 <= ci_ub for ci_lb, ci_ub in ci_list]
+        # Check if any CI includes zero (NaN CIs are treated as undefined, not significant)
+        def _ci_includes_zero(ci_lb, ci_ub):
+            if not (np.isfinite(ci_lb) and np.isfinite(ci_ub)):
+                return True  # Undefined CIs are not "significant"
+            return ci_lb <= 0 <= ci_ub
+
+        includes_zero = [_ci_includes_zero(ci_lb, ci_ub) for ci_lb, ci_ub in ci_list]
 
         if not any(includes_zero):
             # Always significant - no breakdown
@@ -1582,7 +2451,7 @@ class HonestDiD:
                 for _ in range(20):  # 20 iterations for precision
                     mid = (lo + hi) / 2
                     result = self.fit(results, M=mid)
-                    if result.ci_lb <= 0 <= result.ci_ub:
+                    if _ci_includes_zero(result.ci_lb, result.ci_ub):
                         hi = mid
                     else:
                         lo = mid
@@ -1612,14 +2481,19 @@ class HonestDiD:
         float or None
             Breakdown value, or None if effect is always significant.
         """
+        def _ci_covers_zero(r):
+            if not (np.isfinite(r.ci_lb) and np.isfinite(r.ci_ub)):
+                return True  # Undefined CIs are not "significant"
+            return r.ci_lb <= 0 <= r.ci_ub
+
         # Check at M=0
         result_0 = self.fit(results, M=0)
-        if result_0.ci_lb <= 0 <= result_0.ci_ub:
+        if _ci_covers_zero(result_0):
             return 0.0
 
         # Check if significant even for large M
         result_large = self.fit(results, M=10)
-        if not (result_large.ci_lb <= 0 <= result_large.ci_ub):
+        if not _ci_covers_zero(result_large):
             return None  # Always significant
 
         # Binary search
@@ -1628,7 +2502,7 @@ class HonestDiD:
         while hi - lo > tol:
             mid = (lo + hi) / 2
             result = self.fit(results, M=mid)
-            if result.ci_lb <= 0 <= result.ci_ub:
+            if _ci_covers_zero(result):
                 hi = mid
             else:
                 lo = mid

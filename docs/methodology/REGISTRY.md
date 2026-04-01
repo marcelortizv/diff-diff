@@ -1784,38 +1784,45 @@ Weights depend on group sizes and variance in treatment timing.
 *Assumption checks / warnings:*
 - Requires event-study estimates with pre-treatment coefficients
 - Warns if pre-treatment coefficients suggest parallel trends violation
-- M=0 corresponds to exact parallel trends assumption
+- M=0 for Delta^SD: enforces linear trend extrapolation (not exact parallel trends)
 
-*Estimator equation (as implemented):*
+*Restriction classes (Equations 8, Section 2.3):*
 
-Identified set under smoothness restriction (Δ^SD):
+Delta^SD(M) — Smoothness (second differences, all periods):
 ```
-Δ^SD(M) = {δ : |δ_t - δ_{t-1}| ≤ M for all pre-treatment t}
+Δ^SD(M) = {δ : |(δ_{t+1} − δ_t) − (δ_t − δ_{t-1})| ≤ M, for all t}
 ```
+with δ_0 = 0 at the pre-post boundary. M=0 enforces linear trends.
 
-Identified set under relative magnitudes (Δ^RM):
+Delta^RM(M̄) — Relative magnitudes (post-treatment first differences):
 ```
-Δ^RM(M̄) = {δ : |δ_post| ≤ M̄ × max_t |δ_t^pre|}
+Δ^RM(M̄) = {δ : |δ_{t+1} − δ_t| ≤ M̄ × max_{s<0} |δ_{s+1} − δ_s|, for all t ≥ 0}
 ```
+Post-treatment consecutive first differences bounded by M̄ × max pre-treatment first difference. Union of polyhedra (one per max location).
 
-Bounds computed via linear programming:
+*Identified set (Equations 5-6):*
 ```
-[τ_L, τ_U] = [min_δ∈Δ τ(δ), max_δ∈Δ τ(δ)]
+θ^lb = l'β_post − max{l'δ_post : δ ∈ Δ, δ_pre = β_pre}
+θ^ub = l'β_post − min{l'δ_post : δ ∈ Δ, δ_pre = β_pre}
 ```
+CRITICAL: δ_pre = β_pre pins pre-treatment violations to observed coefficients. Solved via LP (scipy.optimize.linprog).
 
-Confidence intervals:
-- FLCI (Fixed-Length Confidence Interval) for smoothness
-- C-LF (Conditional Least-Favorable) for relative magnitudes
+*Inference (Sections 3.2, 4.1):*
+- Delta^SD: Optimal FLCI — jointly optimizes affine estimator direction and half-length via folded normal quantile cv_α(bias/se) (Equation 18). When `df_survey` is present, uses folded non-central t (`scipy.stats.nct`) instead of folded normal; `df_survey=0` → NaN inference. For M=0, uses `_get_critical_value(alpha, df)` (standard t/z).
+- Delta^RM: Paper recommends ARP conditional/hybrid confidence sets (Equations 14-15, κ = α/10). Currently uses **naive FLCI** unconditionally (conservative — wider CIs, valid coverage). ARP infrastructure exists but is disabled.
+- **Note (deviation from R):** Delta^RM CIs use naive FLCI (`lb - z*se, ub + z*se`) instead of the paper's ARP hybrid. R's `HonestDiD` package implements full ARP conditional/hybrid. Our naive FLCI is conservative (wider, valid coverage) but does not adapt to the length of the identified set. ARP implementation deferred (see TODO.md).
+- **Note:** `method="combined"` (Delta^SDRM) uses naive FLCI on the intersection of Delta^SD and Delta^RM bounds. The paper proves FLCI is NOT consistent for Delta^SDRM (Proposition 4.2). The paper recommends ARP hybrid for non-SD restriction classes. This is a known conservative approximation; a runtime UserWarning is emitted.
 
 *Standard errors:*
-- Inherits from underlying event-study estimation
-- Sensitivity analysis reports bounds, not point estimates
+- Inherits Σ̂ from underlying event-study estimation
+- Sensitivity analysis reports identified set bounds and confidence sets
 
 *Edge cases:*
+- M=0 for Δ^SD: linear extrapolation, point identification, FLCI near-optimal
+- M̄=0 for Δ^RM: post-treatment first differences = 0, point identification
 - Breakdown point: smallest M where CI includes zero
-- M=0: reduces to standard parallel trends
 - Negative M: not valid (constraints become infeasible)
-- **Note:** Phase 7d: survey variance support. When input results carry `survey_metadata` with `df_survey`, HonestDiD uses t-distribution critical values (via `_get_critical_value(alpha, df)`) instead of normal. CallawaySantAnnaResults now stores `event_study_vcov` (full cross-event-time VCV from IF vectors), which HonestDiD uses instead of the diagonal fallback. For replicate-weight designs, the event-study VCV falls back to diagonal (multivariate replicate VCV deferred).
+- **Note:** Phase 7d: survey variance support. When input results carry `survey_metadata` with `df_survey`, Delta^SD smoothness uses folded non-central t critical values (`scipy.stats.nct`); Delta^RM and naive FLCI paths use `_get_critical_value(alpha, df)` (standard t-distribution). `df_survey=0` → NaN inference. CallawaySantAnnaResults stores `event_study_vcov` (full cross-event-time VCV from IF vectors), which HonestDiD uses instead of the diagonal fallback. For replicate-weight designs, the event-study VCV falls back to diagonal (multivariate replicate VCV deferred).
 - **Note (deviation from R):** When HonestDiD receives bootstrap-fitted CallawaySantAnna results (`n_bootstrap > 0`), the full event-study covariance is unavailable (cleared to prevent mixing analytical VCV with bootstrap SEs). HonestDiD falls back to `diag(se^2)` from the bootstrap SEs with a UserWarning. R's `honest_did.AGGTEobj` computes a full covariance from the influence function matrix; implementing bootstrap event-study covariance is deferred. For full covariance structure in HonestDiD, use analytical SEs (`n_bootstrap=0`).
 - **Note (deviation from R):** When CallawaySantAnna results are passed to HonestDiD, `base_period != "universal"` emits a warning but does not error. R's `honest_did::honest_did.AGGTEobj` requires universal base period. Our implementation warns because the varying-base pre-treatment coefficients use consecutive comparisons (not a common reference), which changes the parallel-trends restriction interpretation.
 
@@ -1823,11 +1830,14 @@ Confidence intervals:
 - R: `HonestDiD` package (Rambachan & Roth's official package)
 
 **Requirements checklist:**
-- [ ] M parameter must be ≥ 0
-- [ ] Breakdown point (breakdown_M) correctly identified
-- [ ] Delta^SD (smoothness) and Delta^RM (relative magnitudes) both supported
-- [ ] Sensitivity plot shows bounds vs. M
-- [ ] FLCI and C-LF confidence intervals implemented
+- [x] Δ^SD constrains second differences with δ_0 = 0 boundary handling
+- [x] Δ^RM constrains first differences (not levels), union of polyhedra
+- [x] Identified set LP pins δ_pre = β_pre (Equations 5-6)
+- [x] Optimal FLCI for Δ^SD (convex optimization, folded normal quantile)
+- [x] ARP hybrid framework for Δ^RM (vertex enumeration, truncated normal)
+- [x] Sensitivity analysis over M/M̄ grid with breakdown value
+- [x] M parameter must be ≥ 0
+- [ ] ARP hybrid produces valid (non-degenerate) CIs for all test cases
 
 ---
 

@@ -20,7 +20,7 @@ from diff_diff.honest_did import (
     SensitivityResults,
     _compute_flci,
     _construct_A_sd,
-    _construct_constraints_rm,
+    _construct_constraints_rm_component,
     _construct_constraints_sd,
     _extract_event_study_params,
     compute_honest_did,
@@ -206,35 +206,42 @@ class TestConstraintConstruction:
     """Tests for constraint matrix construction."""
 
     def test_construct_A_sd_basic(self):
-        """Test smoothness constraint matrix construction."""
-        A = _construct_A_sd(5)
-        assert A.shape == (3, 5)
+        """Test smoothness constraint matrix with delta_0=0 boundary."""
+        # 3 pre + 2 post: should have T+Tbar-1 = 4 rows
+        A = _construct_A_sd(3, 2)
+        assert A.shape == (4, 5)
 
-        # Check second difference structure: [1, -2, 1, 0, 0] etc.
-        expected_first_row = [1, -2, 1, 0, 0]
-        np.testing.assert_array_equal(A[0], expected_first_row)
+        # First row: pure pre second difference [1, -2, 1, 0, 0]
+        np.testing.assert_array_equal(A[0], [1, -2, 1, 0, 0])
+        # Boundary at t=-1: [0, 1, -2, 0, 0] (uses delta_0=0)
+        np.testing.assert_array_equal(A[1], [0, 1, -2, 0, 0])
+        # Bridge at t=0: [0, 0, 1, 1, 0] (delta_{-1} + delta_1)
+        np.testing.assert_array_equal(A[2], [0, 0, 1, 1, 0])
+        # Boundary at t=1: [0, 0, 0, -2, 1] (uses delta_0=0)
+        np.testing.assert_array_equal(A[3], [0, 0, 0, -2, 1])
 
     def test_construct_A_sd_small(self):
-        """Test that small n_periods returns empty matrix."""
-        A = _construct_A_sd(2)
-        assert A.shape == (0, 2)
+        """Test that 1+1 returns bridge row only."""
+        A = _construct_A_sd(1, 1)
+        assert A.shape == (1, 2)
+        np.testing.assert_array_equal(A[0], [1, 1])
 
     def test_construct_constraints_sd(self):
         """Test smoothness constraints."""
         A_ineq, b_ineq = _construct_constraints_sd(num_pre_periods=3, num_post_periods=4, M=0.5)
 
-        # Should have 2 * (7 - 2) = 10 constraints
-        assert A_ineq.shape[0] == 10
+        # Should have 2 * (T+Tbar-1) = 2 * 6 = 12 constraints
+        assert A_ineq.shape[0] == 12
         assert A_ineq.shape[1] == 7
         assert np.all(b_ineq == 0.5)
 
-    def test_construct_constraints_rm(self):
-        """Test relative magnitudes constraints."""
-        A_ineq, b_ineq = _construct_constraints_rm(
-            num_pre_periods=3, num_post_periods=4, Mbar=1.5, max_pre_violation=0.2
+    def test_construct_constraints_rm_component(self):
+        """Test relative magnitudes first-difference constraints."""
+        A_ineq, b_ineq = _construct_constraints_rm_component(
+            num_pre_periods=3, num_post_periods=4, Mbar=1.5, max_pre_first_diff=0.2
         )
 
-        # Should have 2 * 4 = 8 constraints (upper and lower for each post period)
+        # Should have 2 * 4 = 8 constraints (pos/neg for each post first-diff)
         assert A_ineq.shape[0] == 8
         assert A_ineq.shape[1] == 7
         assert np.all(b_ineq == 1.5 * 0.2)

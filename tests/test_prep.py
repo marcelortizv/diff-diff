@@ -1358,12 +1358,15 @@ class TestGenerateSurveyDidData:
         import pytest
         from diff_diff.prep import generate_survey_did_data
 
-        # Period 0 is invalid (must be >= 1)
+        # g=1 is invalid: no pre-treatment period (must be >= 2)
         with pytest.raises(ValueError, match="must be between"):
-            generate_survey_did_data(cohort_periods=[0], seed=42)
-        # Period == n_periods is invalid (must be < n_periods)
+            generate_survey_did_data(cohort_periods=[1], seed=42)
+        # g > n_periods is invalid
         with pytest.raises(ValueError, match="must be between"):
-            generate_survey_did_data(n_periods=8, cohort_periods=[8], seed=42)
+            generate_survey_did_data(n_periods=8, cohort_periods=[9], seed=42)
+        # g = n_periods is valid (last-period adoption, base period g-1 exists)
+        data = generate_survey_did_data(n_periods=8, cohort_periods=[8], seed=42)
+        assert len(data) == 200 * 8
 
     def test_cohort_period_non_integer(self):
         """Test that non-integer cohort periods raise ValueError."""
@@ -1387,15 +1390,23 @@ class TestGenerateSurveyDidData:
         assert len(data2) == 200 * 8
 
     def test_default_cohort_periods_small_n_periods(self):
-        """Test default cohort_periods adapts to small n_periods."""
+        """Test default cohort_periods adapts to small n_periods with pre-periods."""
         from diff_diff.prep import generate_survey_did_data
 
-        # n_periods=4: default should derive valid cohorts, not [3, 5]
-        data4 = generate_survey_did_data(n_periods=4, seed=42)
-        assert len(data4) == 200 * 4
-        cohorts = set(data4.groupby("unit")["first_treat"].first().unique())
-        assert all(0 < c < 4 for c in cohorts if c != 0)
+        for n_per in [4, 5, 6, 7]:
+            data = generate_survey_did_data(n_periods=n_per, seed=42)
+            assert len(data) == 200 * n_per
+            cohorts = data.groupby("unit")["first_treat"].first().unique()
+            # Every treated cohort must have g >= 2 (at least one pre-period)
+            for g in cohorts:
+                if g > 0:
+                    assert g >= 2, f"n_periods={n_per}: cohort g={g} has no pre-period"
+                    assert g <= n_per, f"n_periods={n_per}: cohort g={g} > n_periods"
 
-        # n_periods=5
-        data5 = generate_survey_did_data(n_periods=5, seed=42)
-        assert len(data5) == 200 * 5
+    def test_default_cohort_periods_too_small(self):
+        """Test that n_periods < 4 with default cohort_periods raises."""
+        import pytest
+        from diff_diff.prep import generate_survey_did_data
+
+        with pytest.raises(ValueError, match="too small"):
+            generate_survey_did_data(n_periods=3, seed=42)

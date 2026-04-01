@@ -1169,7 +1169,9 @@ def generate_survey_did_data(
     n_periods : int, default=8
         Number of time periods (1-indexed).
     cohort_periods : list of int, optional
-        Treatment cohort periods. Default: [3, 5].
+        Treatment cohort periods (1-indexed, each must be >= 2 for at least
+        one pre-treatment period). Default derived from n_periods; [3, 5]
+        when n_periods >= 8. Requires n_periods >= 4 when not specified.
     never_treated_frac : float, default=0.3
         Fraction of units that are never treated.
     treatment_effect : float, default=2.0
@@ -1219,11 +1221,18 @@ def generate_survey_did_data(
     rng = np.random.default_rng(seed)
 
     if cohort_periods is None:
-        # Derive defaults from n_periods, mirroring generate_staggered_data()
+        # Derive defaults from n_periods.  Cohorts need g >= 2 (at least one
+        # pre-period for estimability with CallawaySantAnna).
         if n_periods >= 8:
             cohort_periods = [3, 5]
+        elif n_periods >= 4:
+            cohort_periods = [max(2, n_periods // 3), max(3, 2 * n_periods // 3)]
         else:
-            cohort_periods = [max(1, n_periods // 3), max(2, 2 * n_periods // 3)]
+            raise ValueError(
+                f"n_periods={n_periods} is too small for default cohort_periods "
+                f"(need n_periods >= 4 for at least one cohort with a pre-period). "
+                f"Pass cohort_periods explicitly for small panels."
+            )
     # Coerce array-like to list (handles np.array inputs)
     cohort_periods = list(cohort_periods)
     if not cohort_periods:
@@ -1233,9 +1242,10 @@ def generate_survey_did_data(
             raise ValueError(
                 f"cohort_periods must contain integers, got {cp!r}"
             )
-        if cp < 1 or cp >= n_periods:
+        if cp < 2 or cp > n_periods:
             raise ValueError(
-                f"Cohort period {cp} must be between 1 and {n_periods - 1}"
+                f"Cohort period {cp} must be between 2 and {n_periods} "
+                f"(g >= 2 ensures at least one pre-treatment period)"
             )
 
     valid_wv = ("none", "moderate", "high")

@@ -1265,15 +1265,13 @@ def _compute_flci(
     return ci_lb, ci_ub
 
 
-def _cv_alpha(t: float, alpha: float) -> float:
+def _cv_alpha(t: float, alpha: float, df: Optional[int] = None) -> float:
     """
-    Compute the (1-alpha) quantile of |N(t, 1)| (folded normal).
+    Compute the (1-alpha) quantile of the folded distribution |X|.
 
-    This is the critical value function from Rambachan & Roth (2023),
-    Equation 18. For t=0, this reduces to the standard z_{alpha/2}.
-
-    Uses Newton's method on P(|N(t,1)| <= x) = Phi(x-t) - Phi(-x-t),
-    which converges in ~5 iterations vs ~50 for bisection.
+    When df is None: X ~ N(t, 1) (folded normal).
+    When df > 0: X ~ nct(df, t) (folded non-central t, for survey inference).
+    Per Rambachan & Roth (2023) Equation 18.
 
     Parameters
     ----------
@@ -1281,29 +1279,46 @@ def _cv_alpha(t: float, alpha: float) -> float:
         Non-centrality parameter (bias / se ratio).
     alpha : float
         Significance level.
+    df : int, optional
+        Degrees of freedom for non-central t. None = normal theory.
 
     Returns
     -------
     cv : float
-        Critical value such that P(|N(t,1)| <= cv) = 1 - alpha.
+        Critical value such that P(|X| <= cv) = 1 - alpha.
     """
     from scipy.stats import norm
 
     target = 1 - alpha
-    t = abs(t)  # Symmetric in t
+    t = abs(t)
 
-    # Starting point: z_{alpha/2} + |t| is a reasonable upper bound
+    if df is not None and df > 0:
+        # Folded non-central t: P(|nct(df,t)| <= x) = F(x;df,t) - F(-x;df,t)
+        from scipy.stats import nct as nct_dist
+
+        x = nct_dist.ppf(1 - alpha / 2, df, t) + 1.0  # generous start
+        for _ in range(30):
+            f = nct_dist.cdf(x, df, t) - nct_dist.cdf(-x, df, t) - target
+            fprime = nct_dist.pdf(x, df, t) + nct_dist.pdf(-x, df, t)
+            if fprime < 1e-15:
+                break
+            x_new = x - f / fprime
+            x_new = max(x_new, 0.0)
+            if abs(x_new - x) < 1e-10:
+                break
+            x = x_new
+        return x
+
+    # Folded normal: P(|N(t,1)| <= x) = Phi(x-t) - Phi(-x-t)
     x = norm.ppf(1 - alpha / 2) + t
 
-    # Newton's method: f(x) = Phi(x-t) - Phi(-x-t) - target = 0
-    # f'(x) = phi(x-t) + phi(-x-t)  (always positive for x > 0)
     for _ in range(20):
         f = norm.cdf(x - t) - norm.cdf(-x - t) - target
         fprime = norm.pdf(x - t) + norm.pdf(-x - t)
         if fprime < 1e-15:
             break
         x_new = x - f / fprime
-        x_new = max(x_new, 0.0)  # cv must be non-negative
+        x_new = max(x_new, 0.0)
         if abs(x_new - x) < 1e-12:
             break
         x = x_new
@@ -1311,79 +1326,162 @@ def _cv_alpha(t: float, alpha: float) -> float:
     return x
 
 
-def _compute_worst_case_bias(
-    v: np.ndarray,
-    l: np.ndarray,
-    A_ineq: np.ndarray,
-    b_ineq: np.ndarray,
-    num_pre: int,
-    num_post: int,
-) -> float:
+def _build_fd_transform(num_pre: int, num_post: int) -> np.ndarray:
     """
-    Compute worst-case bias of an affine estimator for Delta^SD.
+    Build the matrix C mapping first-differences to levels: delta = C @ fd.
 
-    Per Rambachan & Roth (2023) Equation 17:
-        b_tilde(a, v) = sup_{delta in Delta, tau_post}
-            |a + v'(delta + L_post tau_post) - l' tau_post|
+    The fd vector has T+Tbar components:
+        fd = [fd_{-T}, ..., fd_{-1}, fd_0, ..., fd_{Tbar-1}]
+    where fd_s = delta_{s+1} - delta_s (with delta_0 = 0).
 
-    Since a is chosen to make the estimator unbiased at delta=0
-    (a = -v'L_post l... actually simplified for our formulation),
-    we compute: max over delta in Delta of |v'delta - l'delta_post|
-    subject to delta_pre = 0 (centered at zero for bias computation).
+    The delta vector is:
+        delta = [delta_{-T}, ..., delta_{-1}, delta_1, ..., delta_{Tbar}]
 
-    For the FLCI, we compute the maximum over delta in Delta of
-    |(v - e_post l)'delta| where e_post selects post-period components.
+    Pre-period (backward from delta_0=0):
+        delta_{-1} = -fd_{T-1}
+        delta_{-k} = -(fd_{T-1} + fd_{T-2} + ... + fd_{T-k})
+
+    Post-period (forward from delta_0=0):
+        delta_1 = fd_T
+        delta_k = fd_T + fd_{T+1} + ... + fd_{T+k-1}
+    """
+    T = num_pre
+    Tbar = num_post
+    total = T + Tbar
+    C = np.zeros((total, total))
+
+    # Pre-period: delta_{-k} = -(fd_{T-1} + fd_{T-2} + ... + fd_{T-k})
+    for k in range(1, T + 1):
+        delta_idx = T - k  # delta_{-k} is at index T-k
+        for j in range(k):
+            fd_idx = T - 1 - j  # fd_{T-1-j}
+            C[delta_idx, fd_idx] = -1.0
+
+    # Post-period: delta_k = fd_T + fd_{T+1} + ... + fd_{T+k-1}
+    for k in range(1, Tbar + 1):
+        delta_idx = T + k - 1  # delta_k is at index T+k-1
+        for j in range(k):
+            fd_idx = T + j  # fd_{T+j}
+            C[delta_idx, fd_idx] = 1.0
+
+    return C
+
+
+def _build_fd_smoothness_constraints(
+    num_fd: int, M: float
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Build smoothness constraints in first-difference space.
+
+    Delta^SD(M) in fd-space: |fd_{i+1} - fd_i| <= M for all consecutive pairs.
+    This is a bounded polyhedron (unlike level-space Delta^SD which is unbounded).
+    """
+    if num_fd < 2:
+        return np.zeros((0, num_fd)), np.zeros(0)
+
+    n_constraints = num_fd - 1
+    rows = []
+    for i in range(n_constraints):
+        row_pos = np.zeros(num_fd)
+        row_pos[i + 1] = 1
+        row_pos[i] = -1
+        rows.append(row_pos)
+        row_neg = np.zeros(num_fd)
+        row_neg[i + 1] = -1
+        row_neg[i] = 1
+        rows.append(row_neg)
+
+    A = np.array(rows)
+    b = np.full(len(rows), M)
+    return A, b
+
+
+def _w_to_v(w: np.ndarray, l: np.ndarray, num_pre: int) -> np.ndarray:
+    """
+    Map slope weights w to the full estimator direction v.
+
+    The estimator is: theta_hat = l'beta_post - sum_s w_s (beta_s - beta_{s-1})
+    This gives v = (v_pre, l) where v_pre is the differencing of w.
 
     Parameters
     ----------
-    v : np.ndarray
-        Affine estimator direction (length = num_pre + num_post).
+    w : np.ndarray
+        Weights on pre-treatment slopes (length T-1).
     l : np.ndarray
-        Target parameter weights (length = num_post).
-    A_ineq : np.ndarray
-        DeltaSD inequality constraints.
-    b_ineq : np.ndarray
-        DeltaSD inequality bounds.
+        Target parameter weights (length Tbar).
     num_pre : int
-        Number of pre-periods.
+        Number of pre-periods (T).
+    """
+    T = num_pre
+    Tbar = len(l)
+    v = np.zeros(T + Tbar)
+
+    if len(w) > 0:
+        v[0] = w[0]
+        for k in range(1, T - 1):
+            v[k] = -w[k - 1] + w[k]
+        if T >= 2:
+            v[T - 1] = -w[-1]
+
+    v[T:] = l
+    return v
+
+
+def _compute_worst_case_bias(
+    w: np.ndarray,
+    l: np.ndarray,
+    num_pre: int,
+    num_post: int,
+    M: float,
+) -> float:
+    """
+    Compute worst-case bias of the FLCI affine estimator for Delta^SD.
+
+    Per Rambachan & Roth (2023) Eq. 17, the bias is max |v'delta| over
+    Delta^SD(M). This is computed in first-difference space where Delta^SD
+    is a bounded polyhedron |fd_{i+1} - fd_i| <= M.
+
+    The bias direction in fd-space is C'v, where C maps fd -> delta and
+    v is the estimator direction derived from slope weights w.
+
+    Parameters
+    ----------
+    w : np.ndarray
+        Slope weights (length T-1), sum(w) = 1.
+    l : np.ndarray
+        Target parameter weights.
+    num_pre : int
+        Number of pre-periods (T).
     num_post : int
-        Number of post-periods.
+        Number of post-periods (Tbar).
+    M : float
+        Smoothness parameter.
 
     Returns
     -------
     bias : float
-        Maximum absolute bias.
+        Maximum worst-case bias (finite for M >= 0).
     """
+    if M == 0:
+        return 0.0  # Linear trends => zero bias when sum(w)=1
+
     total = num_pre + num_post
+    v = _w_to_v(w, l, num_pre)
+    C = _build_fd_transform(num_pre, num_post)
+    A_fd, b_fd = _build_fd_smoothness_constraints(total, M)
 
-    # The bias of the affine estimator v'beta_hat for target l'tau_post is:
-    #   E[v'beta_hat] - l'tau_post = v'delta  (when v_post = l, a = 0)
-    # Worst-case bias = max_{delta in Delta_centered} |v'delta|
-    #
-    # The centered Delta^SD pins delta_pre = 0 (the "no pre-trend" centering).
-    # Without this, Delta^SD allows arbitrary levels (only second differences
-    # are bounded), making the bias infinite. The centering ensures the bias
-    # captures only the additional uncertainty from M > 0 curvature.
-    # The bias direction is v itself (the full estimator weights).
-    bias_dir = v.copy()
+    # Bias direction in fd-space: max (C'v)' fd subject to smoothness
+    bias_dir_fd = C.T @ v
 
-    if A_ineq.shape[0] == 0:
-        return np.inf
+    if A_fd.shape[0] == 0:
+        return 0.0
 
-    # Pin delta_pre = 0 for the centered bias computation
-    A_eq = np.zeros((num_pre, total))
-    for i in range(num_pre):
-        A_eq[i, i] = 1.0
-    b_eq = np.zeros(num_pre)
-
-    # Delta^SD is centrosymmetric: max |bias_dir'delta| = max bias_dir'delta.
+    # Centrosymmetric: max |c'fd| = max c'fd
     try:
         res = optimize.linprog(
-            -bias_dir,
-            A_ub=A_ineq,
-            b_ub=b_ineq,
-            A_eq=A_eq,
-            b_eq=b_eq,
+            -bias_dir_fd,
+            A_ub=A_fd,
+            b_ub=b_fd,
             bounds=(None, None),
             method="highs",
         )
@@ -1401,19 +1499,25 @@ def _compute_optimal_flci(
     num_post: int,
     M: float,
     alpha: float = 0.05,
-    v_pre_init: Optional[np.ndarray] = None,
     df: Optional[int] = None,
 ) -> Tuple[float, float]:
     """
     Compute the optimal Fixed Length Confidence Interval for Delta^SD.
 
-    Per Rambachan & Roth (2023) Section 4.1, the optimal FLCI jointly
-    optimizes the affine estimator direction v and half-length chi to
-    minimize CI width subject to coverage:
+    Per Rambachan & Roth (2023) Section 4.1, the optimal FLCI is:
+        CI = (a + v'beta_hat) ± chi
+    where (a, v) minimize the half-length chi subject to coverage.
 
-        chi(v; alpha) = sigma_{v} * cv_alpha(b_tilde(v) / sigma_{v})
+    The estimator is parameterized in terms of slope weights w on
+    pre-treatment first differences (Section 4.1.1):
+        theta_hat = l'beta_post - sum_s w_s (beta_s - beta_{s-1})
+    with constraint sum(w) = 1 (linear trend invariance).
 
-    where cv_alpha is the folded normal quantile and b_tilde is worst-case bias.
+    The bias is computed in first-difference space where Delta^SD is
+    a bounded polyhedron, making the LP well-posed.
+
+    When df is provided, uses the folded non-central t distribution
+    for survey inference (replaces the folded normal).
 
     Parameters
     ----------
@@ -1426,15 +1530,15 @@ def _compute_optimal_flci(
     l_vec : np.ndarray
         Target parameter weights.
     num_pre : int
-        Number of pre-periods.
+        Number of pre-periods (T).
     num_post : int
-        Number of post-periods.
+        Number of post-periods (Tbar).
     M : float
         Smoothness parameter.
     alpha : float
         Significance level.
-    v_pre_init : np.ndarray, optional
-        Initial pre-period weights for warm-starting (from a previous M value).
+    df : int, optional
+        Survey degrees of freedom for folded t inference.
 
     Returns
     -------
@@ -1443,88 +1547,84 @@ def _compute_optimal_flci(
     ci_ub : float
         Upper bound of FLCI.
     """
-    total = num_pre + num_post
+    T = num_pre
+    Tbar = num_post
 
-    # Survey df gating: df<=0 sentinel means undefined df → NaN inference.
-    # This applies to ALL M values per the project's inference contract.
+    # Survey df gating: df<=0 sentinel → NaN inference
     if df is not None and df <= 0:
         return np.nan, np.nan
 
-    # M=0 short-circuit: point identification, no bias, standard CI.
-    if M == 0:
-        A_ineq, b_ineq = _construct_constraints_sd(num_pre, num_post, 0.0)
-        lb, ub = _solve_bounds_lp(beta_pre, beta_post, l_vec, A_ineq, b_ineq, num_pre)
-        if np.isnan(lb):
-            return np.nan, np.nan
-        # At M=0, Delta^SD forces linear extrapolation. The implicit
-        # estimator weights v include pre-period terms. Recover v from the
-        # LP solution by solving for the linear trend through beta_pre.
-        # For a proper SE, we need v'Sigma v where v includes pre weights.
-        # Build v: linear extrapolation weights from the constrained solution.
-        if num_pre >= 2:
-            # Linear extrapolation: v_pre weights come from the trend fit
-            # through the pre-period coefficients. For simplicity, use the
-            # last-two-point slope as the weight vector.
-            slope_weight = np.zeros(total)
-            slope_weight[num_pre - 1] = -1.0  # delta_{-1}
-            slope_weight[num_pre:num_pre + num_post] = l_vec
-            # The extrapolation adds the pre-trend contribution
-            se = float(np.sqrt(slope_weight @ sigma @ slope_weight))
+    # Number of free slope weights: T-1 (or 0 if T <= 1)
+    n_slopes = max(T - 1, 0)
+
+    def flci_half_length(w_free):
+        """Compute FLCI half-length for given free slope weights."""
+        # Reconstruct full w with constraint sum(w) = 1
+        if n_slopes == 0:
+            w = np.array([])
+        elif len(w_free) == n_slopes - 1:
+            w = np.concatenate([w_free, [1.0 - np.sum(w_free)]])
         else:
-            # Single pre-period: extrapolation is just beta_{-1} + l'beta_post
-            v_full = np.zeros(total)
-            v_full[:num_pre] = -l_vec.sum()  # pre-period contributes to SE
-            v_full[num_pre:num_pre + num_post] = l_vec
-            se = float(np.sqrt(v_full @ sigma @ v_full))
-        z = _get_critical_value(alpha, df) if df is not None else _cv_alpha(0.0, alpha)
-        return lb - z * se, ub + z * se
+            w = w_free
 
-    A_ineq, b_ineq = _construct_constraints_sd(num_pre, num_post, M)
-
-    def flci_half_length(v_pre_params):
-        """Compute FLCI half-length for given pre-period weights."""
-        v = np.zeros(total)
-        v[:num_pre] = v_pre_params
-        v[num_pre:num_pre + num_post] = l_vec
-
+        # Map w -> v for variance
+        v = _w_to_v(w, l_vec, T)
         sigma_v = np.sqrt(float(v @ sigma @ v))
         if sigma_v <= 0:
             return np.inf
 
-        bias = _compute_worst_case_bias(v, l_vec, A_ineq, b_ineq, num_pre, num_post)
+        # Compute bias in fd-space
+        bias = _compute_worst_case_bias(w, l_vec, T, Tbar, M)
         if not np.isfinite(bias):
             return np.inf
 
         t = float(bias / sigma_v)
-        cv = _cv_alpha(t, alpha)
+        cv = _cv_alpha(t, alpha, df=df)
         return float(sigma_v * cv)
 
-    # Optimize over pre-period weights using Nelder-Mead
+    # Special case: T <= 1 (no pre-period slopes to optimize)
+    if n_slopes == 0:
+        chi = flci_half_length(np.array([]))
+        theta_hat = float(np.dot(l_vec, beta_post))
+        if not np.isfinite(chi):
+            return np.nan, np.nan
+        return theta_hat - chi, theta_hat + chi
+
+    # Optimize over T-2 free parameters (last w determined by sum=1)
     from scipy.optimize import minimize as scipy_minimize
 
-    x0 = v_pre_init if v_pre_init is not None else np.zeros(num_pre)
+    if n_slopes == 1:
+        # Only one slope weight, must equal 1. No optimization.
+        w_opt = np.array([1.0])
+        chi = flci_half_length(w_opt)
+    else:
+        # Start with uniform weights
+        x0 = np.full(n_slopes - 1, 1.0 / n_slopes)
 
-    result = scipy_minimize(
-        flci_half_length,
-        x0=x0,
-        method="Nelder-Mead",
-        options={"maxiter": 500, "xatol": 1e-5, "fatol": 1e-6},
-    )
+        result = scipy_minimize(
+            flci_half_length,
+            x0=x0,
+            method="Nelder-Mead",
+            options={"maxiter": 500, "xatol": 1e-5, "fatol": 1e-6},
+        )
+        w_opt = np.concatenate([result.x, [1.0 - np.sum(result.x)]])
+        chi = flci_half_length(result.x)
 
-    # Build optimal v
-    v_opt = np.zeros(total)
-    v_opt[:num_pre] = result.x
-    v_opt[num_pre:num_pre + num_post] = l_vec
+    # Build the estimator value: theta_hat = l'beta_post - w'(pre-slopes)
+    beta_full = np.concatenate([beta_pre, beta_post])
+    pre_slopes = np.diff(beta_full[:T])  # T-1 interior slopes
+    if T >= 1:
+        # Add boundary slope: 0 - beta_{-1} = -beta_{-1}
+        # But the slopes in the estimator are (beta_s - beta_{s-1}) for
+        # s = -T+1, ..., -1, which are the interior diffs of beta_pre.
+        # The "sum(w) = 1" constraint means we subtract 1x the extrapolated slope.
+        pass
 
-    # Compute the estimator value and half-length
-    theta_hat = float(v_opt @ np.concatenate([beta_pre, beta_post]))
-    chi = flci_half_length(result.x)
+    v_opt = _w_to_v(w_opt, l_vec, T)
+    theta_hat = float(v_opt @ beta_full)
 
-    # Also compute with naive v for comparison (fallback if optimization fails)
-    chi_naive = flci_half_length(np.zeros(num_pre))
-    if chi > chi_naive or not np.isfinite(chi):
-        theta_hat = float(np.dot(l_vec, beta_post))
-        chi = chi_naive
+    if not np.isfinite(chi):
+        return np.nan, np.nan
 
     return theta_hat - chi, theta_hat + chi
 

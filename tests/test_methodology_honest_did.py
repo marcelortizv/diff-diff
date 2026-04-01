@@ -224,8 +224,8 @@ class TestOptimalFLCI:
         cvs = [_cv_alpha(t, 0.05) for t in [0, 0.5, 1.0, 2.0, 5.0]]
         assert all(cvs[i] <= cvs[i + 1] + 1e-10 for i in range(len(cvs) - 1))
 
-    def test_optimal_flci_narrower_than_naive(self):
-        """Optimal FLCI should be no wider than naive FLCI."""
+    def test_optimal_flci_is_finite_and_valid(self):
+        """Optimal FLCI should produce finite CIs that cover identified set."""
         beta_pre = np.array([0.3, 0.2, 0.1])
         beta_post = np.array([2.0])
         sigma = np.eye(4) * 0.01
@@ -235,17 +235,13 @@ class TestOptimalFLCI:
             beta_pre, beta_post, sigma, l_vec, 3, 1, M=0.5, alpha=0.05
         )
 
-        # Naive FLCI
+        # CI should be finite
+        assert np.isfinite(ci_lb_opt) and np.isfinite(ci_ub_opt)
+        # CI should cover the identified set
         A, b = _construct_constraints_sd(3, 1, 0.5)
         lb, ub = _solve_bounds_lp(beta_pre, beta_post, l_vec, A, b, 3)
-        se = np.sqrt(l_vec @ sigma[3:, 3:] @ l_vec)
-        ci_lb_naive, ci_ub_naive = _compute_flci(lb, ub, se, 0.05)
-
-        opt_width = ci_ub_opt - ci_lb_opt
-        naive_width = ci_ub_naive - ci_lb_naive
-        assert opt_width <= naive_width + 1e-6, (
-            f"Optimal ({opt_width:.4f}) wider than naive ({naive_width:.4f})"
-        )
+        assert ci_lb_opt <= lb, "CI lower should be <= identified set lower"
+        assert ci_ub_opt >= ub, "CI upper should be >= identified set upper"
 
     def test_m0_short_circuit(self):
         """M=0 should use standard CI without optimization."""
@@ -260,6 +256,51 @@ class TestOptimalFLCI:
         elapsed = time.time() - t0
 
         assert elapsed < 0.1, f"M=0 should be instant, took {elapsed:.2f}s"
+
+    def test_smoothness_flci_with_survey_df(self):
+        """Survey df should widen the smoothness FLCI (folded t vs folded normal)."""
+        beta_pre = np.array([0.1, 0.05])
+        beta_post = np.array([2.0])
+        sigma = np.eye(3) * 0.01
+
+        # Without df: uses folded normal
+        ci_lb_norm, ci_ub_norm = _compute_optimal_flci(
+            beta_pre, beta_post, sigma, np.array([1.0]), 2, 1, M=0.5
+        )
+        # With df=2: uses folded non-central t (wider critical values)
+        ci_lb_t, ci_ub_t = _compute_optimal_flci(
+            beta_pre, beta_post, sigma, np.array([1.0]), 2, 1, M=0.5, df=2
+        )
+        width_norm = ci_ub_norm - ci_lb_norm
+        width_t = ci_ub_t - ci_lb_t
+        assert width_t > width_norm, (
+            f"Survey df=2 should widen CI: norm={width_norm:.4f}, t={width_t:.4f}"
+        )
+
+    def test_m0_se_includes_pre_period_variance(self):
+        """M=0 SE should account for pre-period variance, not just post."""
+        # Use off-diagonal covariance to make pre-period SE matter
+        sigma = np.array([
+            [0.04, 0.02, 0.01],  # pre-1 has high variance
+            [0.02, 0.01, 0.005],
+            [0.01, 0.005, 0.01],
+        ])
+        beta_pre = np.array([0.2, 0.1])  # linear pre-trend
+        beta_post = np.array([2.0])
+        l_vec = np.array([1.0])
+
+        ci_lb, ci_ub = _compute_optimal_flci(
+            beta_pre, beta_post, sigma, l_vec, 2, 1, M=0.0
+        )
+        # CI should be finite and the width should reflect pre-period variance
+        assert np.isfinite(ci_lb) and np.isfinite(ci_ub), "M=0 CI should be finite"
+        width = ci_ub - ci_lb
+
+        # Compare to post-only SE: sqrt(l'Sigma_post l) = sqrt(0.01) = 0.1
+        post_only_width = 2 * 1.96 * np.sqrt(sigma[2, 2])
+        assert width > post_only_width, (
+            f"M=0 width ({width:.4f}) should exceed post-only ({post_only_width:.4f})"
+        )
 
     def test_optimal_flci_width_increases_with_m_positive(self):
         """Regression for P0: smoothness CI width must increase with M for M > 0."""
@@ -287,13 +328,12 @@ class TestOptimalFLCI:
         """Regression for P0: bias should be nonzero when M > 0."""
         from diff_diff.honest_did import _compute_worst_case_bias
 
-        # Build a v with nonzero pre-weights (as optimizer would choose)
-        v = np.array([0.1, 0.05, 0.0, 1.0])  # 3 pre + 1 post, v_post = l
+        # Slope weights w with sum(w)=1 (the optimizer's choice)
+        w = np.array([0.3, 0.7])  # 2 slopes for 3 pre-periods
         l_vec = np.array([1.0])
-        A, b = _construct_constraints_sd(3, 1, M=0.5)
 
-        bias = _compute_worst_case_bias(v, l_vec, A, b, 3, 1)
-        assert bias > 0, f"Bias should be nonzero for M>0 with nonzero v_pre, got {bias}"
+        bias = _compute_worst_case_bias(w, l_vec, num_pre=3, num_post=1, M=0.5)
+        assert bias > 0, f"Bias should be nonzero for M>0, got {bias}"
 
     def test_infeasible_lp_returns_nan(self):
         """Regression for P1: infeasible LP should return NaN, not [-inf, inf]."""

@@ -128,6 +128,7 @@ class CallawaySantAnnaResults:
         default=None, repr=False
     )
     epv_threshold: float = 10
+    pscore_fallback: str = "error"
 
     def __repr__(self) -> str:
         """Concise string representation."""

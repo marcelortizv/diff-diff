@@ -415,6 +415,9 @@ The multiplier bootstrap uses random weights w_i with E[w]=0 and Var(w)=1:
     unconditional propensity score (all covariates dropped) with warning.
   - **Note:** `pscore_fallback` default changed from unconditional to error.
     Set `pscore_fallback="unconditional"` for legacy behavior.
+  - **Note:** When `pscore_fallback="unconditional"` triggers, the propensity-
+    score influence function correction is skipped (constant pscore has zero
+    estimation uncertainty). SEs reflect outcome-model uncertainty only.
 - Control group with `control_group="not_yet_treated"`:
   - Always excludes cohort g from controls when computing ATT(g,t)
   - This applies to both pre-treatment (t < g) and post-treatment (t >= g) periods

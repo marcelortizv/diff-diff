@@ -719,6 +719,7 @@ class StaggeredTripleDifference(
             gmm_weights=gmm_weights_store,
             epv_diagnostics=epv_diagnostics if epv_diagnostics else None,
             epv_threshold=self.epv_threshold,
+            pscore_fallback=self.pscore_fallback,
         )
         self.is_fitted_ = True
         return self.results_

@@ -3915,3 +3915,15 @@ class TestEPVDiagnostics:
                     data, outcome="outcome", unit="unit", time="time",
                     first_treat="first_treat", covariates=["x1"],
                 )
+
+    def test_cs_diagnose_propensity_rejects_not_yet_treated(self):
+        """diagnose_propensity() raises for control_group='not_yet_treated'."""
+        data = generate_staggered_data_with_covariates(seed=42)
+        cs = CallawaySantAnna(
+            estimation_method="ipw", control_group="not_yet_treated"
+        )
+        with pytest.raises(NotImplementedError, match="not_yet_treated"):
+            cs.diagnose_propensity(
+                data, outcome="outcome", unit="unit", time="time",
+                first_treat="first_treat", covariates=["x1"],
+            )

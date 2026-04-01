@@ -109,6 +109,8 @@ class TripleDifferenceResults:
     epv_diagnostics: Optional[Dict[int, Dict[str, Any]]] = field(
         default=None, repr=False
     )
+    epv_threshold: float = 10
+    pscore_fallback: str = "error"
 
     def __repr__(self) -> str:
         """Concise string representation."""
@@ -692,6 +694,8 @@ class TripleDifference:
             n_clusters=n_clusters,
             survey_metadata=survey_metadata,
             epv_diagnostics=epv_diag if epv_diag else None,
+            epv_threshold=self.epv_threshold,
+            pscore_fallback=self.pscore_fallback,
         )
 
         self.is_fitted_ = True

@@ -468,6 +468,20 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
 
         # ---- Variance ----
         _n_valid_rep_imp = None
+        _vcov_rep_imp = None
+        # Build index vectors for event-study and group aggregation in the
+        # replicate refit closure (captured once, reused across replicates).
+        _rel_times_treated = df.loc[omega_1_mask, "_rel_time"].values
+        _cohorts_treated = df.loc[omega_1_mask, first_treat].values
+        _need_es = aggregate in ("event_study", "all")
+        _need_grp = aggregate in ("group", "all")
+        _sorted_rel_times = sorted(
+            set(_rel_times_treated[np.isfinite(_rel_times_treated)])
+        ) if _need_es else []
+        _sorted_groups = sorted(treatment_groups) if _need_grp else []
+        _n_es = len(_sorted_rel_times)
+        _n_grp = len(_sorted_groups)
+
         if _uses_replicate_imp:
             # Replicate variance: re-run two-stage procedure per replicate
             from diff_diff.survey import compute_replicate_refit_variance
@@ -481,16 +495,60 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                     ufe_r, tfe_r, gm_r, delta_r,
                 )
                 fin = np.isfinite(tau_r)
-                if not np.any(fin):
-                    return np.array([np.nan])
-                tw = w_r[omega_1_mask.values][fin]
-                tw_sum = np.sum(tw)
-                if tw_sum == 0:
-                    return np.array([np.nan])
-                return np.array([float(np.sum(tau_r[fin] * tw) / tw_sum)])
+                treated_w = w_r[omega_1_mask.values]
+                results = []
+
+                # [0] Overall ATT
+                tw_fin = treated_w[fin]
+                tw_sum = np.sum(tw_fin)
+                results.append(
+                    float(np.sum(tau_r[fin] * tw_fin) / tw_sum)
+                    if tw_sum > 0 else np.nan
+                )
+
+                # [1..n_es] Event-study per relative time
+                for e in _sorted_rel_times:
+                    mask_e = fin & (_rel_times_treated == e)
+                    tw_e = treated_w[mask_e]
+                    s = np.sum(tw_e)
+                    results.append(
+                        float(np.sum(tau_r[mask_e] * tw_e) / s) if s > 0 else np.nan
+                    )
+
+                # [n_es+1..n_es+n_grp] Group per cohort
+                for g in _sorted_groups:
+                    mask_g = fin & (_cohorts_treated == g)
+                    tw_g = treated_w[mask_g]
+                    s = np.sum(tw_g)
+                    results.append(
+                        float(np.sum(tau_r[mask_g] * tw_g) / s) if s > 0 else np.nan
+                    )
+
+                return np.array(results)
+
+            # Build full-sample estimate vector
+            _full_est = [overall_att]
+            # Event-study full-sample effects (re-aggregate from tau_hat)
+            for e in _sorted_rel_times:
+                mask_e = finite_mask & (_rel_times_treated == e)
+                if survey_weights is not None:
+                    tw_e = survey_weights[omega_1_mask.values][mask_e]
+                    s = np.sum(tw_e)
+                    _full_est.append(float(np.sum(tau_hat[mask_e] * tw_e) / s) if s > 0 else np.nan)
+                else:
+                    _full_est.append(float(np.mean(tau_hat[mask_e])) if np.any(mask_e) else np.nan)
+            # Group full-sample effects
+            for g in _sorted_groups:
+                mask_g = finite_mask & (_cohorts_treated == g)
+                if survey_weights is not None:
+                    tw_g = survey_weights[omega_1_mask.values][mask_g]
+                    s = np.sum(tw_g)
+                    _full_est.append(float(np.sum(tau_hat[mask_g] * tw_g) / s) if s > 0 else np.nan)
+                else:
+                    _full_est.append(float(np.mean(tau_hat[mask_g])) if np.any(mask_g) else np.nan)
 
             _vcov_rep_imp, _n_valid_rep_imp = compute_replicate_refit_variance(
-                _refit_imp, np.array([overall_att]), resolved_survey
+                _refit_imp, np.array(_full_est), resolved_survey
             )
             overall_se = float(np.sqrt(max(_vcov_rep_imp[0, 0], 0.0)))
         else:
@@ -583,6 +641,28 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 survey_weights=survey_weights,
                 survey_df=_survey_df,
             )
+
+        # Override event-study/group SEs with replicate variance
+        if _vcov_rep_imp is not None and event_study_effects is not None:
+            for i, e in enumerate(_sorted_rel_times):
+                if e in event_study_effects:
+                    se_e = float(np.sqrt(max(_vcov_rep_imp[1 + i, 1 + i], 0.0)))
+                    eff_e = event_study_effects[e]["effect"]
+                    t_e, p_e, ci_e = safe_inference(eff_e, se_e, alpha=self.alpha, df=_survey_df)
+                    event_study_effects[e]["se"] = se_e
+                    event_study_effects[e]["t_stat"] = t_e
+                    event_study_effects[e]["p_value"] = p_e
+                    event_study_effects[e]["conf_int"] = ci_e
+        if _vcov_rep_imp is not None and group_effects is not None:
+            for j, g in enumerate(_sorted_groups):
+                if g in group_effects:
+                    se_g = float(np.sqrt(max(_vcov_rep_imp[1 + _n_es + j, 1 + _n_es + j], 0.0)))
+                    eff_g = group_effects[g]["effect"]
+                    t_g, p_g, ci_g = safe_inference(eff_g, se_g, alpha=self.alpha, df=_survey_df)
+                    group_effects[g]["se"] = se_g
+                    group_effects[g]["t_stat"] = t_g
+                    group_effects[g]["p_value"] = p_g
+                    group_effects[g]["conf_int"] = ci_g
 
         # Build treatment effects dataframe
         treated_df = df.loc[omega_1_mask, [unit, time, "_tau_hat", "_rel_time"]].copy()

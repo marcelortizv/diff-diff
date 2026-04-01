@@ -288,6 +288,34 @@ class TestImputationDiDReplicate:
         assert result.survey_metadata is not None
         result.summary()
 
+    def test_imputation_event_study_replicate(self):
+        """Event-study SEs should use replicate variance, not conservative SE."""
+        data = _make_staggered_panel()
+        rep_cols = _add_jk1_replicates(data)
+        sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="JK1")
+        result = ImputationDiD(n_bootstrap=0).fit(
+            data, "outcome", "unit", "time", "first_treat",
+            aggregate="event_study", survey_design=sd,
+        )
+        assert result.event_study_effects is not None
+        non_ref = {e: eff for e, eff in result.event_study_effects.items() if eff["effect"] != 0.0}
+        assert len(non_ref) > 0, "No non-reference event-study effects"
+        for e, eff in non_ref.items():
+            assert np.isfinite(eff["se"]) and eff["se"] > 0, f"period {e}: SE not finite"
+
+    def test_imputation_group_replicate(self):
+        """Group SEs should use replicate variance."""
+        data = _make_staggered_panel()
+        rep_cols = _add_jk1_replicates(data)
+        sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="JK1")
+        result = ImputationDiD(n_bootstrap=0).fit(
+            data, "outcome", "unit", "time", "first_treat",
+            aggregate="group", survey_design=sd,
+        )
+        assert result.group_effects is not None
+        for g, eff in result.group_effects.items():
+            assert np.isfinite(eff["se"]) and eff["se"] > 0, f"group {g}: SE not finite"
+
     def test_imputation_bootstrap_rejected(self):
         data = _make_staggered_panel()
         rep_cols = _add_jk1_replicates(data)
@@ -313,6 +341,40 @@ class TestTwoStageDiDReplicate:
         assert result.survey_metadata is not None
         result.summary()
 
+    def test_two_stage_event_study_replicate(self):
+        """Event-study SEs should use replicate variance, not GMM SE."""
+        data = _make_staggered_panel()
+        rep_cols = _add_jk1_replicates(data)
+        sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="JK1")
+        result = TwoStageDiD(n_bootstrap=0).fit(
+            data, "outcome", "unit", "time", "first_treat",
+            aggregate="event_study", survey_design=sd,
+        )
+        assert result.event_study_effects is not None
+        non_ref = {e: eff for e, eff in result.event_study_effects.items() if eff["effect"] != 0.0}
+        assert len(non_ref) > 0, "No non-reference event-study effects"
+        for e, eff in non_ref.items():
+            assert np.isfinite(eff["se"]) and eff["se"] > 0, f"period {e}: SE not finite"
+
+    def test_two_stage_always_treated(self):
+        """Replicate weights should be subsetted when always-treated units are excluded."""
+        data = _make_staggered_panel()
+        # Add always-treated units (first_treat <= min time)
+        for i in range(50, 55):
+            for t in range(1, 9):
+                data = pd.concat([data, pd.DataFrame([{
+                    "unit": i, "time": t, "first_treat": 1,
+                    "outcome": 12.0 + np.random.normal(0, 0.3),
+                    "weight": 1.5, "treated": 1, "post": 1,
+                }])], ignore_index=True)
+        rep_cols = _add_jk1_replicates(data, n_rep=10, unit_col="unit")
+        sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="JK1")
+        # Should not crash despite always-treated unit exclusion
+        result = TwoStageDiD(n_bootstrap=0).fit(
+            data, "outcome", "unit", "time", "first_treat", survey_design=sd,
+        )
+        assert np.isfinite(result.overall_att)
+
     def test_two_stage_bootstrap_rejected(self):
         data = _make_staggered_panel()
         rep_cols = _add_jk1_replicates(data)
@@ -321,3 +383,20 @@ class TestTwoStageDiDReplicate:
             TwoStageDiD(n_bootstrap=100).fit(
                 data, "outcome", "unit", "time", "first_treat", survey_design=sd,
             )
+
+
+class TestSunAbrahamCohortSEs:
+    """SunAbraham cohort-level SEs should be consistent with replicate vcov."""
+
+    def test_cohort_ses_finite(self):
+        """Cohort SEs should be recomputed from replicate vcov, not stale."""
+        data = _make_staggered_panel()
+        rep_cols = _add_brr_replicates(data, n_rep=16)
+        sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="BRR")
+        result = SunAbraham(n_bootstrap=0).fit(
+            data, "outcome", "unit", "time", "first_treat", survey_design=sd,
+        )
+        assert result.cohort_effects is not None
+        for key, eff in result.cohort_effects.items():
+            se = eff["se"]
+            assert np.isfinite(se), f"cohort {key}: SE is {se}"

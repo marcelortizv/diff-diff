@@ -332,6 +332,11 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                         if resolved_survey.fpc is not None
                         else None
                     ),
+                    replicate_weights=(
+                        resolved_survey.replicate_weights[keep_mask.values]
+                        if resolved_survey.replicate_weights is not None
+                        else None
+                    ),
                 )
                 # Recompute n_psu/n_strata after subsetting
                 new_n_psu = (
@@ -500,6 +505,10 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
 
         # Replicate variance override: re-run both stages per replicate
         _n_valid_rep_ts = None
+        _vcov_rep_ts = None
+        _need_es_ts = aggregate in ("event_study", "all")
+        _need_grp_ts = aggregate in ("group", "all")
+
         if _uses_replicate_ts:
             from diff_diff.survey import compute_replicate_refit_variance
 
@@ -513,6 +522,9 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                 )
                 df_tmp = df.copy()
                 df_tmp["_y_tilde"] = y_tilde_r
+                results = []
+
+                # [0] Overall ATT
                 att_r, _ = self._stage2_static(
                     df=df_tmp, unit=unit, time=time, first_treat=first_treat,
                     covariates=covariates, omega_0_mask=omega_0_mask,
@@ -521,10 +533,59 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                     kept_cov_mask=kcm_r, survey_weights=w_r,
                     survey_weight_type="pweight",
                 )
-                return np.array([att_r])
+                results.append(att_r)
+
+                # Event-study effects
+                if _need_es_ts:
+                    es_r = self._stage2_event_study(
+                        df=df_tmp, unit=unit, time=time, first_treat=first_treat,
+                        covariates=covariates, omega_0_mask=omega_0_mask,
+                        omega_1_mask=omega_1_mask, unit_fe=ufe_r, time_fe=tfe_r,
+                        grand_mean=gm_r, delta_hat=delta_r,
+                        cluster_var=cluster_var, treatment_groups=treatment_groups,
+                        ref_period=ref_period, balance_e=balance_e,
+                        kept_cov_mask=kcm_r, survey_weights=w_r,
+                        survey_weight_type="pweight", survey_df=None,
+                    )
+                    for e in _sorted_es_periods_ts:
+                        results.append(
+                            es_r[e]["effect"] if e in es_r else np.nan
+                        )
+
+                # Group effects
+                if _need_grp_ts:
+                    grp_r = self._stage2_group(
+                        df=df_tmp, unit=unit, time=time, first_treat=first_treat,
+                        covariates=covariates, omega_0_mask=omega_0_mask,
+                        omega_1_mask=omega_1_mask, unit_fe=ufe_r, time_fe=tfe_r,
+                        grand_mean=gm_r, delta_hat=delta_r,
+                        cluster_var=cluster_var, treatment_groups=treatment_groups,
+                        kept_cov_mask=kcm_r, survey_weights=w_r,
+                        survey_weight_type="pweight", survey_df=None,
+                    )
+                    for g in _sorted_groups_ts:
+                        results.append(
+                            grp_r[g]["effect"] if g in grp_r else np.nan
+                        )
+
+                return np.array(results)
+
+            # Pre-compute sorted keys for consistent vector ordering
+            _sorted_es_periods_ts = sorted(
+                set(df.loc[omega_1_mask, "_rel_time"].dropna().unique())
+                - {ref_period}
+            ) if _need_es_ts else []
+            _sorted_groups_ts = sorted(treatment_groups) if _need_grp_ts else []
+
+            # Build full-sample estimate vector
+            _full_est_ts = [overall_att]
+            # Placeholder — will be filled after event-study/group calls
+            _n_es_ts = len(_sorted_es_periods_ts)
+            _n_grp_ts = len(_sorted_groups_ts)
+            _full_est_ts.extend([0.0] * (_n_es_ts + _n_grp_ts))
 
             _vcov_rep_ts, _n_valid_rep_ts = compute_replicate_refit_variance(
-                _refit_ts, np.array([overall_att]), resolved_survey
+                _refit_ts, np.array(_full_est_ts), resolved_survey
             )
             overall_se = float(np.sqrt(max(_vcov_rep_ts[0, 0], 0.0)))
 
@@ -583,6 +644,30 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                 survey_weight_type=survey_weight_type,
                 survey_df=_survey_df,
             )
+
+        # Override event-study/group SEs with replicate variance
+        if _vcov_rep_ts is not None and event_study_effects is not None:
+            for i, e in enumerate(_sorted_es_periods_ts):
+                if e in event_study_effects:
+                    se_e = float(np.sqrt(max(_vcov_rep_ts[1 + i, 1 + i], 0.0)))
+                    eff_e = event_study_effects[e]["effect"]
+                    t_e, p_e, ci_e = safe_inference(eff_e, se_e, alpha=self.alpha, df=_survey_df)
+                    event_study_effects[e]["se"] = se_e
+                    event_study_effects[e]["t_stat"] = t_e
+                    event_study_effects[e]["p_value"] = p_e
+                    event_study_effects[e]["conf_int"] = ci_e
+        if _vcov_rep_ts is not None and group_effects is not None:
+            for j, g in enumerate(_sorted_groups_ts):
+                if g in group_effects:
+                    se_g = float(np.sqrt(max(
+                        _vcov_rep_ts[1 + _n_es_ts + j, 1 + _n_es_ts + j], 0.0
+                    )))
+                    eff_g = group_effects[g]["effect"]
+                    t_g, p_g, ci_g = safe_inference(eff_g, se_g, alpha=self.alpha, df=_survey_df)
+                    group_effects[g]["se"] = se_g
+                    group_effects[g]["t_stat"] = t_g
+                    group_effects[g]["p_value"] = p_g
+                    group_effects[g]["conf_int"] = ci_g
 
         # Build treatment effects DataFrame
         treated_df = df.loc[omega_1_mask, [unit, time, "_y_tilde", "_rel_time"]].copy()

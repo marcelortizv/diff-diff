@@ -627,7 +627,10 @@ class SunAbraham:
             cluster_var,
             survey_weights=survey_weights,
             survey_weight_type=survey_weight_type,
-            resolved_survey=resolved_survey,
+            # For replicate designs: pass None to prevent LinearRegression from
+            # computing bogus replicate vcov on already-demeaned data.  We
+            # override vcov_cohort below with the correct estimator-level refit.
+            resolved_survey=None if _uses_replicate_sa else resolved_survey,
         )
 
         # Replicate variance override: re-run saturated regression per replicate
@@ -653,6 +656,12 @@ class SunAbraham:
             vcov_cohort, _n_valid_rep_sa = compute_replicate_refit_variance(
                 _refit_sa, _full_cohort_vec, resolved_survey
             )
+
+            # Recompute cohort_ses from the replicate vcov diagonal (the
+            # initial fit produced stale SEs from the non-replicate path)
+            for key in _keys_ordered:
+                idx = coef_index_map[key]
+                cohort_ses[key] = float(np.sqrt(max(vcov_cohort[idx, idx], 0.0)))
 
         # Resolve survey weight column name for cohort aggregation
         survey_weight_col = (

@@ -431,6 +431,10 @@ class CallawaySantAnna(
                 ]
             )
 
+        # Normalize np.inf → 0 for never-treated encoding (same as fit())
+        df = df.copy()
+        df[first_treat] = df[first_treat].replace([np.inf, float("inf")], 0)
+
         # Compute time_periods and treatment_groups (same logic as fit())
         time_periods = sorted(df[time].unique())
         treatment_groups = sorted(
@@ -2150,7 +2154,12 @@ class CallawaySantAnna(
                         UserWarning,
                         stacklevel=4,
                     )
-                    pscore = np.full(len(D), n_t / (n_t + n_c))
+                    if sw_all is not None:
+                        pos = sw_all > 0
+                        p_uc = float(np.average(D[pos], weights=sw_all[pos]))
+                    else:
+                        p_uc = n_t / (n_t + n_c)
+                    pscore = np.full(len(D), p_uc)
                     ps_fallback_used = True
                 if epv_diagnostics_out is not None and diag:
                     epv_diagnostics_out.update(diag)
@@ -2432,7 +2441,12 @@ class CallawaySantAnna(
                         UserWarning,
                         stacklevel=4,
                     )
-                    pscore = np.full(len(D), n_t / (n_t + n_c))
+                    if sw_all is not None:
+                        pos = sw_all > 0
+                        p_uc = float(np.average(D[pos], weights=sw_all[pos]))
+                    else:
+                        p_uc = n_t / (n_t + n_c)
+                    pscore = np.full(len(D), p_uc)
                     ps_fallback_used = True
                 if epv_diagnostics_out is not None and diag:
                     epv_diagnostics_out.update(diag)
@@ -3235,7 +3249,11 @@ class CallawaySantAnna(
                 UserWarning,
                 stacklevel=4,
             )
-            p_treat = (n_gt + n_gs) / len(D_all)
+            if sw_all is not None:
+                pos = sw_all > 0
+                p_treat = float(np.average(D_all[pos], weights=sw_all[pos]))
+            else:
+                p_treat = (n_gt + n_gs) / len(D_all)
             pscore = np.full(len(D_all), p_treat)
             ps_fallback_used = True
         if epv_diagnostics_out is not None and diag:
@@ -3499,7 +3517,11 @@ class CallawaySantAnna(
                 UserWarning,
                 stacklevel=4,
             )
-            p_treat = (n_gt + n_gs) / len(D_all)
+            if sw_all is not None:
+                pos = sw_all > 0
+                p_treat = float(np.average(D_all[pos], weights=sw_all[pos]))
+            else:
+                p_treat = (n_gt + n_gs) / len(D_all)
             pscore = np.full(len(D_all), p_treat)
             ps_fallback_used = True
         if epv_diagnostics_out is not None and diag:

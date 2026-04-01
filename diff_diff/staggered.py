@@ -392,6 +392,14 @@ class CallawaySantAnna(
         be unreliable due to too few events per covariate. Based on Peduzzi
         et al. (1996).
 
+        This is a raw-count heuristic: it uses total cohort/control unit
+        counts without filtering for missing outcomes, zero survey weights,
+        or period-specific validity. The actual fit-time EPV (stored in
+        ``results.epv_diagnostics``) may be lower because ``fit()`` operates
+        on the valid base/post outcome pair and the positive-weight effective
+        sample. Use this method as a quick pre-check; rely on
+        ``results.epv_diagnostics`` for authoritative per-cell EPV.
+
         Parameters
         ----------
         df, outcome, unit, time, first_treat, covariates

@@ -180,6 +180,29 @@ class TripleDifferenceResults:
             ]
         )
 
+        # EPV diagnostics block (if any subgroup has low EPV)
+        if self.epv_diagnostics:
+            low_epv = {k: v for k, v in self.epv_diagnostics.items() if v.get("is_low")}
+            if low_epv:
+                n_affected = len(low_epv)
+                n_total = len(self.epv_diagnostics)
+                min_entry = min(low_epv.values(), key=lambda v: v["epv"])
+                lines.extend(
+                    [
+                        "",
+                        "-" * 75,
+                        "EPV Diagnostics".center(75),
+                        "-" * 75,
+                        f"WARNING: Low Events Per Variable (EPV) in "
+                        f"{n_affected} of {n_total} subgroup comparison(s).",
+                        f"Minimum EPV: {min_entry['epv']:.1f}. "
+                        f"Threshold: {self.epv_threshold:.0f}.",
+                        "Consider: estimation_method='reg' or fewer covariates.",
+                        "Call results.epv_summary() for details.",
+                        "-" * 75,
+                    ]
+                )
+
         # Show group means if available
         if self.group_means:
             lines.extend(

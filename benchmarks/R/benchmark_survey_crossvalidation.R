@@ -378,13 +378,14 @@ if (has_did) {
     # Simple aggregation
     agg <- aggte(out, type = "simple")
 
-    # Export group-time effects
+    # Export group-time effects, sorted by (group, time) for stable comparison
     gt_results <- data.frame(
       group = out$group,
       time = out$t,
       att = out$att,
       se = out$se
     )
+    gt_results <- gt_results[order(gt_results$group, gt_results$time), ]
 
     # Data export
     cs_data_export <- list(
@@ -417,7 +418,7 @@ if (has_did) {
       data = cs_data_export
     )
 
-    cat(sprintf("    Overall ATT = %.6f, SE(naive) = %.6f\n",
+    cat(sprintf("    Overall ATT = %.6f, SE = %.6f\n",
                 agg$overall.att, agg$overall.se))
     cat(sprintf("    %d group-time cells\n", nrow(gt_results)))
   }

@@ -69,8 +69,16 @@ def _load_scenario_data(scenario):
     )
     # Handle R's Inf serialization (jsonlite writes Inf as "Inf" string)
     if "first_treat" in df.columns:
-        ft = pd.to_numeric(df["first_treat"], errors="coerce")
-        ft = ft.fillna(0)  # "Inf" -> NaN via to_numeric -> 0
+        raw = df["first_treat"]
+        ft = pd.to_numeric(raw, errors="coerce")
+        # "Inf"/"Infinity" -> inf via to_numeric; any other non-numeric -> NaN
+        non_numeric = ft.isna() & raw.notna()
+        if non_numeric.any():
+            bad = raw[non_numeric].unique().tolist()
+            raise ValueError(
+                f"Unexpected non-numeric first_treat values: {bad}. "
+                "Expected integers or 'Inf' for never-treated."
+            )
         ft = ft.replace(np.inf, 0)
         df["first_treat"] = ft.astype(int)
 
@@ -243,7 +251,17 @@ CS_SCENARIOS = ["cs_weighted_nocov", "cs_weighted_cov"]
 
 
 class TestCSWeighted:
-    """Cross-validate CallawaySantAnna weighted ATT vs R did::att_gt."""
+    """Cross-validate CallawaySantAnna weighted ATT vs R did::att_gt.
+
+    SE comparison note: R's did::att_gt does not implement design-based
+    variance — its SEs are survey-naive (just using weighted point estimates).
+    diff-diff computes design-based SEs via compute_survey_if_variance().
+    Therefore we compare ATT only and verify that diff-diff's design-based
+    SE is finite, positive, and differs from the naive (unweighted) SE.
+    For cs_weighted_cov, the reg+covariates SE additionally differs due to
+    the documented deviation in REGISTRY.md (conservative plug-in IF vs
+    semiparametrically efficient IF).
+    """
 
     def _fit_scenario(self, r_results, key):
         r = r_results[key]
@@ -276,16 +294,22 @@ class TestCSWeighted:
             pytest.skip(f"Scenario {key} not in R results (did package not available)")
         result, r = self._fit_scenario(r_results, key)
 
-        py_gt = sorted(result.group_time_effects.items())
-        r_atts = r["gt_att"]
+        py_gt = result.group_time_effects
 
-        assert len(py_gt) == len(r_atts), (
-            f"{key}: Python has {len(py_gt)} GT cells, R has {len(r_atts)}"
+        # Build R (group, time) -> ATT mapping, sorted for stable comparison
+        r_gt = {
+            (int(g), int(t)): att
+            for g, t, att in zip(r["gt_groups"], r["gt_periods"], r["gt_att"])
+        }
+
+        assert len(py_gt) == len(r_gt), (
+            f"{key}: Python has {len(py_gt)} GT cells, R has {len(r_gt)}"
         )
 
-        for i, ((g, t), eff) in enumerate(py_gt):
+        for (g, t), r_att in sorted(r_gt.items()):
+            assert (g, t) in py_gt, f"{key}: missing Python GT cell ({g},{t})"
             _assert_close(
-                eff["effect"], r_atts[i],
+                py_gt[(g, t)]["effect"], r_att,
                 rtol=1e-3, atol=0.05,
                 label=f"{key} ATT(g={g},t={t})",
             )

@@ -1401,12 +1401,15 @@ def _w_to_v(w: np.ndarray, l: np.ndarray, num_pre: int) -> np.ndarray:
     Map slope weights w to the full estimator direction v.
 
     The estimator is: theta_hat = l'beta_post - sum_s w_s (beta_s - beta_{s-1})
-    This gives v = (v_pre, l) where v_pre is the differencing of w.
+    for s = -T+1, ..., 0 (T slopes total, including boundary slope s=0
+    where beta_0 = 0).
+
+    This gives v = (v_pre, l) where v_pre is determined by differencing w.
 
     Parameters
     ----------
     w : np.ndarray
-        Weights on pre-treatment slopes (length T-1).
+        Weights on slopes (length T). Includes the boundary slope at s=0.
     l : np.ndarray
         Target parameter weights (length Tbar).
     num_pre : int
@@ -1417,11 +1420,11 @@ def _w_to_v(w: np.ndarray, l: np.ndarray, num_pre: int) -> np.ndarray:
     v = np.zeros(T + Tbar)
 
     if len(w) > 0:
+        # v[0] = w[0] (beta_{-T} from slope s=-T+1)
         v[0] = w[0]
-        for k in range(1, T - 1):
+        # v[k] = -w[k-1] + w[k] for k=1,...,T-1
+        for k in range(1, T):
             v[k] = -w[k - 1] + w[k]
-        if T >= 2:
-            v[T - 1] = -w[-1]
 
     v[T:] = l
     return v
@@ -1554,16 +1557,18 @@ def _compute_optimal_flci(
     if df is not None and df <= 0:
         return np.nan, np.nan
 
-    # Number of free slope weights: T-1 (or 0 if T <= 1)
-    n_slopes = max(T - 1, 0)
+    # T slopes total (s = -T+1, ..., 0), including boundary slope s=0.
+    # Linear-trend neutrality requires sum(w) = sum_j j*l_j (Eq. 17).
+    n_slopes = T
+    target_sum = float(np.dot(np.arange(1, Tbar + 1), l_vec))
 
     def flci_half_length(w_free):
         """Compute FLCI half-length for given free slope weights."""
-        # Reconstruct full w with constraint sum(w) = 1
-        if n_slopes == 0:
-            w = np.array([])
+        # Reconstruct full w with constraint sum(w) = target_sum
+        if n_slopes == 1:
+            w = np.array([target_sum])
         elif len(w_free) == n_slopes - 1:
-            w = np.concatenate([w_free, [1.0 - np.sum(w_free)]])
+            w = np.concatenate([w_free, [target_sum - np.sum(w_free)]])
         else:
             w = w_free
 
@@ -1582,24 +1587,15 @@ def _compute_optimal_flci(
         cv = _cv_alpha(t, alpha, df=df)
         return float(sigma_v * cv)
 
-    # Special case: T <= 1 (no pre-period slopes to optimize)
-    if n_slopes == 0:
-        chi = flci_half_length(np.array([]))
-        theta_hat = float(np.dot(l_vec, beta_post))
-        if not np.isfinite(chi):
-            return np.nan, np.nan
-        return theta_hat - chi, theta_hat + chi
-
-    # Optimize over T-2 free parameters (last w determined by sum=1)
     from scipy.optimize import minimize as scipy_minimize
 
     if n_slopes == 1:
-        # Only one slope weight, must equal 1. No optimization.
-        w_opt = np.array([1.0])
+        # Only one slope weight, determined by constraint.
+        w_opt = np.array([target_sum])
         chi = flci_half_length(w_opt)
     else:
-        # Start with uniform weights
-        x0 = np.full(n_slopes - 1, 1.0 / n_slopes)
+        # Optimize over T-1 free parameters (last w determined by sum constraint)
+        x0 = np.full(n_slopes - 1, target_sum / n_slopes)
 
         result = scipy_minimize(
             flci_half_length,
@@ -1607,19 +1603,11 @@ def _compute_optimal_flci(
             method="Nelder-Mead",
             options={"maxiter": 500, "xatol": 1e-5, "fatol": 1e-6},
         )
-        w_opt = np.concatenate([result.x, [1.0 - np.sum(result.x)]])
+        w_opt = np.concatenate([result.x, [target_sum - np.sum(result.x)]])
         chi = flci_half_length(result.x)
 
-    # Build the estimator value: theta_hat = l'beta_post - w'(pre-slopes)
+    # Build the estimator value: theta_hat = v'beta
     beta_full = np.concatenate([beta_pre, beta_post])
-    pre_slopes = np.diff(beta_full[:T])  # T-1 interior slopes
-    if T >= 1:
-        # Add boundary slope: 0 - beta_{-1} = -beta_{-1}
-        # But the slopes in the estimator are (beta_s - beta_{s-1}) for
-        # s = -T+1, ..., -1, which are the interior diffs of beta_pre.
-        # The "sum(w) = 1" constraint means we subtract 1x the extrapolated slope.
-        pass
-
     v_opt = _w_to_v(w_opt, l_vec, T)
     theta_hat = float(v_opt @ beta_full)
 

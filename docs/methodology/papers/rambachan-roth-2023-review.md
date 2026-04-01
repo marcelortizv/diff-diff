@@ -2,7 +2,7 @@
 
 **Authors:** Ashesh Rambachan, Jonathan Roth
 **Citation:** Rambachan, A., & Roth, J. (2023). A More Credible Approach to Parallel Trends. *Review of Economic Studies*, 90(5), 2555-2591.
-**PDF reviewed:** /Users/igerber/diff-diff/papers/HonestParallelTrends_Main.pdf
+**PDF reviewed:** Rambachan & Roth (2023), accessed via doi:10.1093/restud/rdad018
 **Review date:** 2026-03-31
 
 ---

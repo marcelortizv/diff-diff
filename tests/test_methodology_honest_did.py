@@ -328,12 +328,54 @@ class TestOptimalFLCI:
         """Regression for P0: bias should be nonzero when M > 0."""
         from diff_diff.honest_did import _compute_worst_case_bias
 
-        # Slope weights w with sum(w)=1 (the optimizer's choice)
-        w = np.array([0.3, 0.7])  # 2 slopes for 3 pre-periods
+        # T=3: 3 slopes (including boundary), sum(w)=1 for l=[1]
+        w = np.array([0.2, 0.3, 0.5])
         l_vec = np.array([1.0])
 
         bias = _compute_worst_case_bias(w, l_vec, num_pre=3, num_post=1, M=0.5)
         assert bias > 0, f"Bias should be nonzero for M>0, got {bias}"
+
+    def test_three_period_m0_flci_center(self):
+        """T=1, Tbar=1, M=0: FLCI centered on beta_1 + beta_{-1}."""
+        beta_pre = np.array([0.5])
+        beta_post = np.array([3.0])
+        sigma = np.eye(2) * 0.01
+
+        ci_lb, ci_ub = _compute_optimal_flci(
+            beta_pre, beta_post, sigma, np.array([1.0]), 1, 1, M=0.0
+        )
+        center = (ci_lb + ci_ub) / 2
+        expected_center = 3.0 + 0.5  # beta_1 + beta_{-1}
+        np.testing.assert_allclose(center, expected_center, atol=1e-4,
+                                   err_msg="M=0 FLCI should be centered on beta_1 + beta_{-1}")
+
+    def test_multi_post_m0_finite(self):
+        """Default l_vec with Tbar>1: M=0 gives finite CI."""
+        beta_pre = np.array([0.3, 0.2, 0.1])
+        beta_post = np.array([2.0, 2.5])
+        sigma = np.eye(5) * 0.01
+        l_vec = np.array([0.5, 0.5])  # average of 2 post periods
+
+        ci_lb, ci_ub = _compute_optimal_flci(
+            beta_pre, beta_post, sigma, l_vec, 3, 2, M=0.0
+        )
+        assert np.isfinite(ci_lb) and np.isfinite(ci_ub), (
+            f"Multi-post M=0 should give finite CI, got [{ci_lb}, {ci_ub}]"
+        )
+
+    def test_multi_post_m_positive_finite(self):
+        """Default l_vec with Tbar>1: M>0 gives finite CI."""
+        beta_pre = np.array([0.3, 0.2, 0.1])
+        beta_post = np.array([2.0, 2.5])
+        sigma = np.eye(5) * 0.01
+        l_vec = np.array([0.5, 0.5])
+
+        ci_lb, ci_ub = _compute_optimal_flci(
+            beta_pre, beta_post, sigma, l_vec, 3, 2, M=0.5
+        )
+        assert np.isfinite(ci_lb) and np.isfinite(ci_ub), (
+            f"Multi-post M=0.5 should give finite CI, got [{ci_lb}, {ci_ub}]"
+        )
 
     def test_infeasible_lp_returns_nan(self):
         """Regression for P1: infeasible LP should return NaN, not [-inf, inf]."""

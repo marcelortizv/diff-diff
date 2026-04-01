@@ -11,6 +11,7 @@ required_packages <- c(
   "HonestDiD",     # Rambachan & Roth (2023) sensitivity analysis
   "fixest",        # Fast TWFE and basic DiD
   "triplediff",    # Ortiz-Villavicencio & Sant'Anna (2025) triple difference
+  "survey",        # Lumley (2004) complex survey analysis
 
   # Utilities
   "jsonlite",      # JSON output for Python interop

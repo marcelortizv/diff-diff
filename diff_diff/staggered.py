@@ -403,6 +403,12 @@ class CallawaySantAnna(
             Per-cohort EPV diagnostics with columns: group, n_treated,
             n_control, n_covariates, n_params, epv, status.
         """
+        if not self.panel:
+            raise NotImplementedError(
+                "diagnose_propensity() is not yet supported for repeated "
+                "cross-section data (panel=False). Use fit() with covariates "
+                "and check results.epv_diagnostics instead."
+            )
         if self.estimation_method == "reg":
             return pd.DataFrame(
                 columns=[
@@ -2083,13 +2089,15 @@ class CallawaySantAnna(
                 cached_pscore = pscore_cache.get(pscore_key)
 
             if cached_pscore is not None:
-                # Use cached propensity scores (beta coefficients)
-                beta_logistic = cached_pscore
+                # Use cached propensity scores (beta coefficients + EPV diag)
+                beta_logistic, cached_diag = cached_pscore
                 X_all = np.vstack([X_treated, X_control])
                 X_all_with_intercept = np.column_stack([np.ones(n_t + n_c), X_all])
                 z = np.dot(X_all_with_intercept, beta_logistic)
                 z = np.clip(z, -500, 500)
                 pscore = 1 / (1 + np.exp(-z))
+                if epv_diagnostics_out is not None and cached_diag:
+                    epv_diagnostics_out.update(cached_diag)
             else:
                 # Stack covariates and create treatment indicator
                 X_all = np.vstack([X_treated, X_control])
@@ -2110,12 +2118,12 @@ class CallawaySantAnna(
                     _check_propensity_diagnostics(pscore, self.pscore_trim)
                     # Cache the fitted coefficients (zero-fill NaN from
                     # dropped rank-deficient columns to prevent NaN
-                    # propagation on cache reuse)
+                    # propagation on cache reuse) alongside EPV diagnostics
                     if pscore_cache is not None and pscore_key is not None:
                         beta_clean = np.where(
                             np.isfinite(beta_logistic), beta_logistic, 0.0
                         )
-                        pscore_cache[pscore_key] = beta_clean
+                        pscore_cache[pscore_key] = (beta_clean, diag)
                 except (np.linalg.LinAlgError, ValueError):
                     if (
                         self.pscore_fallback == "error"
@@ -2366,12 +2374,14 @@ class CallawaySantAnna(
                 cached_pscore = pscore_cache.get(pscore_key)
 
             if cached_pscore is not None:
-                beta_logistic = cached_pscore
+                beta_logistic, cached_diag = cached_pscore
                 X_all = np.vstack([X_treated, X_control])
                 X_all_with_intercept = np.column_stack([np.ones(n_t + n_c), X_all])
                 z = np.dot(X_all_with_intercept, beta_logistic)
                 z = np.clip(z, -500, 500)
                 pscore = 1 / (1 + np.exp(-z))
+                if epv_diagnostics_out is not None and cached_diag:
+                    epv_diagnostics_out.update(cached_diag)
             else:
                 X_all = np.vstack([X_treated, X_control])
                 D = np.concatenate([np.ones(n_t), np.zeros(n_c)])
@@ -2392,7 +2402,7 @@ class CallawaySantAnna(
                         beta_clean = np.where(
                             np.isfinite(beta_logistic), beta_logistic, 0.0
                         )
-                        pscore_cache[pscore_key] = beta_clean
+                        pscore_cache[pscore_key] = (beta_clean, diag)
                 except (np.linalg.LinAlgError, ValueError):
                     if (
                         self.pscore_fallback == "error"
@@ -3194,7 +3204,10 @@ class CallawaySantAnna(
             )
             _check_propensity_diagnostics(pscore, self.pscore_trim)
         except (np.linalg.LinAlgError, ValueError):
-            if self.pscore_fallback == "error":
+            if (
+                self.pscore_fallback == "error"
+                or self.rank_deficient_action == "error"
+            ):
                 raise
             ctx = f" for {context_label}" if context_label else ""
             warnings.warn(
@@ -3452,7 +3465,10 @@ class CallawaySantAnna(
             )
             _check_propensity_diagnostics(pscore, self.pscore_trim)
         except (np.linalg.LinAlgError, ValueError):
-            if self.pscore_fallback == "error":
+            if (
+                self.pscore_fallback == "error"
+                or self.rank_deficient_action == "error"
+            ):
                 raise
             ctx = f" for {context_label}" if context_label else ""
             warnings.warn(

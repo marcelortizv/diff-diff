@@ -1798,6 +1798,39 @@ class TestEPVDiagnostics:
         assert diag["n_events"] == 30
         assert abs(diag["epv"] - 10.0) < 0.01
 
+    def test_epv_uses_positive_weight_sample(self):
+        """EPV computed on positive-weight sample, not padded rows."""
+        from diff_diff.linalg import solve_logit
+
+        rng = np.random.default_rng(42)
+        # 10 real events + 190 real controls = 200 real rows
+        n_real = 200
+        X_real = rng.standard_normal((n_real, 4))
+        y_real = np.concatenate([np.ones(10), np.zeros(n_real - 10)])
+        w_real = np.ones(n_real)
+
+        # Pad with 500 zero-weight rows (should not inflate EPV)
+        n_pad = 500
+        X_pad = rng.standard_normal((n_pad, 4))
+        y_pad = np.concatenate([np.ones(250), np.zeros(250)])
+        w_pad = np.zeros(n_pad)
+
+        X = np.vstack([X_real, X_pad])
+        y_all = np.concatenate([y_real, y_pad])
+        w = np.concatenate([w_real, w_pad])
+
+        diag = {}
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            solve_logit(X, y_all, weights=w, diagnostics_out=diag)
+
+        # EPV should reflect the 10-event effective sample, not 260
+        assert diag["n_events"] == 10  # min(10, 190) from real sample
+        assert diag["epv"] == 10 / 5  # 10 events / 5 params = 2.0
+        assert diag["is_low"] is True
+
 
 class TestNoDotRuntimeWarnings:
     """Verify np.dot replacement avoids Apple M4 BLAS ufunc FPE bug."""

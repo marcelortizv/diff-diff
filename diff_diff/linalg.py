@@ -1289,9 +1289,17 @@ def solve_logit(
         X_solve = X_with_intercept
 
     # Events Per Variable (EPV) check — Peduzzi et al. (1996)
+    # Use effective (positive-weight) sample when weights have zeros,
+    # since zero-weight rows don't contribute to the likelihood.
     k_solve = X_solve.shape[1]
-    n_pos_y = int(np.sum(y))
-    n_neg_y = n - n_pos_y
+    if weights is not None and np.any(weights == 0):
+        y_eff = y[weights > 0]
+        n_eff = len(y_eff)
+    else:
+        y_eff = y
+        n_eff = n
+    n_pos_y = int(np.sum(y_eff))
+    n_neg_y = n_eff - n_pos_y
     n_events = min(n_pos_y, n_neg_y)
     epv = n_events / k_solve if k_solve > 0 else float("inf")
 

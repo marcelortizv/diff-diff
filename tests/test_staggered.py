@@ -3885,3 +3885,33 @@ class TestEPVDiagnostics:
                     data, outcome="outcome", unit="unit", time="time",
                     first_treat="first_treat", covariates=["x1"],
                 )
+
+    def test_cs_rc_strict_mode_not_swallowed(self):
+        """RCS path: rank_deficient_action='error' raises even with unconditional fallback."""
+        from unittest.mock import patch
+
+        # RCS data: unique unit IDs per observation
+        np.random.seed(99)
+        n = 300
+        data = pd.DataFrame({
+            "unit": np.arange(n),
+            "time": np.random.choice([0, 1, 2, 3, 4], n),
+            "outcome": np.random.randn(n),
+            "first_treat": np.where(np.arange(n) < 100, 3, 0),
+            "x1": np.random.randn(n),
+        })
+        cs = CallawaySantAnna(
+            estimation_method="ipw",
+            rank_deficient_action="error",
+            pscore_fallback="unconditional",
+            panel=False,
+        )
+        with patch(
+            "diff_diff.staggered.solve_logit",
+            side_effect=ValueError("Rank-deficient design"),
+        ):
+            with pytest.raises(ValueError, match="Rank-deficient"):
+                cs.fit(
+                    data, outcome="outcome", unit="unit", time="time",
+                    first_treat="first_treat", covariates=["x1"],
+                )

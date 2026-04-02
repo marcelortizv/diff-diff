@@ -516,7 +516,7 @@ class StackedDiD:
                 _survey_df = (
                     max(survey_metadata.df_survey, 1)
                     if survey_metadata is not None and survey_metadata.df_survey is not None
-                    else None
+                    else (0 if _uses_replicate_sd else None)
                 )
                 # Override df when replicate replicates were dropped
                 if _n_valid_rep_sd is not None and resolved_stacked is not None:
@@ -557,7 +557,7 @@ class StackedDiD:
         _survey_df_overall = (
             max(survey_metadata.df_survey, 1)
             if survey_metadata is not None and survey_metadata.df_survey is not None
-            else None
+            else (0 if _uses_replicate_sd else None)
         )
         if _n_valid_rep_sd is not None and resolved_stacked is not None:
             if _n_valid_rep_sd < resolved_stacked.n_replicates:

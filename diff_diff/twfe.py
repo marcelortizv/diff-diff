@@ -317,7 +317,7 @@ class TwoWayFixedEffects(DifferenceInDifferences):
             _df_rep = (
                 survey_metadata.df_survey
                 if survey_metadata and survey_metadata.df_survey
-                else None
+                else 0  # rank-deficient replicate → NaN inference
             )
             if _n_valid_rep_twfe < resolved_survey.n_replicates:
                 _df_rep = _n_valid_rep_twfe - 1 if _n_valid_rep_twfe > 1 else 0

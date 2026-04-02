@@ -678,6 +678,9 @@ class SunAbraham:
             if survey_metadata is not None and survey_metadata.df_survey is not None
             else None
         )
+        # Replicate df: rank-deficient → NaN inference; dropped replicates → n_valid-1
+        if _uses_replicate_sa and _sa_survey_df is None:
+            _sa_survey_df = 0  # rank-deficient replicate → NaN inference
         if _uses_replicate_sa and _n_valid_rep_sa < resolved_survey.n_replicates:
             _sa_survey_df = _n_valid_rep_sa - 1 if _n_valid_rep_sa > 1 else 0
 

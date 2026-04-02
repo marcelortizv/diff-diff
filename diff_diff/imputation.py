@@ -587,6 +587,9 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
 
         # Survey degrees of freedom for t-distribution inference
         _survey_df = resolved_survey.df_survey if resolved_survey is not None else None
+        # Replicate df: rank-deficient → NaN inference; dropped replicates → n_valid-1
+        if _uses_replicate_imp and _survey_df is None:
+            _survey_df = 0  # rank-deficient replicate → NaN inference
         if _n_valid_rep_imp is not None and resolved_survey is not None:
             if _n_valid_rep_imp < resolved_survey.n_replicates:
                 _survey_df = _n_valid_rep_imp - 1 if _n_valid_rep_imp > 1 else 0
@@ -643,9 +646,10 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             )
 
         # Override event-study/group SEs with replicate variance
+        # Skip overrides for non-finite effects (Prop 5 unidentified horizons)
         if _vcov_rep_imp is not None and event_study_effects is not None:
             for i, e in enumerate(_sorted_rel_times):
-                if e in event_study_effects:
+                if e in event_study_effects and np.isfinite(event_study_effects[e]["effect"]):
                     se_e = float(np.sqrt(max(_vcov_rep_imp[1 + i, 1 + i], 0.0)))
                     eff_e = event_study_effects[e]["effect"]
                     t_e, p_e, ci_e = safe_inference(eff_e, se_e, alpha=self.alpha, df=_survey_df)
@@ -655,7 +659,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                     event_study_effects[e]["conf_int"] = ci_e
         if _vcov_rep_imp is not None and group_effects is not None:
             for j, g in enumerate(_sorted_groups):
-                if g in group_effects:
+                if g in group_effects and np.isfinite(group_effects[g]["effect"]):
                     se_g = float(np.sqrt(max(_vcov_rep_imp[1 + _n_es + j, 1 + _n_es + j], 0.0)))
                     eff_g = group_effects[g]["effect"]
                     t_g, p_g, ci_g = safe_inference(eff_g, se_g, alpha=self.alpha, df=_survey_df)

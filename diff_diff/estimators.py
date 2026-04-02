@@ -420,7 +420,7 @@ class DifferenceInDifferences:
             _df_rep = (
                 survey_metadata.df_survey
                 if survey_metadata and survey_metadata.df_survey
-                else None
+                else 0  # rank-deficient replicate → NaN inference
             )
             if _n_valid_rep < resolved_survey.n_replicates:
                 _df_rep = _n_valid_rep - 1 if _n_valid_rep > 1 else 0
@@ -1320,9 +1320,11 @@ class MultiPeriodDiD(DifferenceInDifferences):
         df = n_eff_df - k_effective - n_absorbed_effects
         if resolved_survey is not None and resolved_survey.df_survey is not None:
             df = resolved_survey.df_survey
-        # Override df when replicate replicates were dropped
-        if _n_valid_rep_mp is not None and resolved_survey is not None:
-            if _n_valid_rep_mp < resolved_survey.n_replicates:
+        # Replicate df: rank-deficient → NaN inference; dropped replicates → n_valid-1
+        if _uses_replicate_mp:
+            if resolved_survey.df_survey is None:
+                df = 0  # rank-deficient replicate → NaN inference
+            if _n_valid_rep_mp is not None and _n_valid_rep_mp < resolved_survey.n_replicates:
                 df = _n_valid_rep_mp - 1 if _n_valid_rep_mp > 1 else 0
 
         # Guard: fall back to normal distribution if df is non-positive

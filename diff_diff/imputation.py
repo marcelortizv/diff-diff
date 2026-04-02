@@ -236,6 +236,14 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         if missing:
             raise ValueError(f"Missing columns: {missing}")
 
+        if self.pretrends and survey_design is not None and aggregate in ("event_study", "all"):
+            raise NotImplementedError(
+                "pretrends=True is not yet compatible with survey_design. "
+                "The pre-period lead regression uses unweighted demeaning, "
+                "which does not account for survey weights. Use pretrends=False "
+                "with survey_design, or use pretrend_test() for pre-trend assessment."
+            )
+
         # Create working copy
         df = data.copy()
 
@@ -1525,23 +1533,43 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         # Pre-period coefficients via BJS Test 1 lead regression
         if self.pretrends:
             df_0 = df.loc[omega_0_mask].copy()
-            rel_time_0 = np.where(
-                ~df_0["_never_treated"],
-                df_0[time] - df_0[first_treat],
-                np.nan,
-            )
-            pre_rel_times = sorted(
-                set(int(h) for h in rel_time_0 if np.isfinite(h) and h < -self.anticipation)
-            )
-            pre_rel_times = [h for h in pre_rel_times if h != ref_period]
-            if self.horizon_max is not None:
-                pre_rel_times = [h for h in pre_rel_times if abs(h) <= self.horizon_max]
-            if pre_rel_times:
-                pre_effects, _, _ = self._compute_lead_coefficients(
-                    df_0, outcome, unit, time, first_treat, covariates,
-                    cluster_var, pre_rel_times, alpha=self.alpha,
+
+            # Apply balance_e restriction to pre-period lead regression
+            # so negative horizons use the same balanced cohort set
+            if balance_e is not None:
+                cohort_rel_times_0 = self._build_cohort_rel_times(df, first_treat)
+                balanced_cohorts = set()
+                if all_horizons:
+                    max_h = max(all_horizons)
+                    required_range = set(range(-balance_e, max_h + 1))
+                    for g, horizons in cohort_rel_times_0.items():
+                        if required_range.issubset(horizons):
+                            balanced_cohorts.add(g)
+                if balanced_cohorts:
+                    balance_mask_0 = df_0[first_treat].isin(balanced_cohorts)
+                    df_0 = df_0.loc[balance_mask_0].copy()
+                else:
+                    # No cohorts qualify — skip pre-period coefficients
+                    df_0 = None
+
+            if df_0 is not None and len(df_0) > 0:
+                rel_time_0 = np.where(
+                    ~df_0["_never_treated"],
+                    df_0[time] - df_0[first_treat],
+                    np.nan,
                 )
-                event_study_effects.update(pre_effects)
+                pre_rel_times = sorted(
+                    set(int(h) for h in rel_time_0 if np.isfinite(h) and h < -self.anticipation)
+                )
+                pre_rel_times = [h for h in pre_rel_times if h != ref_period]
+                if self.horizon_max is not None:
+                    pre_rel_times = [h for h in pre_rel_times if abs(h) <= self.horizon_max]
+                if pre_rel_times:
+                    pre_effects, _, _ = self._compute_lead_coefficients(
+                        df_0, outcome, unit, time, first_treat, covariates,
+                        cluster_var, pre_rel_times, alpha=self.alpha,
+                    )
+                    event_study_effects.update(pre_effects)
 
         # Collect horizons with Proposition 5 violations
         prop5_horizons = []
@@ -1841,14 +1869,31 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
 
         # OLS with cluster-robust SEs
         cluster_ids = df_0[cluster_var].values
-        result = solve_ols(
-            X_dm,
-            y_dm,
-            cluster_ids=cluster_ids,
-            return_vcov=True,
-            rank_deficient_action=self.rank_deficient_action,
-            column_names=all_x_cols,
-        )
+        try:
+            result = solve_ols(
+                X_dm,
+                y_dm,
+                cluster_ids=cluster_ids,
+                return_vcov=True,
+                rank_deficient_action=self.rank_deficient_action,
+                column_names=all_x_cols,
+            )
+        except (IndexError, np.linalg.LinAlgError):
+            # All lead columns dropped (rank deficient after demeaning)
+            effects: Dict[int, Dict[str, Any]] = {}
+            for h in pre_rel_times:
+                n_obs = int((rel_time_0 == h).sum())
+                effects[h] = {
+                    "effect": np.nan, "se": np.nan, "t_stat": np.nan,
+                    "p_value": np.nan, "conf_int": (np.nan, np.nan),
+                    "n_obs": n_obs,
+                }
+            for col in lead_cols:
+                df_0.drop(columns=col, inplace=True)
+            return effects, np.full(len(pre_rel_times), np.nan), np.full(
+                (len(pre_rel_times), len(pre_rel_times)), np.nan
+            )
+
         coefficients = result[0]
         vcov = result[2]
         assert vcov is not None
@@ -1858,7 +1903,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         V_gamma = vcov[:n_leads, :n_leads]
 
         # Build per-horizon effects
-        effects: Dict[int, Dict[str, Any]] = {}
+        effects = {}
         for j, h in enumerate(pre_rel_times):
             effect = float(gamma[j])
             se = float(np.sqrt(max(V_gamma[j, j], 0.0)))

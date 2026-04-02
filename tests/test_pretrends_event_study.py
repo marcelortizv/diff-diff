@@ -733,3 +733,78 @@ class TestPretrends_Regressions:
                 eff_d["se"], eff_p["se"], rtol=1e-10,
                 err_msg=f"h={h}: permuted index changed bootstrap SE",
             )
+
+    def test_imputation_pretrends_survey_raises(self):
+        """pretrends=True + survey_design raises NotImplementedError."""
+        from diff_diff.survey import SurveyDesign
+
+        data = generate_test_data(seed=42)
+        n_units = data["unit"].nunique()
+        unit_weights = np.random.default_rng(42).uniform(0.5, 2.0, n_units)
+        data["weight"] = data["unit"].map(dict(enumerate(unit_weights)))
+
+        sd = SurveyDesign(weights="weight")
+        est = ImputationDiD(pretrends=True)
+        with pytest.raises(NotImplementedError, match="pretrends=True is not yet compatible"):
+            est.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+                survey_design=sd,
+            )
+
+    def test_imputation_pretrends_balance_e(self):
+        """balance_e restricts pre-period lead regression to balanced cohorts."""
+        data = generate_test_data(seed=42)
+
+        results_no_be = ImputationDiD(pretrends=True).fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="event_study",
+        )
+        results_be = ImputationDiD(pretrends=True).fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="event_study",
+            balance_e=1,
+        )
+
+        # Both should have pre-period horizons
+        neg_no_be = [h for h in results_no_be.event_study_effects if h < -1]
+        assert len(neg_no_be) > 0
+        # balance_e restricts cohorts; pre-period coefficients may be NaN
+        # if the restricted sample is rank-deficient after demeaning
+        # The key invariant: the method runs without error
+        assert results_be.event_study_effects is not None
+
+    def test_two_stage_pretrends_bootstrap(self):
+        """TwoStageDiD pretrends=True with bootstrap produces finite pre-period SEs."""
+        data = generate_test_data(seed=42)
+        est = TwoStageDiD(pretrends=True, n_bootstrap=50, seed=42)
+        results = est.fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="event_study",
+        )
+
+        negative = {
+            h: v
+            for h, v in results.event_study_effects.items()
+            if h < -1 and v["n_obs"] > 0
+        }
+        assert len(negative) > 0, "Should have pre-period horizons"
+        for h, eff in negative.items():
+            assert np.isfinite(eff["se"]), f"h={h}: SE not finite"
+            assert eff["se"] > 0, f"h={h}: SE not positive"

@@ -247,13 +247,16 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             _resolve_survey_for_fit(survey_design, data, "analytical")
         )
 
+        _uses_replicate_ts = (
+            resolved_survey is not None and resolved_survey.uses_replicate_variance
+        )
+        if _uses_replicate_ts and self.n_bootstrap > 0:
+            raise ValueError(
+                "Cannot use n_bootstrap > 0 with replicate-weight survey designs. "
+                "Replicate weights provide their own variance estimation."
+            )
         # Validate within-unit constancy for panel survey designs
         if resolved_survey is not None:
-            if resolved_survey.uses_replicate_variance:
-                raise NotImplementedError(
-                    "TwoStageDiD does not yet support replicate-weight survey "
-                    "designs. Use a TSL-based survey design (strata/psu/fpc)."
-                )
             _validate_unit_constant_survey(data, unit, survey_design)
             if resolved_survey.weight_type != "pweight":
                 raise ValueError(
@@ -334,6 +337,11 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
                     fpc=(
                         resolved_survey.fpc[keep_mask.values]
                         if resolved_survey.fpc is not None
+                        else None
+                    ),
+                    replicate_weights=(
+                        resolved_survey.replicate_weights[keep_mask.values]
+                        if resolved_survey.replicate_weights is not None
                         else None
                     ),
                 )
@@ -482,6 +490,9 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
 
         # Survey degrees of freedom for t-distribution inference
         _survey_df = resolved_survey.df_survey if resolved_survey is not None else None
+        # Replicate df: rank-deficient → NaN inference
+        if _uses_replicate_ts and _survey_df is None:
+            _survey_df = 0
 
         # Always compute overall ATT (static specification)
         overall_att, overall_se = self._stage2_static(
@@ -502,57 +513,151 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
             survey_weight_type=survey_weight_type,
         )
 
+        # Compute overall ATT inference (may be overridden by replicate below)
         overall_t, overall_p, overall_ci = safe_inference(
             overall_att, overall_se, alpha=self.alpha, df=_survey_df
         )
 
-        # Event study and group aggregation
+        # Event study and group aggregation (full-sample, for point estimates)
         event_study_effects = None
         group_effects = None
 
         if aggregate in ("event_study", "all"):
             event_study_effects = self._stage2_event_study(
-                df=df,
-                unit=unit,
-                time=time,
-                first_treat=first_treat,
-                covariates=covariates,
-                omega_0_mask=omega_0_mask,
-                omega_1_mask=omega_1_mask,
-                unit_fe=unit_fe,
-                time_fe=time_fe,
-                grand_mean=grand_mean,
-                delta_hat=delta_hat,
-                cluster_var=cluster_var,
-                treatment_groups=treatment_groups,
-                ref_period=ref_period,
-                balance_e=balance_e,
-                kept_cov_mask=kept_cov_mask,
-                survey_weights=survey_weights,
-                survey_weight_type=survey_weight_type,
-                survey_df=_survey_df,
+                df=df, unit=unit, time=time, first_treat=first_treat,
+                covariates=covariates, omega_0_mask=omega_0_mask,
+                omega_1_mask=omega_1_mask, unit_fe=unit_fe, time_fe=time_fe,
+                grand_mean=grand_mean, delta_hat=delta_hat,
+                cluster_var=cluster_var, treatment_groups=treatment_groups,
+                ref_period=ref_period, balance_e=balance_e,
+                kept_cov_mask=kept_cov_mask, survey_weights=survey_weights,
+                survey_weight_type=survey_weight_type, survey_df=_survey_df,
             )
 
         if aggregate in ("group", "all"):
             group_effects = self._stage2_group(
-                df=df,
-                unit=unit,
-                time=time,
-                first_treat=first_treat,
-                covariates=covariates,
-                omega_0_mask=omega_0_mask,
-                omega_1_mask=omega_1_mask,
-                unit_fe=unit_fe,
-                time_fe=time_fe,
-                grand_mean=grand_mean,
-                delta_hat=delta_hat,
-                cluster_var=cluster_var,
-                treatment_groups=treatment_groups,
-                kept_cov_mask=kept_cov_mask,
-                survey_weights=survey_weights,
-                survey_weight_type=survey_weight_type,
-                survey_df=_survey_df,
+                df=df, unit=unit, time=time, first_treat=first_treat,
+                covariates=covariates, omega_0_mask=omega_0_mask,
+                omega_1_mask=omega_1_mask, unit_fe=unit_fe, time_fe=time_fe,
+                grand_mean=grand_mean, delta_hat=delta_hat,
+                cluster_var=cluster_var, treatment_groups=treatment_groups,
+                kept_cov_mask=kept_cov_mask, survey_weights=survey_weights,
+                survey_weight_type=survey_weight_type, survey_df=_survey_df,
             )
+
+        # Replicate variance override: derive keys from actual outputs, then refit
+        _n_valid_rep_ts = None
+        _vcov_rep_ts = None
+        if _uses_replicate_ts:
+            from diff_diff.survey import compute_replicate_refit_variance
+
+            # Derive keys from actual outputs (excludes filtered/Prop5 horizons)
+            _sorted_es_periods_ts = sorted(
+                e for e in (event_study_effects or {}).keys()
+                if np.isfinite(event_study_effects[e]["effect"])
+            )
+            _sorted_groups_ts = sorted(
+                g for g in (group_effects or {}).keys()
+                if np.isfinite(group_effects[g]["effect"])
+            )
+            _n_es_ts = len(_sorted_es_periods_ts)
+            _n_grp_ts = len(_sorted_groups_ts)
+
+            # Build full-sample estimate from actual outputs
+            _full_est_ts = [overall_att]
+            _full_est_ts.extend([event_study_effects[e]["effect"] for e in _sorted_es_periods_ts])
+            _full_est_ts.extend([group_effects[g]["effect"] for g in _sorted_groups_ts])
+
+            def _refit_ts(w_r):
+                ufe_r, tfe_r, gm_r, delta_r, kcm_r = self._fit_untreated_model(
+                    df, outcome, unit, time, covariates, omega_0_mask, weights=w_r,
+                )
+                y_tilde_r = self._residualize(
+                    df, outcome, unit, time, covariates,
+                    ufe_r, tfe_r, gm_r, delta_r,
+                )
+                df_tmp = df.copy()
+                df_tmp["_y_tilde"] = y_tilde_r
+                results = []
+
+                att_r, _ = self._stage2_static(
+                    df=df_tmp, unit=unit, time=time, first_treat=first_treat,
+                    covariates=covariates, omega_0_mask=omega_0_mask,
+                    omega_1_mask=omega_1_mask, unit_fe=ufe_r, time_fe=tfe_r,
+                    grand_mean=gm_r, delta_hat=delta_r, cluster_var=cluster_var,
+                    kept_cov_mask=kcm_r, survey_weights=w_r,
+                    survey_weight_type="pweight",
+                )
+                results.append(att_r)
+
+                if _sorted_es_periods_ts:
+                    es_r = self._stage2_event_study(
+                        df=df_tmp, unit=unit, time=time, first_treat=first_treat,
+                        covariates=covariates, omega_0_mask=omega_0_mask,
+                        omega_1_mask=omega_1_mask, unit_fe=ufe_r, time_fe=tfe_r,
+                        grand_mean=gm_r, delta_hat=delta_r,
+                        cluster_var=cluster_var, treatment_groups=treatment_groups,
+                        ref_period=ref_period, balance_e=balance_e,
+                        kept_cov_mask=kcm_r, survey_weights=w_r,
+                        survey_weight_type="pweight", survey_df=None,
+                    )
+                    for e in _sorted_es_periods_ts:
+                        results.append(es_r[e]["effect"] if e in es_r else np.nan)
+
+                if _sorted_groups_ts:
+                    grp_r = self._stage2_group(
+                        df=df_tmp, unit=unit, time=time, first_treat=first_treat,
+                        covariates=covariates, omega_0_mask=omega_0_mask,
+                        omega_1_mask=omega_1_mask, unit_fe=ufe_r, time_fe=tfe_r,
+                        grand_mean=gm_r, delta_hat=delta_r,
+                        cluster_var=cluster_var, treatment_groups=treatment_groups,
+                        kept_cov_mask=kcm_r, survey_weights=w_r,
+                        survey_weight_type="pweight", survey_df=None,
+                    )
+                    for g in _sorted_groups_ts:
+                        results.append(grp_r[g]["effect"] if g in grp_r else np.nan)
+
+                return np.array(results)
+
+            _vcov_rep_ts, _n_valid_rep_ts = compute_replicate_refit_variance(
+                _refit_ts, np.array(_full_est_ts), resolved_survey
+            )
+            overall_se = float(np.sqrt(max(_vcov_rep_ts[0, 0], 0.0)))
+
+            # Override df if replicates were dropped
+            if _n_valid_rep_ts < resolved_survey.n_replicates:
+                _survey_df = _n_valid_rep_ts - 1 if _n_valid_rep_ts > 1 else 0
+            if survey_metadata is not None:
+                survey_metadata.df_survey = _survey_df if _survey_df and _survey_df > 0 else None
+
+            # Recompute overall inference with replicate SE/df
+            overall_t, overall_p, overall_ci = safe_inference(
+                overall_att, overall_se, alpha=self.alpha, df=_survey_df
+            )
+
+            # Override event-study SEs (only for identified effects)
+            for i, e in enumerate(_sorted_es_periods_ts):
+                if event_study_effects is not None and e in event_study_effects:
+                    se_e = float(np.sqrt(max(_vcov_rep_ts[1 + i, 1 + i], 0.0)))
+                    eff_e = event_study_effects[e]["effect"]
+                    t_e, p_e, ci_e = safe_inference(eff_e, se_e, alpha=self.alpha, df=_survey_df)
+                    event_study_effects[e]["se"] = se_e
+                    event_study_effects[e]["t_stat"] = t_e
+                    event_study_effects[e]["p_value"] = p_e
+                    event_study_effects[e]["conf_int"] = ci_e
+
+            # Override group SEs (only for identified effects)
+            for j, g in enumerate(_sorted_groups_ts):
+                if group_effects is not None and g in group_effects:
+                    se_g = float(np.sqrt(max(
+                        _vcov_rep_ts[1 + _n_es_ts + j, 1 + _n_es_ts + j], 0.0
+                    )))
+                    eff_g = group_effects[g]["effect"]
+                    t_g, p_g, ci_g = safe_inference(eff_g, se_g, alpha=self.alpha, df=_survey_df)
+                    group_effects[g]["se"] = se_g
+                    group_effects[g]["t_stat"] = t_g
+                    group_effects[g]["p_value"] = p_g
+                    group_effects[g]["conf_int"] = ci_g
 
         # Build treatment effects DataFrame
         treated_df = df.loc[omega_1_mask, [unit, time, "_y_tilde", "_rel_time"]].copy()

@@ -776,7 +776,7 @@ where weights ŵ_{g,e} = n_{g,e} / Σ_g n_{g,e} (sample share of cohort g at eve
 - [x] R comparison: ATT matches within machine precision (<1e-11)
 - [x] R comparison: SE matches within 0.3% (well within 1% threshold)
 - [x] R comparison: Event study effects match perfectly (correlation 1.0)
-- [x] Survey design support (Phase 3): weighted within-transform, survey weights in LinearRegression with TSL vcov; bootstrap+survey supported (Phase 6) via Rao-Wu rescaled bootstrap
+- [x] Survey design support (Phase 3): weighted within-transform, survey weights in LinearRegression with TSL vcov; bootstrap+survey supported (Phase 6) via Rao-Wu rescaled bootstrap. Replicate weights supported via estimator-level refit (see Replicate Weight Variance section); replicate+bootstrap rejected.
 
 ---
 
@@ -1066,7 +1066,7 @@ The paper text states a stricter bound (T_min + 1) but the R code by the co-auth
 - [x] Overall ATT as average of post-treatment delta_h with delta-method SE
 - [x] Anticipation parameter support
 - [x] Never-treated encoding (0 and inf)
-- [x] Survey design support (Phase 3): Q-weights compose multiplicatively with survey weights; TSL vcov on composed weights; survey design columns propagated through sub-experiments
+- [x] Survey design support (Phase 3): Q-weights compose multiplicatively with survey weights; TSL vcov on composed weights; survey design columns propagated through sub-experiments. Replicate weights supported via estimator-level refit with Q-weight composition (see Replicate Weight Variance section).
 - **Note:** Survey weights compose multiplicatively with Q-weights for StackedDiD; only `weight_type="pweight"` (default) is supported — `fweight` and `aweight` are rejected because Q-weight composition changes weight semantics (non-integer for fweight, non-inverse-variance for aweight)
 
 ---
@@ -2298,16 +2298,18 @@ variance from the distribution of replicate estimates.
   t-based inference.
 - **Note:** Replicate-weight support matrix:
   - **Supported**: CallawaySantAnna (reg/ipw/dr without covariates, no
-    bootstrap), ContinuousDiD
-    (no bootstrap), EfficientDiD (no bootstrap), TripleDifference (all
-    methods), LinearRegression (OLS path)
-  - **Rejected with NotImplementedError**: SunAbraham, TwoWayFixedEffects
-    (within-transformation must be recomputed per replicate),
-    DifferenceInDifferences, MultiPeriodDiD, StackedDiD (use
-    compute_survey_vcov directly), ImputationDiD, TwoStageDiD (custom
-    variance), SyntheticDiD, TROP (bootstrap-based variance),
-    BaconDecomposition (diagnostic only)
-  - CS/ContinuousDiD/EfficientDiD reject replicate + `n_bootstrap > 0`
+    bootstrap), ContinuousDiD (no bootstrap), EfficientDiD (no bootstrap),
+    TripleDifference (all methods), LinearRegression (OLS path),
+    DifferenceInDifferences (no-absorb via LinearRegression dispatch,
+    absorb via estimator-level refit), MultiPeriodDiD (no-absorb via
+    `compute_replicate_vcov`, absorb via estimator-level refit),
+    TwoWayFixedEffects (estimator-level refit with within-transformation),
+    SunAbraham (estimator-level refit, replaces `vcov_cohort`),
+    StackedDiD (estimator-level refit with Q-weight composition),
+    ImputationDiD (two-stage refit), TwoStageDiD (two-stage refit)
+  - **Rejected with NotImplementedError**: SyntheticDiD, TROP
+    (bootstrap-based variance), BaconDecomposition (diagnostic only)
+  - Estimators with replicate support reject replicate + bootstrap
     (replicate weights provide analytical variance)
 - **Note:** When invalid replicates are dropped in `compute_replicate_vcov`
   (OLS path), `n_valid` is returned and used for `df_survey = n_valid - 1`
@@ -2353,6 +2355,13 @@ Domain estimation preserving full design structure.
 - **Note:** For replicate-weight designs, `subpopulation()` zeros out both
   full-sample and replicate weight columns for excluded observations,
   preserving all replicate metadata.
+- **Note:** Estimator-level replicate refits (TWFE, SunAbraham, DiD/MultiPeriodDiD
+  with `absorb`) drop zero-weight observations before weighted demeaning to
+  prevent division-by-zero in within-transformation group means.  This matches
+  R's `survey::withReplicates()` convention where zero-weight units are excluded
+  from per-replicate estimation.  Replicates that fail despite this (e.g.,
+  rank-deficient after unit deletion) are counted as invalid and excluded from
+  variance computation.
 - **Note:** Defensive enhancement: ContinuousDiD and TripleDifference
   validate the positive-weight effective sample size before WLS cell fits.
   After `subpopulation()` zeroes weights, raw row counts may exceed the

@@ -501,16 +501,13 @@ class SunAbraham:
         if resolved_survey is not None:
             _validate_unit_constant_survey(data, unit, survey_design)
 
-        # Reject replicate-weight designs — SunAbraham's weighted
-        # within-transformation bakes survey weights into X and y, so
-        # replicate refits on the already-transformed design are incorrect.
-        # Full estimator-level replicate refits are not yet implemented.
-        if resolved_survey is not None and resolved_survey.uses_replicate_variance:
-            raise NotImplementedError(
-                "SunAbraham does not yet support replicate-weight survey designs. "
-                "The weighted within-transformation must be recomputed for each "
-                "replicate, which requires estimator-level replicate refits. "
-                "Use a TSL-based survey design (strata/psu/fpc) instead."
+        _uses_replicate_sa = (
+            resolved_survey is not None and resolved_survey.uses_replicate_variance
+        )
+        if _uses_replicate_sa and self.n_bootstrap > 0:
+            raise ValueError(
+                "Cannot use n_bootstrap > 0 with replicate-weight survey designs. "
+                "Replicate weights provide their own variance estimation."
             )
 
         # Bootstrap + survey supported via Rao-Wu rescaled bootstrap.
@@ -630,8 +627,51 @@ class SunAbraham:
             cluster_var,
             survey_weights=survey_weights,
             survey_weight_type=survey_weight_type,
-            resolved_survey=resolved_survey,
+            # For replicate designs: pass None to prevent LinearRegression from
+            # computing bogus replicate vcov on already-demeaned data.  We
+            # override vcov_cohort below with the correct estimator-level refit.
+            resolved_survey=None if _uses_replicate_sa else resolved_survey,
         )
+
+        # Replicate variance override: fully refit the IW estimator per
+        # replicate, including recomputing cohort-share aggregation weights
+        # from w_r, so replicate SEs reflect the complete estimator.
+        _n_valid_rep_sa = None
+        if _uses_replicate_sa:
+            from diff_diff.survey import compute_replicate_refit_variance
+
+            # The refit returns [overall_att, es_e0, es_e1, ...] after
+            # full re-aggregation with replicate-weighted cohort shares.
+            _sa_rel_periods = list(rel_periods_to_estimate)
+
+            def _refit_sa(w_r):
+                # Drop zero-weight obs for within-transform safety
+                nz = w_r > 0
+                df_reg_nz = df_reg[nz] if not np.all(nz) else df_reg
+                w_nz = w_r[nz] if not np.all(nz) else w_r
+                ce_r, _, vcov_r, cim_r = self._fit_saturated_regression(
+                    df_reg_nz, outcome, unit, time, first_treat,
+                    treatment_groups, _sa_rel_periods, covariates,
+                    cluster_var, survey_weights=w_nz,
+                    survey_weight_type=survey_weight_type,
+                    resolved_survey=None,
+                )
+                # Create temp weight column for IW aggregation with w_r
+                # Use full w_r (including zeros) for correct mass computation
+                _wt_col = "_rep_wt"
+                df[_wt_col] = w_r
+                es_r, _ = self._compute_iw_effects(
+                    df, unit, first_treat, treatment_groups, _sa_rel_periods,
+                    ce_r, {}, vcov_r, cim_r, survey_weight_col=_wt_col,
+                )
+                att_r, _ = self._compute_overall_att(
+                    df, first_treat, es_r, ce_r, _, vcov_r, cim_r,
+                    survey_weight_col=_wt_col,
+                )
+                results = [att_r]
+                for e in _sa_rel_periods:
+                    results.append(es_r[e]["effect"] if e in es_r else np.nan)
+                return np.array(results)
 
         # Resolve survey weight column name for cohort aggregation
         survey_weight_col = (
@@ -648,6 +688,10 @@ class SunAbraham:
             if survey_metadata is not None and survey_metadata.df_survey is not None
             else None
         )
+        # Replicate df: rank-deficient → NaN inference (dropped-replicate
+        # override happens after replicate refit below)
+        if _uses_replicate_sa and _sa_survey_df is None:
+            _sa_survey_df = 0  # rank-deficient replicate → NaN inference
 
         # Compute interaction-weighted event study effects
         event_study_effects, cohort_weights = self._compute_iw_effects(
@@ -679,6 +723,66 @@ class SunAbraham:
         overall_t, overall_p, overall_ci = safe_inference(
             overall_att, overall_se, alpha=self.alpha, df=_sa_survey_df
         )
+
+        # Replicate variance override: refit fully re-aggregated estimates
+        if _uses_replicate_sa:
+            # Build full-sample estimate vector from actual outputs
+            _full_est_sa = [overall_att]
+            for e in _sa_rel_periods:
+                _full_est_sa.append(
+                    event_study_effects[e]["effect"] if e in event_study_effects else np.nan
+                )
+
+            _vcov_sa, _n_valid_rep_sa = compute_replicate_refit_variance(
+                _refit_sa, np.array(_full_est_sa), resolved_survey
+            )
+
+            # Override df if replicates dropped
+            if _n_valid_rep_sa < resolved_survey.n_replicates:
+                _sa_survey_df = _n_valid_rep_sa - 1 if _n_valid_rep_sa > 1 else 0
+            if survey_metadata is not None:
+                survey_metadata.df_survey = _sa_survey_df if _sa_survey_df and _sa_survey_df > 0 else None
+
+            # Override overall ATT SE
+            overall_se = float(np.sqrt(max(_vcov_sa[0, 0], 0.0)))
+            overall_t, overall_p, overall_ci = safe_inference(
+                overall_att, overall_se, alpha=self.alpha, df=_sa_survey_df
+            )
+
+            # Override event-study SEs
+            for i, e in enumerate(_sa_rel_periods):
+                if e in event_study_effects and np.isfinite(event_study_effects[e]["effect"]):
+                    se_e = float(np.sqrt(max(_vcov_sa[1 + i, 1 + i], 0.0)))
+                    eff_e = event_study_effects[e]["effect"]
+                    t_e, p_e, ci_e = safe_inference(eff_e, se_e, alpha=self.alpha, df=_sa_survey_df)
+                    event_study_effects[e]["se"] = se_e
+                    event_study_effects[e]["t_stat"] = t_e
+                    event_study_effects[e]["p_value"] = p_e
+                    event_study_effects[e]["conf_int"] = ci_e
+
+            # Cohort-level replicate SEs: second refit for raw (g,e) coefficients
+            _keys_ordered = sorted(coef_index_map.keys(), key=lambda k: coef_index_map[k])
+            _full_cohort_vec = np.array([cohort_effects.get(k, np.nan) for k in _keys_ordered])
+
+            def _refit_sa_cohort(w_r):
+                nz = w_r > 0
+                df_reg_nz = df_reg[nz] if not np.all(nz) else df_reg
+                w_nz = w_r[nz] if not np.all(nz) else w_r
+                ce_r, _, _, _ = self._fit_saturated_regression(
+                    df_reg_nz, outcome, unit, time, first_treat,
+                    treatment_groups, _sa_rel_periods, covariates,
+                    cluster_var, survey_weights=w_nz,
+                    survey_weight_type=survey_weight_type,
+                    resolved_survey=None,
+                )
+                return np.array([ce_r.get(k, np.nan) for k in _keys_ordered])
+
+            _vcov_cohort_rep, _ = compute_replicate_refit_variance(
+                _refit_sa_cohort, _full_cohort_vec, resolved_survey
+            )
+            for key in _keys_ordered:
+                idx = coef_index_map[key]
+                cohort_ses[key] = float(np.sqrt(max(_vcov_cohort_rep[idx, idx], 0.0)))
 
         # Run bootstrap if requested
         bootstrap_results = None

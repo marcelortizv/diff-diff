@@ -412,7 +412,9 @@ The multiplier bootstrap uses random weights w_i with E[w]=0 and Var(w)=1:
   - Fallback: Controlled by `pscore_fallback` parameter (default `"error"`).
     If IRLS fails entirely (LinAlgError/ValueError) and `pscore_fallback="error"`,
     the error is raised. If `pscore_fallback="unconditional"`, falls back to
-    unconditional propensity score (all covariates dropped) with warning.
+    unconditional propensity score with warning. For IPW, this effectively
+    drops all covariates. For DR, the propensity model is unconditional but
+    the outcome-regression component still uses covariates.
   - **Note:** `pscore_fallback` default changed from unconditional to error.
     Set `pscore_fallback="unconditional"` for legacy behavior.
   - **Note:** When `pscore_fallback="unconditional"` triggers, the propensity-

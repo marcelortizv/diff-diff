@@ -3511,7 +3511,7 @@ class TestIRLSPropensityScore:
                 )
 
             fallback_warns = [
-                x for x in w if "covariates dropped" in str(x.message)
+                x for x in w if "unconditional propensity" in str(x.message)
             ]
             assert len(fallback_warns) > 0, "Expected fallback warning in DR path"
             assert results.overall_att is not None
@@ -3708,7 +3708,7 @@ class TestEPVDiagnostics:
                     covariates=["x1"],
                 )
             fallback_warns = [
-                x for x in w if "covariates dropped" in str(x.message)
+                x for x in w if "unconditional propensity" in str(x.message)
             ]
             assert len(fallback_warns) > 0
             assert results.overall_att is not None

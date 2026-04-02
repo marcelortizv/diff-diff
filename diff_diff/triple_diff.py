@@ -389,10 +389,11 @@ class TripleDifference:
         - "silent": Drop columns silently without warning
     epv_threshold : float, default=10
         Events Per Variable threshold for propensity score logit.
-        When the ratio of minority-class observations to parameters
-        falls below this value, a warning is emitted (or ``ValueError``
-        raised if ``rank_deficient_action="error"``). Based on Peduzzi
-        et al. (1996). Only applies to IPW and DR estimation methods.
+        When the ratio of minority-class observations to predictor
+        variables (excluding intercept) falls below this value, a
+        warning is emitted (or ``ValueError`` raised if
+        ``rank_deficient_action="error"``). Based on Peduzzi et al.
+        (1996). Only applies to IPW and DR estimation methods.
     pscore_fallback : str, default="error"
         Action when propensity score estimation fails:
         - "error": Raise the exception (default)

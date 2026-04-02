@@ -192,10 +192,11 @@ class CallawaySantAnna(
         functions.
     epv_threshold : float, default=10
         Events Per Variable threshold for propensity score logit.
-        When the ratio of minority-class observations to parameters
-        falls below this value, a warning is emitted (or ``ValueError``
-        raised if ``rank_deficient_action="error"``). Based on Peduzzi
-        et al. (1996). Only applies to IPW and DR estimation methods.
+        When the ratio of minority-class observations to predictor
+        variables (excluding intercept) falls below this value, a
+        warning is emitted (or ``ValueError`` raised if
+        ``rank_deficient_action="error"``). Based on Peduzzi et al.
+        (1996). Only applies to IPW and DR estimation methods.
         Use ``diagnose_propensity()`` for a pre-estimation check across
         all cohorts.
     pscore_fallback : str, default="error"
@@ -2443,7 +2444,8 @@ class CallawaySantAnna(
                     warnings.warn(
                         f"Propensity score estimation failed{ctx}. "
                         f"Falling back to unconditional propensity "
-                        f"(all covariates dropped for this cell). "
+                        f"(propensity model ignores covariates; outcome "
+                        f"regression still uses them). "
                         f"Consider estimation_method='reg' to avoid "
                         f"propensity scores entirely.",
                         UserWarning,
@@ -3519,7 +3521,8 @@ class CallawaySantAnna(
             warnings.warn(
                 f"Propensity score estimation failed{ctx} (RCS DR). "
                 f"Falling back to unconditional propensity "
-                f"(all covariates dropped for this cell). "
+                f"(propensity model ignores covariates; outcome "
+                f"regression still uses them). "
                 f"Consider estimation_method='reg' to avoid "
                 f"propensity scores entirely.",
                 UserWarning,

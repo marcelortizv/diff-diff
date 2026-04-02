@@ -657,9 +657,9 @@ class SunAbraham:
                     resolved_survey=None,
                 )
                 # Create temp weight column for IW aggregation with w_r
+                # Use full w_r (including zeros) for correct mass computation
                 _wt_col = "_rep_wt"
-                df[_wt_col] = 0.0
-                df.loc[df.index[:len(w_r)], _wt_col] = w_r
+                df[_wt_col] = w_r
                 es_r, _ = self._compute_iw_effects(
                     df, unit, first_treat, treatment_groups, _sa_rel_periods,
                     ce_r, {}, vcov_r, cim_r, survey_weight_col=_wt_col,

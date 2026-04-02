@@ -763,7 +763,7 @@ where weights ŵ_{g,e} = n_{g,e} / Σ_g n_{g,e} (sample share of cohort g at eve
 - [x] R comparison: ATT matches within machine precision (<1e-11)
 - [x] R comparison: SE matches within 0.3% (well within 1% threshold)
 - [x] R comparison: Event study effects match perfectly (correlation 1.0)
-- [x] Survey design support (Phase 3): weighted within-transform, survey weights in LinearRegression with TSL vcov; bootstrap+survey supported (Phase 6) via Rao-Wu rescaled bootstrap
+- [x] Survey design support (Phase 3): weighted within-transform, survey weights in LinearRegression with TSL vcov; bootstrap+survey supported (Phase 6) via Rao-Wu rescaled bootstrap. Replicate weights supported via estimator-level refit (see Replicate Weight Variance section); replicate+bootstrap rejected.
 
 ---
 
@@ -1036,7 +1036,7 @@ The paper text states a stricter bound (T_min + 1) but the R code by the co-auth
 - [x] Overall ATT as average of post-treatment delta_h with delta-method SE
 - [x] Anticipation parameter support
 - [x] Never-treated encoding (0 and inf)
-- [x] Survey design support (Phase 3): Q-weights compose multiplicatively with survey weights; TSL vcov on composed weights; survey design columns propagated through sub-experiments
+- [x] Survey design support (Phase 3): Q-weights compose multiplicatively with survey weights; TSL vcov on composed weights; survey design columns propagated through sub-experiments. Replicate weights supported via estimator-level refit with Q-weight composition (see Replicate Weight Variance section).
 - **Note:** Survey weights compose multiplicatively with Q-weights for StackedDiD; only `weight_type="pweight"` (default) is supported — `fweight` and `aweight` are rejected because Q-weight composition changes weight semantics (non-integer for fweight, non-inverse-variance for aweight)
 
 ---

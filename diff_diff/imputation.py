@@ -551,40 +551,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             _rel_times_treated = df.loc[omega_1_mask, "_rel_time"].values
             _cohorts_treated = df.loc[omega_1_mask, first_treat].values
 
-            # Overall ATT replicate variance (scalar, always robust)
-            def _refit_imp_overall(w_r):
-                ufe_r, tfe_r, gm_r, delta_r, _ = self._fit_untreated_model(
-                    df, outcome, unit, time, covariates, omega_0_mask, weights=w_r,
-                )
-                tau_r, _ = self._impute_treatment_effects(
-                    df, outcome, unit, time, covariates, omega_1_mask,
-                    ufe_r, tfe_r, gm_r, delta_r,
-                )
-                fin = np.isfinite(tau_r)
-                tw = w_r[omega_1_mask.values]
-                tw_fin = tw[fin]
-                s = np.sum(tw_fin)
-                return np.array([float(np.sum(tau_r[fin] * tw_fin) / s) if s > 0 else np.nan])
-
-            _vcov_att, _n_valid_rep_imp = compute_replicate_refit_variance(
-                _refit_imp_overall, np.array([overall_att]), resolved_survey
-            )
-            overall_se = float(np.sqrt(max(_vcov_att[0, 0], 0.0)))
-
-            # Override df if replicates were dropped
-            if _n_valid_rep_imp < resolved_survey.n_replicates:
-                _survey_df = _n_valid_rep_imp - 1 if _n_valid_rep_imp > 1 else 0
-            if survey_metadata is not None:
-                survey_metadata.df_survey = _survey_df if _survey_df and _survey_df > 0 else None
-
-            # Recompute overall inference with replicate SE/df
-            overall_t, overall_p, overall_ci = safe_inference(
-                overall_att, overall_se, alpha=self.alpha, df=_survey_df
-            )
-
-            # Event-study/group replicate SEs: per-effect scalar refits
-            # Derive keys from actual outputs (excludes filtered/Prop5 horizons
-            # and the synthetic reference period marker with n_obs==0)
+            # Derive keys from actual outputs (excludes filtered/Prop5/ref)
             _sorted_rel_times = sorted(
                 e for e in (event_study_effects or {}).keys()
                 if np.isfinite(event_study_effects[e]["effect"])
@@ -594,10 +561,9 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 g for g in (group_effects or {}).keys()
                 if np.isfinite(group_effects[g]["effect"])
             )
+            _n_es = len(_sorted_rel_times)
 
-            # Pre-compute balanced cohort mask for balance_e.  Use the
-            # full treated horizon set (before Prop 5 filtering), matching
-            # exactly what _aggregate_event_study() does at line 1591-1602.
+            # Pre-compute balanced cohort mask for balance_e
             _balanced_mask_treated = None
             if balance_e is not None and _sorted_rel_times:
                 df_1 = df.loc[omega_1_mask]
@@ -614,68 +580,81 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                     df_1, first_treat, all_horizons_full, balance_e, cohort_rel_times
                 )
 
-            for e in _sorted_rel_times:
-                def _refit_es(w_r, _e=e):
-                    ufe_r, tfe_r, gm_r, delta_r, _ = self._fit_untreated_model(
-                        df, outcome, unit, time, covariates, omega_0_mask, weights=w_r,
-                    )
-                    tau_r, _ = self._impute_treatment_effects(
-                        df, outcome, unit, time, covariates, omega_1_mask,
-                        ufe_r, tfe_r, gm_r, delta_r,
-                    )
-                    fin = np.isfinite(tau_r)
-                    mask_e = fin & (_rel_times_treated == _e)
-                    # Apply balance_e cohort filter (same as _aggregate_event_study)
+            # Single vectorized refit: [overall, es_e0..., grp_g0...]
+            def _refit_imp(w_r):
+                ufe_r, tfe_r, gm_r, delta_r, _ = self._fit_untreated_model(
+                    df, outcome, unit, time, covariates, omega_0_mask, weights=w_r,
+                )
+                tau_r, _ = self._impute_treatment_effects(
+                    df, outcome, unit, time, covariates, omega_1_mask,
+                    ufe_r, tfe_r, gm_r, delta_r,
+                )
+                fin = np.isfinite(tau_r)
+                treated_w = w_r[omega_1_mask.values]
+                results = []
+                # [0] Overall ATT
+                tw_fin = treated_w[fin]
+                tw_sum = np.sum(tw_fin)
+                results.append(
+                    float(np.sum(tau_r[fin] * tw_fin) / tw_sum) if tw_sum > 0 else np.nan
+                )
+                # [1..n_es] Event-study (identified only)
+                for e in _sorted_rel_times:
+                    mask_e = fin & (_rel_times_treated == e)
                     if _balanced_mask_treated is not None:
                         mask_e = mask_e & _balanced_mask_treated
-                    tw_e = w_r[omega_1_mask.values][mask_e]
+                    tw_e = treated_w[mask_e]
                     s = np.sum(tw_e)
-                    return np.array([float(np.sum(tau_r[mask_e] * tw_e) / s) if s > 0 else np.nan])
-
-                eff_e = event_study_effects[e]["effect"]
-                vcov_e, nv_e = compute_replicate_refit_variance(
-                    _refit_es, np.array([eff_e]), resolved_survey
-                )
-                se_e = float(np.sqrt(max(vcov_e[0, 0], 0.0)))
-                # Use effect-specific df when replicates were dropped
-                df_e = _survey_df
-                if nv_e < resolved_survey.n_replicates:
-                    df_e = nv_e - 1 if nv_e > 1 else 0
-                t_e, p_e, ci_e = safe_inference(eff_e, se_e, alpha=self.alpha, df=df_e)
-                event_study_effects[e]["se"] = se_e
-                event_study_effects[e]["t_stat"] = t_e
-                event_study_effects[e]["p_value"] = p_e
-                event_study_effects[e]["conf_int"] = ci_e
-
-            for g in _sorted_groups:
-                def _refit_grp(w_r, _g=g):
-                    ufe_r, tfe_r, gm_r, delta_r, _ = self._fit_untreated_model(
-                        df, outcome, unit, time, covariates, omega_0_mask, weights=w_r,
-                    )
-                    tau_r, _ = self._impute_treatment_effects(
-                        df, outcome, unit, time, covariates, omega_1_mask,
-                        ufe_r, tfe_r, gm_r, delta_r,
-                    )
-                    fin = np.isfinite(tau_r)
-                    mask_g = fin & (_cohorts_treated == _g)
-                    tw_g = w_r[omega_1_mask.values][mask_g]
+                    results.append(float(np.sum(tau_r[mask_e] * tw_e) / s) if s > 0 else np.nan)
+                # [n_es+1..] Group (identified only)
+                for g in _sorted_groups:
+                    mask_g = fin & (_cohorts_treated == g)
+                    tw_g = treated_w[mask_g]
                     s = np.sum(tw_g)
-                    return np.array([float(np.sum(tau_r[mask_g] * tw_g) / s) if s > 0 else np.nan])
+                    results.append(float(np.sum(tau_r[mask_g] * tw_g) / s) if s > 0 else np.nan)
+                return np.array(results)
 
-                eff_g = group_effects[g]["effect"]
-                vcov_g, nv_g = compute_replicate_refit_variance(
-                    _refit_grp, np.array([eff_g]), resolved_survey
-                )
-                se_g = float(np.sqrt(max(vcov_g[0, 0], 0.0)))
-                # Use effect-specific df when replicates were dropped
-                df_g = _survey_df
-                if nv_g < resolved_survey.n_replicates:
-                    df_g = nv_g - 1 if nv_g > 1 else 0
-                t_g, p_g, ci_g = safe_inference(eff_g, se_g, alpha=self.alpha, df=df_g)
-                group_effects[g]["se"] = se_g
-                group_effects[g]["t_stat"] = t_g
-                group_effects[g]["p_value"] = p_g
-                group_effects[g]["conf_int"] = ci_g
+            # Build full-sample estimate from actual effects
+            _full_est = [overall_att]
+            _full_est.extend([event_study_effects[e]["effect"] for e in _sorted_rel_times])
+            _full_est.extend([group_effects[g]["effect"] for g in _sorted_groups])
+
+            _vcov_rep_imp, _n_valid_rep_imp = compute_replicate_refit_variance(
+                _refit_imp, np.array(_full_est), resolved_survey
+            )
+            overall_se = float(np.sqrt(max(_vcov_rep_imp[0, 0], 0.0)))
+
+            # Override df if replicates were dropped
+            if _n_valid_rep_imp < resolved_survey.n_replicates:
+                _survey_df = _n_valid_rep_imp - 1 if _n_valid_rep_imp > 1 else 0
+            if survey_metadata is not None:
+                survey_metadata.df_survey = _survey_df if _survey_df and _survey_df > 0 else None
+
+            overall_t, overall_p, overall_ci = safe_inference(
+                overall_att, overall_se, alpha=self.alpha, df=_survey_df
+            )
+
+            # Override event-study SEs from vcov diagonal
+            for i, e in enumerate(_sorted_rel_times):
+                if event_study_effects is not None and e in event_study_effects:
+                    se_e = float(np.sqrt(max(_vcov_rep_imp[1 + i, 1 + i], 0.0)))
+                    eff_e = event_study_effects[e]["effect"]
+                    t_e, p_e, ci_e = safe_inference(eff_e, se_e, alpha=self.alpha, df=_survey_df)
+                    event_study_effects[e]["se"] = se_e
+                    event_study_effects[e]["t_stat"] = t_e
+                    event_study_effects[e]["p_value"] = p_e
+                    event_study_effects[e]["conf_int"] = ci_e
+
+            # Override group SEs from vcov diagonal
+            for j, g in enumerate(_sorted_groups):
+                if group_effects is not None and g in group_effects:
+                    se_g = float(np.sqrt(max(_vcov_rep_imp[1 + _n_es + j, 1 + _n_es + j], 0.0)))
+                    eff_g = group_effects[g]["effect"]
+                    t_g, p_g, ci_g = safe_inference(eff_g, se_g, alpha=self.alpha, df=_survey_df)
+                    group_effects[g]["se"] = se_g
+                    group_effects[g]["t_stat"] = t_g
+                    group_effects[g]["p_value"] = p_g
+                    group_effects[g]["conf_int"] = ci_g
 
         # Build treatment effects dataframe
         treated_df = df.loc[omega_1_mask, [unit, time, "_tau_hat", "_rel_time"]].copy()

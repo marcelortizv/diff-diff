@@ -1728,11 +1728,11 @@ class TestEPVDiagnostics:
         # 15 events, 2 predictor variables → EPV = 7.5
         y = np.concatenate([np.ones(15), np.zeros(n - 15)])
 
-        # Default threshold 10 → should warn (EPV=5)
+        # Default threshold 10 → should warn (EPV=7.5 < 10)
         with pytest.warns(UserWarning, match="Low Events Per Variable"):
             solve_logit(X, y, epv_threshold=10)
 
-        # Threshold 3 → should not warn (EPV=5 >= 3)
+        # Threshold 3 → should not warn (EPV=7.5 >= 3)
         import warnings
 
         with warnings.catch_warnings(record=True) as w:

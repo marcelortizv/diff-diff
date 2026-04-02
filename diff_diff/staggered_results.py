@@ -310,7 +310,8 @@ class CallawaySantAnnaResults:
                         "is_low": diag.get("is_low", False),
                     }
                 )
-        return pd.DataFrame(rows)
+        cols = ["group", "time", "epv", "n_events", "n_params", "is_low"]
+        return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
 
     def print_summary(self, alpha: Optional[float] = None) -> None:
         """Print summary to stdout."""

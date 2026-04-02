@@ -335,7 +335,8 @@ class TripleDifferenceResults:
                         "is_low": diag.get("is_low", False),
                     }
                 )
-        return pd.DataFrame(rows)
+        cols = ["subgroup", "epv", "n_events", "n_params", "is_low"]
+        return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
 
 
 # =============================================================================

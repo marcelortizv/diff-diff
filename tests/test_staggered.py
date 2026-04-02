@@ -3760,7 +3760,7 @@ class TestEPVDiagnostics:
             data, outcome="outcome", unit="unit", time="time",
             first_treat="first_treat", covariates=["x1", "x2", "x3"],
         )
-        # With 1 treated unit and 3 covariates: EPV = 1/4 = 0.25 → critical
+        # With 1 treated unit and 3 predictor variables: EPV = 1/3 ≈ 0.33 → critical
         assert any(df["status"] == "critical")
 
     def test_cs_epv_in_summary_output(self):

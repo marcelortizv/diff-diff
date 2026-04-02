@@ -1683,7 +1683,7 @@ class TestEPVDiagnostics:
         from diff_diff.linalg import solve_logit
 
         rng = np.random.default_rng(42)
-        # 40 events (minority class), 9 params (8 covariates + intercept) → EPV = 4.4
+        # 40 events (minority class), 8 predictor variables → EPV = 5.0
         n = 200
         X = rng.standard_normal((n, 8))
         y = np.concatenate([np.ones(40), np.zeros(n - 40)])
@@ -1695,7 +1695,7 @@ class TestEPVDiagnostics:
         from diff_diff.linalg import solve_logit
 
         rng = np.random.default_rng(42)
-        # 100 events, 3 params (2 covariates + intercept) → EPV = 33.3
+        # 100 events, 2 predictor variables → EPV = 50
         n = 200
         X = rng.standard_normal((n, 2))
         y = np.concatenate([np.ones(100), np.zeros(100)])
@@ -1725,7 +1725,7 @@ class TestEPVDiagnostics:
         rng = np.random.default_rng(42)
         n = 200
         X = rng.standard_normal((n, 2))
-        # 15 events, 3 params → EPV = 5.0
+        # 15 events, 2 predictor variables → EPV = 7.5
         y = np.concatenate([np.ones(15), np.zeros(n - 15)])
 
         # Default threshold 10 → should warn (EPV=5)

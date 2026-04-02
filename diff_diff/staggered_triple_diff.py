@@ -1389,7 +1389,8 @@ class StaggeredTripleDifference(
                 warnings.warn(
                     f"Propensity score estimation failed{ctx}. "
                     f"Falling back to unconditional propensity "
-                    f"(all covariates dropped for this cell). "
+                    f"(propensity model ignores covariates; outcome "
+                    f"regression still uses them for DR). "
                     f"Consider estimation_method='reg' to avoid "
                     f"propensity scores entirely.",
                     UserWarning,

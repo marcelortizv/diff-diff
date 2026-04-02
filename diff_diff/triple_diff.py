@@ -398,7 +398,9 @@ class TripleDifference:
         Action when propensity score estimation fails:
         - "error": Raise the exception (default)
         - "unconditional": Fall back to unconditional propensity with
-          a warning (drops all covariates for the affected comparison)
+          a warning. For IPW, drops all covariates. For DR, the
+          propensity model becomes unconditional but outcome regression
+          still uses covariates.
         When ``rank_deficient_action="error"``, errors are always
         re-raised regardless of this setting.
 
@@ -1040,8 +1042,8 @@ class TripleDifference:
                         ps_estimated = False
                         warnings.warn(
                             f"Propensity score estimation failed for subgroup "
-                            f"{j} vs 4; dropping covariates and using "
-                            f"unconditional probability. "
+                            f"{j} vs 4; using unconditional probability. "
+                            f"For DR, outcome regression still uses covariates. "
                             f"Consider estimation_method='reg' to avoid propensity "
                             f"scores entirely.",
                             UserWarning,

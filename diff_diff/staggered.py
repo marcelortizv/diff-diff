@@ -205,8 +205,9 @@ class CallawaySantAnna(
         - "error": Raise the exception (default). Ensures the user is
           aware of estimation failures.
         - "unconditional": Fall back to unconditional propensity
-          ``n_treated / (n_treated + n_control)`` with a warning. This
-          effectively drops all covariates for the affected cell.
+          with a warning. For IPW, this drops all covariates. For DR,
+          the propensity model becomes unconditional but outcome
+          regression still uses covariates.
         When ``rank_deficient_action="error"``, errors are always
         re-raised regardless of this setting.
 

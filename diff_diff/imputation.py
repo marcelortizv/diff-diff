@@ -581,10 +581,12 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             )
 
             # Event-study/group replicate SEs: per-effect scalar refits
-            # Derive keys from actual outputs (excludes filtered/Prop5 horizons)
+            # Derive keys from actual outputs (excludes filtered/Prop5 horizons
+            # and the synthetic reference period marker with n_obs==0)
             _sorted_rel_times = sorted(
                 e for e in (event_study_effects or {}).keys()
                 if np.isfinite(event_study_effects[e]["effect"])
+                and event_study_effects[e].get("n_obs", 1) > 0
             )
             _sorted_groups = sorted(
                 g for g in (group_effects or {}).keys()

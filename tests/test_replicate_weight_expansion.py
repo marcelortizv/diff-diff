@@ -147,6 +147,23 @@ class TestDiDReplicate:
             )
 
 
+class TestDiDAbsorbReplicate:
+    """DiD absorb path with replicate weights."""
+
+    def test_did_absorb_brr(self):
+        """Absorb path should produce finite replicate SE."""
+        data = _make_simple_panel()
+        # Add a group column for absorb
+        data["group"] = (data["unit"] % 4).astype(str)
+        rep_cols = _add_brr_replicates(data, n_rep=16)
+        sd = SurveyDesign(weights="weight", replicate_weights=rep_cols, replicate_method="BRR")
+        result = DifferenceInDifferences().fit(
+            data, "outcome", "treated", "post", absorb=["group"], survey_design=sd,
+        )
+        assert np.isfinite(result.att)
+        assert np.isfinite(result.se) and result.se > 0
+
+
 class TestMultiPeriodDiDReplicate:
     """MultiPeriodDiD with replicate weights."""
 

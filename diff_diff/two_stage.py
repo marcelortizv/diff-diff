@@ -305,11 +305,14 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         if n_always_treated > 0:
             unit_list = ", ".join(str(u) for u in always_treated_units[:10])
             suffix = f" (and {n_always_treated - 10} more)" if n_always_treated > 10 else ""
+            survey_note = ""
+            if survey_weights is not None or resolved_survey is not None:
+                survey_note = " Associated survey weights and design arrays " "adjusted to match."
             warnings.warn(
                 f"{n_always_treated} unit(s) are treated in all observed periods "
                 f"(first_treat <= {min_time}): [{unit_list}{suffix}]. "
                 "These units have no untreated observations and cannot contribute "
-                "to the counterfactual model. Excluding from estimation.",
+                f"to the counterfactual model. Excluding from estimation.{survey_note}",
                 UserWarning,
                 stacklevel=2,
             )
@@ -1051,6 +1054,14 @@ class TwoStageDiD(TwoStageDiDBootstrapMixin):
         # or contribute NaN treatment effects (excluded from point estimate).
         nan_mask = ~np.isfinite(y_tilde)
         if nan_mask.any():
+            n_nan = int(nan_mask.sum())
+            warnings.warn(
+                f"{n_nan} observation(s) have non-finite imputed outcomes "
+                f"(y_tilde) from unidentified fixed effects. These "
+                f"observations are excluded from ATT estimation.",
+                UserWarning,
+                stacklevel=2,
+            )
             y_tilde[nan_mask] = 0.0
 
         D = omega_1_mask.values.astype(float)

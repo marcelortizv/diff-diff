@@ -370,6 +370,13 @@ class TROPGlobalMixin:
             coeffs, _, _, _ = np.linalg.lstsq(X_weighted, y_weighted, rcond=None)
         except np.linalg.LinAlgError:
             # Fallback: use pseudo-inverse
+            warnings.warn(
+                "Least-squares solver failed in TROP global estimation; "
+                "falling back to pseudo-inverse. Results may be less "
+                "numerically stable.",
+                UserWarning,
+                stacklevel=2,
+            )
             coeffs = np.dot(np.linalg.pinv(X_weighted), y_weighted)
 
         # Extract parameters
@@ -560,6 +567,15 @@ class TROPGlobalMixin:
             index=all_periods, columns=all_units
         )
         missing_mask = pd.isna(D_raw).values
+        n_missing_treatment = int(pd.isna(D_raw).sum().sum())
+        if n_missing_treatment > 0:
+            warnings.warn(
+                f"{n_missing_treatment} missing treatment indicator(s) in the "
+                f"(time x unit) panel matrix filled with 0 (assumed "
+                f"untreated). This typically occurs in unbalanced panels.",
+                UserWarning,
+                stacklevel=2,
+            )
         D = D_raw.fillna(0).astype(int).values
 
         # Validate absorbing state
@@ -691,6 +707,13 @@ class TROPGlobalMixin:
                 # Fall back to Python implementation on error
                 logger.debug(
                     "Rust LOOCV grid search (global) failed, falling back to Python: %s", e
+                )
+                warnings.warn(
+                    f"Rust backend failed for LOOCV grid search (global); "
+                    f"falling back to Python. Performance may be reduced. "
+                    f"Error: {e}",
+                    UserWarning,
+                    stacklevel=2,
                 )
                 best_lambda = None
                 best_score = np.inf
@@ -952,6 +975,13 @@ class TROPGlobalMixin:
 
             except Exception as e:
                 logger.debug("Rust bootstrap (global) failed, falling back to Python: %s", e)
+                warnings.warn(
+                    f"Rust backend failed for bootstrap variance (global); "
+                    f"falling back to Python. Performance may be reduced. "
+                    f"Error: {e}",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         # Python fallback implementation
         rng = np.random.default_rng(self.seed)

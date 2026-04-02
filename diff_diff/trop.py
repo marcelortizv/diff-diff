@@ -524,6 +524,15 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
             index=all_periods, columns=all_units
         )
         missing_mask = pd.isna(D_raw).values  # True where originally missing
+        n_missing_treatment = int(pd.isna(D_raw).sum().sum())
+        if n_missing_treatment > 0:
+            warnings.warn(
+                f"{n_missing_treatment} missing treatment indicator(s) in the "
+                f"(time x unit) panel matrix filled with 0 (assumed "
+                f"untreated). This typically occurs in unbalanced panels.",
+                UserWarning,
+                stacklevel=2,
+            )
         D = D_raw.fillna(0).astype(int).values
 
         # Validate D is monotonic non-decreasing per unit (absorbing state)
@@ -652,6 +661,13 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
             except Exception as e:
                 # Fall back to Python implementation on error
                 logger.debug("Rust LOOCV grid search failed, falling back to Python: %s", e)
+                warnings.warn(
+                    f"Rust backend failed for LOOCV grid search; "
+                    f"falling back to Python. Performance may be reduced. "
+                    f"Error: {e}",
+                    UserWarning,
+                    stacklevel=2,
+                )
                 best_lambda = None
                 best_score = np.inf
 

@@ -192,7 +192,15 @@ class SurveyDesign:
             if self.replicate_weights is not None:
                 weights = raw_weights.copy()
             elif self.weight_type in ("pweight", "aweight"):
-                weights = raw_weights * (n / np.sum(raw_weights))
+                raw_sum = float(np.sum(raw_weights))
+                weights = raw_weights * (n / raw_sum)
+                if not np.isclose(raw_sum, n):
+                    warnings.warn(
+                        f"{self.weight_type} weights normalized to mean=1 "
+                        f"(sum={n}). Original sum was {raw_sum:.4g}.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
             else:
                 weights = raw_weights.copy()
         else:

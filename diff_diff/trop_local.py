@@ -928,6 +928,13 @@ class TROPLocalMixin:
                 )
             except Exception as e:
                 logger.debug("Rust bootstrap variance failed, falling back to Python: %s", e)
+                warnings.warn(
+                    f"Rust backend failed for bootstrap variance; "
+                    f"falling back to Python. Performance may be reduced. "
+                    f"Error: {e}",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         # Python implementation (fallback)
         rng = np.random.default_rng(self.seed)

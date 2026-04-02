@@ -3294,3 +3294,41 @@ class TestRound23Fixes:
         assert result is not None
         assert np.isfinite(result.se)
         assert result.se > 0
+
+
+class TestSilentWarningAudit:
+    """Tests for UserWarning emissions added by the silent warning audit."""
+
+    def test_item7_weight_normalization_warning(self):
+        """Item 7: Warn when pweight/aweight are normalized."""
+        n = 100
+        raw_weights = np.random.default_rng(42).uniform(1.0, 10.0, n)
+        assert not np.isclose(np.sum(raw_weights), n)
+
+        df = pd.DataFrame({"x": np.arange(n), "w": raw_weights})
+        sd = SurveyDesign(weights="w", weight_type="pweight")
+        with pytest.warns(UserWarning, match="pweight weights normalized"):
+            sd.resolve(df)
+
+    def test_item7_no_warning_when_already_normalized(self):
+        """Item 7 negative: No warning when weights already sum to n."""
+        n = 100
+        raw_weights = np.ones(n)  # sum = n, mean = 1
+        assert np.isclose(np.sum(raw_weights), n)
+
+        df = pd.DataFrame({"x": np.arange(n), "w": raw_weights})
+        sd = SurveyDesign(weights="w", weight_type="pweight")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            sd.resolve(df)
+        norm_warnings = [x for x in w if "normalized" in str(x.message)]
+        assert len(norm_warnings) == 0
+
+    def test_item7_aweight_normalization_warning(self):
+        """Item 7: aweight also triggers normalization warning."""
+        n = 50
+        raw_weights = np.random.default_rng(42).uniform(1.0, 5.0, n)
+        df = pd.DataFrame({"x": np.arange(n), "w": raw_weights})
+        sd = SurveyDesign(weights="w", weight_type="aweight")
+        with pytest.warns(UserWarning, match="aweight weights normalized"):
+            sd.resolve(df)

@@ -320,8 +320,7 @@ class CallawaySantAnna(
             raise ValueError(f"epv_threshold must be > 0, got {epv_threshold}")
         if pscore_fallback not in ["error", "unconditional"]:
             raise ValueError(
-                f"pscore_fallback must be 'error' or 'unconditional', "
-                f"got '{pscore_fallback}'"
+                f"pscore_fallback must be 'error' or 'unconditional', " f"got '{pscore_fallback}'"
             )
 
         # Handle bootstrap_weight_type deprecation
@@ -429,30 +428,53 @@ class CallawaySantAnna(
         if self.estimation_method == "reg":
             return pd.DataFrame(
                 columns=[
-                    "group", "n_treated", "n_control",
-                    "n_covariates", "n_params", "epv", "status",
+                    "group",
+                    "n_treated",
+                    "n_control",
+                    "n_covariates",
+                    "n_params",
+                    "epv",
+                    "status",
                 ]
             )
         if not covariates:
             return pd.DataFrame(
                 columns=[
-                    "group", "n_treated", "n_control",
-                    "n_covariates", "n_params", "epv", "status",
+                    "group",
+                    "n_treated",
+                    "n_control",
+                    "n_covariates",
+                    "n_params",
+                    "epv",
+                    "status",
                 ]
             )
 
         # Normalize np.inf → 0 for never-treated encoding (same as fit())
         df = df.copy()
+        _inf_mask_diag = df[first_treat].isin([np.inf, float("inf")])
+        if _inf_mask_diag.any():
+            n_inf_units = df.loc[_inf_mask_diag, unit].nunique()
+            warnings.warn(
+                f"{n_inf_units} unit(s) have first_treat=inf; recoding to 0 "
+                f"(never-treated). Use first_treat=0 to suppress this warning.",
+                UserWarning,
+                stacklevel=2,
+            )
         df[first_treat] = df[first_treat].replace([np.inf, float("inf")], 0)
 
         # Compute time_periods and treatment_groups (same logic as fit())
         time_periods = sorted(df[time].unique())
-        treatment_groups = sorted(
-            [g for g in df[first_treat].unique() if g > 0]
-        )
+        treatment_groups = sorted([g for g in df[first_treat].unique() if g > 0])
         precomputed = self._precompute_structures(
-            df, outcome, unit, time, first_treat, covariates,
-            time_periods=time_periods, treatment_groups=treatment_groups,
+            df,
+            outcome,
+            unit,
+            time,
+            first_treat,
+            covariates,
+            time_periods=time_periods,
+            treatment_groups=treatment_groups,
         )
         cohort_masks = precomputed["cohort_masks"]
         never_treated_mask = precomputed["never_treated_mask"]
@@ -484,15 +506,17 @@ class CallawaySantAnna(
             else:
                 status = "critical"
 
-            rows.append({
-                "group": g,
-                "n_treated": n_treated,
-                "n_control": n_control,
-                "n_covariates": n_covariates,
-                "n_params": n_params,
-                "epv": round(epv, 1),
-                "status": status,
-            })
+            rows.append(
+                {
+                    "group": g,
+                    "n_treated": n_treated,
+                    "n_control": n_control,
+                    "n_covariates": n_covariates,
+                    "n_params": n_params,
+                    "epv": round(epv, 1),
+                    "status": status,
+                }
+            )
 
         return pd.DataFrame(rows)
 
@@ -707,9 +731,9 @@ class CallawaySantAnna(
 
         # Guard against zero effective mass after subpopulation filtering
         if sw_treated is not None and np.sum(sw_treated) <= 0:
-            return np.nan, np.nan, 0, 0, None, None
+            return None, 0.0, 0, 0, None, None
         if sw_control is not None and np.sum(sw_control) <= 0:
-            return np.nan, np.nan, 0, 0, None, None
+            return None, 0.0, 0, 0, None, None
 
         # Get covariates if specified (from the base period)
         X_treated = None
@@ -824,7 +848,7 @@ class CallawaySantAnna(
         treatment_groups: List[Any],
         time_periods: List[Any],
         min_period: Any,
-    ) -> Tuple[Dict, Dict]:
+    ) -> Tuple[Dict, Dict, Dict]:
         """
         Vectorized computation of all ATT(g,t) for the no-covariates regression case.
 
@@ -847,6 +871,8 @@ class CallawaySantAnna(
 
         group_time_effects = {}
         influence_func_info = {}
+        skipped_missing_period: List[Tuple] = []
+        skipped_empty_cell: List[Tuple] = []
 
         # Collect all valid (g, t, base_col, post_col) tuples
         tasks = []
@@ -870,6 +896,7 @@ class CallawaySantAnna(
                         base_period_val = g - 1 - self.anticipation
 
                 if base_period_val not in period_to_col or t not in period_to_col:
+                    skipped_missing_period.append((g, t))
                     continue
 
                 tasks.append(
@@ -905,6 +932,7 @@ class CallawaySantAnna(
             n_control = np.sum(control_valid)
 
             if n_treated == 0 or n_control == 0:
+                skipped_empty_cell.append((g, t))
                 continue
 
             treated_change = outcome_change[treated_valid]
@@ -919,6 +947,7 @@ class CallawaySantAnna(
                 sw_c = survey_w[control_valid]
                 # Guard against zero effective mass
                 if np.sum(sw_t) <= 0 or np.sum(sw_c) <= 0:
+                    skipped_empty_cell.append((g, t))
                     continue
                 sw_t_norm = sw_t / np.sum(sw_t)
                 sw_c_norm = sw_c / np.sum(sw_c)
@@ -1000,7 +1029,11 @@ class CallawaySantAnna(
                 group_time_effects[key]["p_value"] = float(p_values[idx])
                 group_time_effects[key]["conf_int"] = (float(ci_lowers[idx]), float(ci_uppers[idx]))
 
-        return group_time_effects, influence_func_info
+        skip_info = {
+            "missing_period": skipped_missing_period,
+            "empty_cell": skipped_empty_cell,
+        }
+        return group_time_effects, influence_func_info, skip_info
 
     def _compute_all_att_gt_covariate_reg(
         self,
@@ -1008,7 +1041,7 @@ class CallawaySantAnna(
         treatment_groups: List[Any],
         time_periods: List[Any],
         min_period: Any,
-    ) -> Tuple[Dict, Dict]:
+    ) -> Tuple[Dict, Dict, Dict]:
         """
         Optimized computation of all ATT(g,t) for the covariate regression case.
 
@@ -1037,6 +1070,8 @@ class CallawaySantAnna(
         ses = []
         task_keys = []
         n_nan_cells = 0
+        skipped_missing_period: List[Tuple] = []
+        skipped_empty_cell: List[Tuple] = []
 
         # Collect all valid (g, t) tasks with their base periods
         tasks_by_group = {}  # control_key -> list of (g, t, base_period_val, base_col, post_col)
@@ -1059,6 +1094,7 @@ class CallawaySantAnna(
                         base_period_val = g - 1 - self.anticipation
 
                 if base_period_val not in period_to_col or t not in period_to_col:
+                    skipped_missing_period.append((g, t))
                     continue
 
                 # Determine control regression grouping key.
@@ -1108,6 +1144,7 @@ class CallawaySantAnna(
             # Build X_ctrl with intercept
             n_c_base = int(np.sum(control_valid_base))
             if n_c_base == 0:
+                skipped_empty_cell.extend((g, t) for g, t, *_ in tasks)
                 continue
 
             X_ctrl = None
@@ -1176,6 +1213,7 @@ class CallawaySantAnna(
                 n_c = int(np.sum(control_valid))
 
                 if n_t == 0 or n_c == 0:
+                    skipped_empty_cell.append((g, t))
                     continue
 
                 treated_change = outcome_change[treated_valid]
@@ -1342,7 +1380,11 @@ class CallawaySantAnna(
                 group_time_effects[key]["p_value"] = float(p_values[idx])
                 group_time_effects[key]["conf_int"] = (float(ci_lowers[idx]), float(ci_uppers[idx]))
 
-        return group_time_effects, influence_func_info
+        skip_info = {
+            "missing_period": skipped_missing_period,
+            "empty_cell": skipped_empty_cell,
+        }
+        return group_time_effects, influence_func_info, skip_info
 
     def fit(
         self,
@@ -1482,7 +1524,16 @@ class CallawaySantAnna(
         # Never-treated indicator (must precede treatment_groups to exclude np.inf)
         df["_never_treated"] = (df[first_treat] == 0) | (df[first_treat] == np.inf)
         # Normalize np.inf → 0 so all downstream `> 0` checks exclude never-treated
-        df.loc[df[first_treat] == np.inf, first_treat] = 0
+        _inf_mask = df[first_treat] == np.inf
+        if _inf_mask.any():
+            n_inf_units = df.loc[_inf_mask, unit].nunique()
+            warnings.warn(
+                f"{n_inf_units} unit(s) have first_treat=inf; recoding to 0 "
+                f"(never-treated). Use first_treat=0 to suppress this warning.",
+                UserWarning,
+                stacklevel=2,
+            )
+        df.loc[_inf_mask, first_treat] = 0
 
         # Identify groups and time periods
         time_periods = sorted(df[time].unique())
@@ -1572,6 +1623,9 @@ class CallawaySantAnna(
         min_period = min(time_periods)
         has_survey = resolved_survey is not None
 
+        _skip_info = {"missing_period": [], "empty_cell": []}
+        _n_skipped_other = 0
+
         if not self.panel:
             # --- Repeated cross-section path ---
             # No vectorized/Cholesky fast paths (panel-only optimizations).
@@ -1626,11 +1680,15 @@ class CallawaySantAnna(
 
                         if inf_info is not None:
                             influence_func_info[(g, t)] = inf_info
+                    else:
+                        _n_skipped_other += 1
 
         elif covariates is None and self.estimation_method == "reg":
             # Fast vectorized path for the common no-covariates regression case
-            group_time_effects, influence_func_info = self._compute_all_att_gt_vectorized(
-                precomputed, treatment_groups, time_periods, min_period
+            group_time_effects, influence_func_info, _skip_info = (
+                self._compute_all_att_gt_vectorized(
+                    precomputed, treatment_groups, time_periods, min_period
+                )
             )
             epv_diagnostics = None  # No logit in this path
         elif (
@@ -1640,8 +1698,10 @@ class CallawaySantAnna(
             and not has_survey  # Cholesky cache uses X'X; survey needs X'WX
         ):
             # Optimized covariate regression path with Cholesky caching
-            group_time_effects, influence_func_info = self._compute_all_att_gt_covariate_reg(
-                precomputed, treatment_groups, time_periods, min_period
+            group_time_effects, influence_func_info, _skip_info = (
+                self._compute_all_att_gt_covariate_reg(
+                    precomputed, treatment_groups, time_periods, min_period
+                )
             )
             epv_diagnostics = None  # No logit in this path
         else:
@@ -1711,6 +1771,8 @@ class CallawaySantAnna(
 
                         if inf_info is not None:
                             influence_func_info[(g, t)] = inf_info
+                    else:
+                        _n_skipped_other += 1
 
         if not group_time_effects:
             raise ValueError(
@@ -1737,6 +1799,29 @@ class CallawaySantAnna(
                     UserWarning,
                     stacklevel=2,
                 )
+
+        # Consolidated (g,t) cell skip warning (all paths)
+        _n_missing = len(_skip_info.get("missing_period", []))
+        _n_empty = len(_skip_info.get("empty_cell", []))
+        _n_total_skipped = _n_missing + _n_empty + _n_skipped_other
+        if _n_total_skipped > 0:
+            _parts = []
+            if _n_missing:
+                _parts.append(
+                    f"{_n_missing} due to missing base/post period " f"in panel structure"
+                )
+            if _n_empty:
+                _parts.append(f"{_n_empty} due to zero treated or control " f"observations")
+            if _n_skipped_other:
+                _parts.append(
+                    f"{_n_skipped_other} due to insufficient data or " f"non-estimable cells"
+                )
+            warnings.warn(
+                f"{_n_total_skipped} (group, time) cell(s) could not be "
+                f"estimated: {'; '.join(_parts)}.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Compute overall ATT (simple aggregation)
         overall_att, overall_se, overall_effective_df = self._aggregate_simple(
@@ -2143,15 +2228,10 @@ class CallawaySantAnna(
                     # dropped rank-deficient columns to prevent NaN
                     # propagation on cache reuse) alongside EPV diagnostics
                     if pscore_cache is not None and pscore_key is not None:
-                        beta_clean = np.where(
-                            np.isfinite(beta_logistic), beta_logistic, 0.0
-                        )
+                        beta_clean = np.where(np.isfinite(beta_logistic), beta_logistic, 0.0)
                         pscore_cache[pscore_key] = (beta_clean, diag)
                 except (np.linalg.LinAlgError, ValueError):
-                    if (
-                        self.pscore_fallback == "error"
-                        or self.rank_deficient_action == "error"
-                    ):
+                    if self.pscore_fallback == "error" or self.rank_deficient_action == "error":
                         raise
                     # Fallback to unconditional if logistic regression fails
                     ctx = f" for {context_label}" if context_label else ""
@@ -2430,15 +2510,10 @@ class CallawaySantAnna(
                     )
                     _check_propensity_diagnostics(pscore, self.pscore_trim)
                     if pscore_cache is not None and pscore_key is not None:
-                        beta_clean = np.where(
-                            np.isfinite(beta_logistic), beta_logistic, 0.0
-                        )
+                        beta_clean = np.where(np.isfinite(beta_logistic), beta_logistic, 0.0)
                         pscore_cache[pscore_key] = (beta_clean, diag)
                 except (np.linalg.LinAlgError, ValueError):
-                    if (
-                        self.pscore_fallback == "error"
-                        or self.rank_deficient_action == "error"
-                    ):
+                    if self.pscore_fallback == "error" or self.rank_deficient_action == "error":
                         raise
                     # Fallback to unconditional if logistic regression fails
                     ctx = f" for {context_label}" if context_label else ""
@@ -2818,9 +2893,9 @@ class CallawaySantAnna(
         # Guard against zero effective mass
         if sw_gt is not None:
             if np.sum(sw_gt) <= 0 or np.sum(sw_gs) <= 0:
-                return np.nan, np.nan, 0, 0, None, None
+                return None, 0.0, 0, 0, None, None
             if np.sum(sw_ct) <= 0 or np.sum(sw_cs) <= 0:
-                return np.nan, np.nan, 0, 0, None, None
+                return None, 0.0, 0, 0, None, None
 
         # Get covariates if specified
         obs_covariates = precomputed.get("obs_covariates")
@@ -3245,10 +3320,7 @@ class CallawaySantAnna(
             )
             _check_propensity_diagnostics(pscore, self.pscore_trim)
         except (np.linalg.LinAlgError, ValueError):
-            if (
-                self.pscore_fallback == "error"
-                or self.rank_deficient_action == "error"
-            ):
+            if self.pscore_fallback == "error" or self.rank_deficient_action == "error":
                 raise
             ctx = f" for {context_label}" if context_label else ""
             warnings.warn(
@@ -3513,10 +3585,7 @@ class CallawaySantAnna(
             )
             _check_propensity_diagnostics(pscore, self.pscore_trim)
         except (np.linalg.LinAlgError, ValueError):
-            if (
-                self.pscore_fallback == "error"
-                or self.rank_deficient_action == "error"
-            ):
+            if self.pscore_fallback == "error" or self.rank_deficient_action == "error":
                 raise
             ctx = f" for {context_label}" if context_label else ""
             warnings.warn(

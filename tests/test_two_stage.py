@@ -663,12 +663,14 @@ class TestTwoStageDiDEdgeCases:
         for h, eff in results.event_study_effects.items():
             if np.isnan(eff["effect"]):
                 nan_horizons_found += 1
-                assert_nan_inference({
-                    "se": eff["se"],
-                    "t_stat": eff["t_stat"],
-                    "p_value": eff["p_value"],
-                    "conf_int": eff["conf_int"],
-                })
+                assert_nan_inference(
+                    {
+                        "se": eff["se"],
+                        "t_stat": eff["t_stat"],
+                        "p_value": eff["p_value"],
+                        "conf_int": eff["conf_int"],
+                    }
+                )
         assert nan_horizons_found > 0, "Should have at least one Prop 5 NaN horizon"
 
         # Normal results should have finite values
@@ -1064,9 +1066,7 @@ class TestTwoStageDiDBootstrap:
         """Bootstrap with mammen weights should produce valid results."""
         data = generate_test_data()
         n_boot = ci_params.bootstrap(50)
-        results = TwoStageDiD(
-            n_bootstrap=n_boot, bootstrap_weights="mammen", seed=42
-        ).fit(
+        results = TwoStageDiD(n_bootstrap=n_boot, bootstrap_weights="mammen", seed=42).fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
@@ -1080,9 +1080,7 @@ class TestTwoStageDiDBootstrap:
         """Bootstrap with webb weights should produce valid results."""
         data = generate_test_data()
         n_boot = ci_params.bootstrap(50)
-        results = TwoStageDiD(
-            n_bootstrap=n_boot, bootstrap_weights="webb", seed=42
-        ).fit(
+        results = TwoStageDiD(n_bootstrap=n_boot, bootstrap_weights="webb", seed=42).fit(
             data, outcome="outcome", unit="unit", time="time", first_treat="first_treat"
         )
 
@@ -1096,11 +1094,13 @@ class TestTwoStageDiDBootstrap:
         """Bootstrap with non-default weights should work for event study aggregation."""
         data = generate_test_data()
         n_boot = ci_params.bootstrap(50)
-        results = TwoStageDiD(
-            n_bootstrap=n_boot, bootstrap_weights="mammen", seed=42
-        ).fit(
-            data, outcome="outcome", unit="unit", time="time",
-            first_treat="first_treat", aggregate="event_study",
+        results = TwoStageDiD(n_bootstrap=n_boot, bootstrap_weights="mammen", seed=42).fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="event_study",
         )
 
         br = results.bootstrap_results
@@ -1115,11 +1115,13 @@ class TestTwoStageDiDBootstrap:
         """Bootstrap with non-default weights should work for group aggregation."""
         data = generate_test_data()
         n_boot = ci_params.bootstrap(50)
-        results = TwoStageDiD(
-            n_bootstrap=n_boot, bootstrap_weights="mammen", seed=42
-        ).fit(
-            data, outcome="outcome", unit="unit", time="time",
-            first_treat="first_treat", aggregate="group",
+        results = TwoStageDiD(n_bootstrap=n_boot, bootstrap_weights="mammen", seed=42).fit(
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            aggregate="group",
         )
 
         br = results.bootstrap_results
@@ -1225,9 +1227,100 @@ class TestTwoStageDiDConvenience:
         finally:
             ts_mod._SPARSE_DENSE_THRESHOLD = orig
 
-        np.testing.assert_allclose(
-            result_dense.overall_att, result_sparse.overall_att, rtol=1e-10
-        )
-        np.testing.assert_allclose(
-            result_dense.overall_se, result_sparse.overall_se, rtol=1e-10
-        )
+        np.testing.assert_allclose(result_dense.overall_att, result_sparse.overall_att, rtol=1e-10)
+        np.testing.assert_allclose(result_dense.overall_se, result_sparse.overall_se, rtol=1e-10)
+
+
+class TestSilentWarningAudit:
+    """Tests for UserWarning emissions added by the silent warning audit."""
+
+    def test_item2_nan_ytilde_masking_warning(self):
+        """Item 2: Warn when NaN y_tilde values are masked."""
+        # never_treated_frac=0 forces some periods without untreated obs
+        data = generate_test_data(n_units=50, n_periods=10, never_treated_frac=0.0, seed=42)
+        ts = TwoStageDiD()
+        with pytest.warns(UserWarning, match="non-finite imputed outcomes"):
+            ts.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+
+    def test_item3_always_treated_survey_weight_note(self):
+        """Item 3: Enhanced always-treated warning mentions survey weights."""
+        data = generate_test_data(n_units=50, n_periods=10, never_treated_frac=0.3, seed=42)
+        # Shift time so min_time > 0, then set some units always-treated
+        data["time"] = data["time"] + 1  # now min_time = 1
+        min_time = data["time"].min()
+        # Pick treated units and make them always-treated (first_treat=1 <= min_time=1)
+        treated_units = data.loc[data["first_treat"] > 0, "unit"].unique()[:3]
+        data.loc[data["unit"].isin(treated_units), "first_treat"] = min_time
+
+        from diff_diff.survey import SurveyDesign
+
+        rng = np.random.default_rng(42)
+        unit_weights = {u: rng.uniform(0.5, 2.0) for u in data["unit"].unique()}
+        data["sw"] = data["unit"].map(unit_weights)
+        survey = SurveyDesign(weights="sw")
+
+        ts = TwoStageDiD()
+        with pytest.warns(UserWarning, match="survey weights"):
+            ts.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                survey_design=survey,
+            )
+
+    def test_item3_always_treated_no_survey_note_without_weights(self):
+        """Item 3 negative: Without survey weights, no survey note."""
+        data = generate_test_data(n_units=50, n_periods=10, never_treated_frac=0.3, seed=42)
+        data["time"] = data["time"] + 1
+        min_time = data["time"].min()
+        treated_units = data.loc[data["first_treat"] > 0, "unit"].unique()[:3]
+        data.loc[data["unit"].isin(treated_units), "first_treat"] = min_time
+
+        ts = TwoStageDiD()
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            ts.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+        survey_notes = [x for x in w if "survey weights" in str(x.message)]
+        assert len(survey_notes) == 0, f"Unexpected survey note: {survey_notes}"
+
+    def test_item2_nan_ytilde_event_study(self):
+        """Item 2: y_tilde warning fires for aggregate='event_study'."""
+        data = generate_test_data(n_units=50, n_periods=10, never_treated_frac=0.0, seed=42)
+        ts = TwoStageDiD()
+        with pytest.warns(UserWarning, match="non-finite imputed outcomes"):
+            ts.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="event_study",
+            )
+
+    def test_item2_nan_ytilde_group(self):
+        """Item 2: y_tilde warning fires for aggregate='group'."""
+        data = generate_test_data(n_units=50, n_periods=10, never_treated_frac=0.0, seed=42)
+        ts = TwoStageDiD()
+        with pytest.warns(UserWarning, match="non-finite imputed outcomes"):
+            ts.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                aggregate="group",
+            )

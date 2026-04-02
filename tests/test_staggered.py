@@ -2,6 +2,8 @@
 Tests for Callaway-Sant'Anna staggered DiD estimator.
 """
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -3492,9 +3494,7 @@ class TestIRLSPropensityScore:
 
         data = generate_staggered_data_with_covariates(seed=42)
 
-        cs = CallawaySantAnna(
-            estimation_method="dr", pscore_fallback="unconditional"
-        )
+        cs = CallawaySantAnna(estimation_method="dr", pscore_fallback="unconditional")
 
         with patch("diff_diff.staggered.solve_logit", side_effect=ValueError("test")):
             import warnings
@@ -3510,9 +3510,7 @@ class TestIRLSPropensityScore:
                     covariates=["x1"],
                 )
 
-            fallback_warns = [
-                x for x in w if "unconditional propensity" in str(x.message)
-            ]
+            fallback_warns = [x for x in w if "unconditional propensity" in str(x.message)]
             assert len(fallback_warns) > 0, "Expected fallback warning in DR path"
             assert results.overall_att is not None
 
@@ -3690,9 +3688,7 @@ class TestEPVDiagnostics:
         from unittest.mock import patch
 
         data = generate_staggered_data_with_covariates(seed=42)
-        cs = CallawaySantAnna(
-            estimation_method="dr", pscore_fallback="unconditional"
-        )
+        cs = CallawaySantAnna(estimation_method="dr", pscore_fallback="unconditional")
 
         with patch("diff_diff.staggered.solve_logit", side_effect=ValueError("test")):
             import warnings
@@ -3707,9 +3703,7 @@ class TestEPVDiagnostics:
                     first_treat="first_treat",
                     covariates=["x1"],
                 )
-            fallback_warns = [
-                x for x in w if "unconditional propensity" in str(x.message)
-            ]
+            fallback_warns = [x for x in w if "unconditional propensity" in str(x.message)]
             assert len(fallback_warns) > 0
             assert results.overall_att is not None
 
@@ -3750,15 +3744,26 @@ class TestEPVDiagnostics:
         x2 = np.repeat(np.random.randn(n_units), n_periods)
         x3 = np.repeat(np.random.randn(n_units), n_periods)
 
-        data = pd.DataFrame({
-            "unit": units, "time": times, "first_treat": first_treat_exp,
-            "outcome": outcome, "x1": x1, "x2": x2, "x3": x3,
-        })
+        data = pd.DataFrame(
+            {
+                "unit": units,
+                "time": times,
+                "first_treat": first_treat_exp,
+                "outcome": outcome,
+                "x1": x1,
+                "x2": x2,
+                "x3": x3,
+            }
+        )
 
         cs = CallawaySantAnna(estimation_method="ipw")
         df = cs.diagnose_propensity(
-            data, outcome="outcome", unit="unit", time="time",
-            first_treat="first_treat", covariates=["x1", "x2", "x3"],
+            data,
+            outcome="outcome",
+            unit="unit",
+            time="time",
+            first_treat="first_treat",
+            covariates=["x1", "x2", "x3"],
         )
         # With 1 treated unit and 3 predictor variables: EPV = 1/3 ≈ 0.33 → critical
         assert any(df["status"] == "critical")
@@ -3782,9 +3787,7 @@ class TestEPVDiagnostics:
                 covariates=["x1", "x2"],
             )
         if results.epv_diagnostics:
-            low_epv = {
-                k: v for k, v in results.epv_diagnostics.items() if v.get("is_low")
-            }
+            low_epv = {k: v for k, v in results.epv_diagnostics.items() if v.get("is_low")}
             if low_epv:
                 summary = results.summary()
                 assert "EPV" in summary
@@ -3834,10 +3837,16 @@ class TestEPVDiagnostics:
         # x2 is a duplicate of x1 — will cause rank deficiency
         x2 = x1.copy()
 
-        data = pd.DataFrame({
-            "unit": units, "time": times, "first_treat": first_treat_exp,
-            "outcome": outcome, "x1": x1, "x2": x2,
-        })
+        data = pd.DataFrame(
+            {
+                "unit": units,
+                "time": times,
+                "first_treat": first_treat_exp,
+                "outcome": outcome,
+                "x1": x1,
+                "x2": x2,
+            }
+        )
 
         cs = CallawaySantAnna(
             estimation_method="ipw",
@@ -3849,15 +3858,19 @@ class TestEPVDiagnostics:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             results = cs.fit(
-                data, outcome="outcome", unit="unit", time="time",
-                first_treat="first_treat", covariates=["x1", "x2"],
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1", "x2"],
             )
 
         # All ATTs should be finite (no NaN from cache poisoning)
         for (g, t), eff in results.group_time_effects.items():
-            assert np.isfinite(eff["effect"]), (
-                f"ATT({g},{t}) is {eff['effect']} — NaN cache poisoning"
-            )
+            assert np.isfinite(
+                eff["effect"]
+            ), f"ATT({g},{t}) is {eff['effect']} — NaN cache poisoning"
         assert np.isfinite(results.overall_att)
 
     def test_cs_strict_mode_not_swallowed_by_unconditional_fallback(self):
@@ -3882,8 +3895,12 @@ class TestEPVDiagnostics:
         ):
             with pytest.raises(ValueError, match="Rank-deficient"):
                 cs.fit(
-                    data, outcome="outcome", unit="unit", time="time",
-                    first_treat="first_treat", covariates=["x1"],
+                    data,
+                    outcome="outcome",
+                    unit="unit",
+                    time="time",
+                    first_treat="first_treat",
+                    covariates=["x1"],
                 )
 
     def test_cs_rc_strict_mode_not_swallowed(self):
@@ -3893,13 +3910,15 @@ class TestEPVDiagnostics:
         # RCS data: unique unit IDs per observation
         np.random.seed(99)
         n = 300
-        data = pd.DataFrame({
-            "unit": np.arange(n),
-            "time": np.random.choice([0, 1, 2, 3, 4], n),
-            "outcome": np.random.randn(n),
-            "first_treat": np.where(np.arange(n) < 100, 3, 0),
-            "x1": np.random.randn(n),
-        })
+        data = pd.DataFrame(
+            {
+                "unit": np.arange(n),
+                "time": np.random.choice([0, 1, 2, 3, 4], n),
+                "outcome": np.random.randn(n),
+                "first_treat": np.where(np.arange(n) < 100, 3, 0),
+                "x1": np.random.randn(n),
+            }
+        )
         cs = CallawaySantAnna(
             estimation_method="ipw",
             rank_deficient_action="error",
@@ -3912,18 +3931,234 @@ class TestEPVDiagnostics:
         ):
             with pytest.raises(ValueError, match="Rank-deficient"):
                 cs.fit(
-                    data, outcome="outcome", unit="unit", time="time",
-                    first_treat="first_treat", covariates=["x1"],
+                    data,
+                    outcome="outcome",
+                    unit="unit",
+                    time="time",
+                    first_treat="first_treat",
+                    covariates=["x1"],
                 )
 
     def test_cs_diagnose_propensity_rejects_not_yet_treated(self):
         """diagnose_propensity() raises for control_group='not_yet_treated'."""
         data = generate_staggered_data_with_covariates(seed=42)
-        cs = CallawaySantAnna(
-            estimation_method="ipw", control_group="not_yet_treated"
-        )
+        cs = CallawaySantAnna(estimation_method="ipw", control_group="not_yet_treated")
         with pytest.raises(NotImplementedError, match="not_yet_treated"):
             cs.diagnose_propensity(
-                data, outcome="outcome", unit="unit", time="time",
-                first_treat="first_treat", covariates=["x1"],
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1"],
             )
+
+
+class TestSilentWarningAudit:
+    """Tests for UserWarning emissions added by the silent warning audit."""
+
+    def test_item8_inf_to_zero_warning_in_fit(self):
+        """Item 8: Warn when first_treat=inf is recoded to 0 in fit()."""
+        import warnings
+
+        data = generate_staggered_data(seed=42)
+        # Set some units to inf (never-treated encoding)
+        # Cast to float first for pandas >=2.0 compatibility
+        data["first_treat"] = data["first_treat"].astype(float)
+        never_units = data.loc[data["first_treat"] == 0, "unit"].unique()[:5]
+        data.loc[data["unit"].isin(never_units), "first_treat"] = np.inf
+
+        cs = CallawaySantAnna()
+        with pytest.warns(UserWarning, match="first_treat=inf"):
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+
+    def test_item8_inf_to_zero_warning_in_diagnose_propensity(self):
+        """Item 8: Warn when first_treat=inf is recoded in diagnose_propensity()."""
+        import warnings
+
+        data = generate_staggered_data_with_covariates(seed=42)
+        # Cast to float first for pandas >=2.0 compatibility
+        data["first_treat"] = data["first_treat"].astype(float)
+        never_units = data.loc[data["first_treat"] == 0, "unit"].unique()[:5]
+        data.loc[data["unit"].isin(never_units), "first_treat"] = np.inf
+
+        cs = CallawaySantAnna(estimation_method="ipw")
+        with pytest.warns(UserWarning, match="first_treat=inf"):
+            cs.diagnose_propensity(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                covariates=["x1"],
+            )
+
+    def test_item8_no_warning_when_first_treat_zero(self):
+        """Item 8 negative: No warning when never-treated encoded as 0."""
+        import warnings
+
+        data = generate_staggered_data(seed=42)
+        cs = CallawaySantAnna()
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+        inf_warnings = [x for x in w if "first_treat=inf" in str(x.message)]
+        assert len(inf_warnings) == 0
+
+    def test_item4_consolidated_skip_warning(self):
+        """Item 4: Consolidated warning when (g,t) cells are skipped."""
+        import warnings
+
+        # Two cohorts: g=4 succeeds (base=3 exists), g=6 fails (base=5
+        # exists but post periods 7 need base=5 which exists — so use
+        # g=8 whose base=7 exists). Actually simplest: periods [1,2,4,5]
+        # with cohort g=4 (base=3 missing → some skips) and g=2 (base=1
+        # exists → succeeds).
+        rng = np.random.default_rng(42)
+        n_units = 40
+        rows = []
+        for u in range(n_units):
+            for t in [1, 2, 4, 5]:
+                # u < 10: never-treated; u < 25: cohort g=2; rest: cohort g=4
+                if u < 10:
+                    ft = 0
+                elif u < 25:
+                    ft = 2  # base=1 exists → succeeds
+                else:
+                    ft = 4  # base=3 missing → skipped
+                outcome = rng.standard_normal() + (2.0 if (ft > 0 and t >= ft) else 0.0)
+                rows.append(
+                    {
+                        "unit": u,
+                        "time": t,
+                        "outcome": outcome,
+                        "first_treat": ft,
+                    }
+                )
+        data = pd.DataFrame(rows)
+
+        cs = CallawaySantAnna(base_period="universal", estimation_method="reg")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+
+        skip_warnings = [x for x in w if "could not be estimated" in str(x.message)]
+        assert len(skip_warnings) > 0, "Expected consolidated skip warning"
+        msg = str(skip_warnings[0].message)
+        assert "missing base/post period" in msg
+
+    def test_item4_no_skip_warning_normal_data(self):
+        """Item 4 negative: No skip warning on well-formed balanced data."""
+        import warnings
+
+        data = generate_staggered_data(seed=42)
+        cs = CallawaySantAnna()
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+        skip_warnings = [x for x in w if "could not be estimated" in str(x.message)]
+        assert len(skip_warnings) == 0, f"Unexpected skip warning: {skip_warnings}"
+
+    def test_skip_warning_dr_path(self):
+        """Skip warning fires for default DR path (general path)."""
+        data = generate_staggered_data(
+            n_units=50,
+            n_periods=6,
+            n_cohorts=3,
+            never_treated_frac=0.0,
+            seed=42,
+        )
+        cs = CallawaySantAnna(control_group="not_yet_treated")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+        skip_warnings = [x for x in w if "could not be estimated" in str(x.message)]
+        assert len(skip_warnings) > 0, "Expected skip warning for DR path"
+        assert "insufficient data" in str(skip_warnings[0].message)
+
+    def test_skip_warning_panel_false(self):
+        """Skip warning fires for panel=False (RC path)."""
+        data = generate_staggered_data(
+            n_units=80,
+            n_periods=6,
+            n_cohorts=3,
+            never_treated_frac=0.0,
+            seed=42,
+        )
+        # panel=False needs unique unit IDs (repeated cross-section)
+        data["unit"] = np.arange(len(data))
+        cs = CallawaySantAnna(panel=False, control_group="not_yet_treated")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+            )
+        skip_warnings = [x for x in w if "could not be estimated" in str(x.message)]
+        assert len(skip_warnings) > 0, "Expected skip warning for RC path"
+
+    def test_skip_warning_survey_zero_mass(self):
+        """Skip warning fires when survey weights produce zero effective mass."""
+        from diff_diff.survey import SurveyDesign
+
+        data = generate_staggered_data(
+            n_units=60,
+            n_periods=6,
+            n_cohorts=2,
+            never_treated_frac=0.3,
+            seed=42,
+        )
+        # Set survey weights to 0 for ALL units in one cohort to force
+        # zero effective mass in that cohort's cells
+        data["sw"] = 1.0
+        first_cohort = sorted(data.loc[data["first_treat"] > 0, "first_treat"].unique())[0]
+        cohort_units = data.loc[data["first_treat"] == first_cohort, "unit"].unique()
+        data.loc[data["unit"].isin(cohort_units), "sw"] = 0.0
+
+        survey = SurveyDesign(weights="sw")
+        cs = CallawaySantAnna(estimation_method="reg")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            cs.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                survey_design=survey,
+            )
+        skip_warnings = [x for x in w if "could not be estimated" in str(x.message)]
+        assert len(skip_warnings) > 0, "Expected skip warning for zero-mass survey cells"

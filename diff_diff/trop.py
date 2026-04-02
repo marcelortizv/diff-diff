@@ -31,7 +31,7 @@ from diff_diff._backend import (
     _rust_loocv_grid_search,
 )
 from diff_diff.trop_global import TROPGlobalMixin
-from diff_diff.trop_local import TROPLocalMixin
+from diff_diff.trop_local import TROPLocalMixin, _validate_and_pivot_treatment
 from diff_diff.trop_results import (
     _LAMBDA_INF,
     _PrecomputedStructures,
@@ -518,13 +518,10 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
             .values
         )
 
-        # For D matrix, track missing values BEFORE fillna to support unbalanced panels
-        # Issue 3 fix: Missing observations should not trigger spurious violations
-        D_raw = data.pivot(index=time, columns=unit, values=treatment).reindex(
-            index=all_periods, columns=all_units
+        # For D matrix, validate observed treatment and handle unbalanced panels
+        D, missing_mask = _validate_and_pivot_treatment(
+            data, time, unit, treatment, all_periods, all_units
         )
-        missing_mask = pd.isna(D_raw).values  # True where originally missing
-        D = D_raw.fillna(0).astype(int).values
 
         # Validate D is monotonic non-decreasing per unit (absorbing state)
         # D[t, i] must satisfy: once D=1, it must stay 1 for all subsequent periods
@@ -652,6 +649,13 @@ class TROP(TROPLocalMixin, TROPGlobalMixin):
             except Exception as e:
                 # Fall back to Python implementation on error
                 logger.debug("Rust LOOCV grid search failed, falling back to Python: %s", e)
+                warnings.warn(
+                    f"Rust backend failed for LOOCV grid search; "
+                    f"falling back to Python. Performance may be reduced. "
+                    f"Error: {e}",
+                    UserWarning,
+                    stacklevel=2,
+                )
                 best_lambda = None
                 best_score = np.inf
 

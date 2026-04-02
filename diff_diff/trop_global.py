@@ -24,7 +24,7 @@ from diff_diff._backend import (
     _rust_bootstrap_trop_variance_global,
     _rust_loocv_grid_search_global,
 )
-from diff_diff.trop_local import _soft_threshold_svd
+from diff_diff.trop_local import _soft_threshold_svd, _validate_and_pivot_treatment
 from diff_diff.trop_results import TROPResults
 from diff_diff.utils import safe_inference
 
@@ -370,6 +370,13 @@ class TROPGlobalMixin:
             coeffs, _, _, _ = np.linalg.lstsq(X_weighted, y_weighted, rcond=None)
         except np.linalg.LinAlgError:
             # Fallback: use pseudo-inverse
+            warnings.warn(
+                "Least-squares solver failed in TROP global estimation; "
+                "falling back to pseudo-inverse. Results may be less "
+                "numerically stable.",
+                UserWarning,
+                stacklevel=2,
+            )
             coeffs = np.dot(np.linalg.pinv(X_weighted), y_weighted)
 
         # Extract parameters
@@ -556,11 +563,9 @@ class TROPGlobalMixin:
             .values
         )
 
-        D_raw = data.pivot(index=time, columns=unit, values=treatment).reindex(
-            index=all_periods, columns=all_units
+        D, missing_mask = _validate_and_pivot_treatment(
+            data, time, unit, treatment, all_periods, all_units
         )
-        missing_mask = pd.isna(D_raw).values
-        D = D_raw.fillna(0).astype(int).values
 
         # Validate absorbing state
         violating_units = []
@@ -691,6 +696,13 @@ class TROPGlobalMixin:
                 # Fall back to Python implementation on error
                 logger.debug(
                     "Rust LOOCV grid search (global) failed, falling back to Python: %s", e
+                )
+                warnings.warn(
+                    f"Rust backend failed for LOOCV grid search (global); "
+                    f"falling back to Python. Performance may be reduced. "
+                    f"Error: {e}",
+                    UserWarning,
+                    stacklevel=2,
                 )
                 best_lambda = None
                 best_score = np.inf
@@ -952,6 +964,13 @@ class TROPGlobalMixin:
 
             except Exception as e:
                 logger.debug("Rust bootstrap (global) failed, falling back to Python: %s", e)
+                warnings.warn(
+                    f"Rust backend failed for bootstrap variance (global); "
+                    f"falling back to Python. Performance may be reduced. "
+                    f"Error: {e}",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         # Python fallback implementation
         rng = np.random.default_rng(self.seed)

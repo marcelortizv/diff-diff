@@ -591,16 +591,23 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                 if np.isfinite(group_effects[g]["effect"])
             )
 
-            # Pre-compute balanced cohort mask for balance_e (matches
-            # _aggregate_event_study's filter so replicate SEs match
-            # the reported point estimate's estimand).
+            # Pre-compute balanced cohort mask for balance_e.  Use the
+            # full treated horizon set (before Prop 5 filtering), matching
+            # exactly what _aggregate_event_study() does at line 1591-1602.
             _balanced_mask_treated = None
             if balance_e is not None and _sorted_rel_times:
-                cohort_rel_times = self._build_cohort_rel_times(df, first_treat)
-                all_horizons = [int(e) for e in _sorted_rel_times if e >= 0]
                 df_1 = df.loc[omega_1_mask]
+                rel_times_all = df_1["_rel_time"].values
+                all_horizons_full = sorted(
+                    set(int(h) for h in rel_times_all if np.isfinite(h))
+                )
+                if self.horizon_max is not None:
+                    all_horizons_full = [
+                        h for h in all_horizons_full if abs(h) <= self.horizon_max
+                    ]
+                cohort_rel_times = self._build_cohort_rel_times(df, first_treat)
                 _balanced_mask_treated = self._compute_balanced_cohort_mask(
-                    df_1, first_treat, all_horizons, balance_e, cohort_rel_times
+                    df_1, first_treat, all_horizons_full, balance_e, cohort_rel_times
                 )
 
             for e in _sorted_rel_times:

@@ -293,6 +293,9 @@ class TwoWayFixedEffects(DifferenceInDifferences):
 
             _all_vars_twfe = list(all_vars)
             _covariates_twfe = list(covariates) if covariates else []
+            # Handle rank-deficient nuisance: refit only identified columns
+            _id_mask_twfe = ~np.isnan(coefficients)
+            _id_cols_twfe = np.where(_id_mask_twfe)[0]
 
             def _refit_twfe(w_r):
                 data_dem_r = _within_transform_util(
@@ -304,15 +307,17 @@ class TwoWayFixedEffects(DifferenceInDifferences):
                     X_list_r.append(data_dem_r[f"{cov_}_demeaned"].values)
                 X_r = np.column_stack([np.ones(len(y_r))] + X_list_r)
                 coef_r, _, _ = solve_ols(
-                    X_r, y_r,
+                    X_r[:, _id_cols_twfe], y_r,
                     weights=w_r, weight_type=survey_weight_type,
                     rank_deficient_action="silent", return_vcov=False,
                 )
                 return coef_r
 
-            vcov, _n_valid_rep_twfe = compute_replicate_refit_variance(
-                _refit_twfe, coefficients, resolved_survey
+            from diff_diff.linalg import _expand_vcov_with_nan as _expand_twfe
+            vcov_reduced, _n_valid_rep_twfe = compute_replicate_refit_variance(
+                _refit_twfe, coefficients[_id_mask_twfe], resolved_survey
             )
+            vcov = _expand_twfe(vcov_reduced, len(coefficients), _id_cols_twfe)
             se = float(np.sqrt(max(vcov[att_idx, att_idx], 0.0)))
             _df_rep = (
                 survey_metadata.df_survey

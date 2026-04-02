@@ -390,6 +390,11 @@ class DifferenceInDifferences:
 
             _absorb_list = list(absorbed_vars)  # capture for closure
 
+            # Handle rank-deficient nuisance: refit only identified columns
+            _id_mask = ~np.isnan(coefficients)
+            _id_cols = np.where(_id_mask)[0]
+            _att_idx_reduced = int(np.searchsorted(_id_cols, att_idx))
+
             def _refit_did_absorb(w_r):
                 wd = data.copy()
                 wd["_treat_time"] = (
@@ -407,15 +412,16 @@ class DifferenceInDifferences:
                     for cov in covariates:
                         X_r = np.column_stack([X_r, wd[cov].values.astype(float)])
                 coef_r, _, _ = solve_ols(
-                    X_r, y_r,
+                    X_r[:, _id_cols], y_r,
                     weights=w_r, weight_type=survey_weight_type,
                     rank_deficient_action="silent", return_vcov=False,
                 )
                 return coef_r
 
-            vcov, _n_valid_rep = compute_replicate_refit_variance(
-                _refit_did_absorb, coefficients, resolved_survey
+            vcov_reduced, _n_valid_rep = compute_replicate_refit_variance(
+                _refit_did_absorb, coefficients[_id_mask], resolved_survey
             )
+            vcov = _expand_vcov_with_nan(vcov_reduced, len(coefficients), _id_cols)
             se = float(np.sqrt(max(vcov[att_idx, att_idx], 0.0)))
             _df_rep = (
                 survey_metadata.df_survey
@@ -1235,6 +1241,9 @@ class MultiPeriodDiD(DifferenceInDifferences):
             from diff_diff.survey import compute_replicate_refit_variance
 
             _absorb_list_mp = list(absorb)
+            # Handle rank-deficient nuisance: refit only identified columns
+            _id_mask_mp = ~np.isnan(coefficients)
+            _id_cols_mp = np.where(_id_mask_mp)[0]
 
             def _refit_mp_absorb(w_r):
                 wd = data.copy()
@@ -1267,15 +1276,16 @@ class MultiPeriodDiD(DifferenceInDifferences):
                     for cov_ in covariates:
                         X_r = np.column_stack([X_r, wd[cov_].values.astype(float)])
                 coef_r, _, _ = solve_ols(
-                    X_r, y_r,
+                    X_r[:, _id_cols_mp], y_r,
                     weights=w_r, weight_type=survey_weight_type,
                     rank_deficient_action="silent", return_vcov=False,
                 )
                 return coef_r
 
-            vcov, _n_valid_rep_mp = compute_replicate_refit_variance(
-                _refit_mp_absorb, coefficients, resolved_survey
+            vcov_reduced_mp, _n_valid_rep_mp = compute_replicate_refit_variance(
+                _refit_mp_absorb, coefficients[_id_mask_mp], resolved_survey
             )
+            vcov = _expand_vcov_with_nan(vcov_reduced_mp, len(coefficients), _id_cols_mp)
         elif _use_survey_vcov and _uses_replicate_mp:
             # No absorb + replicate: X is fixed, use compute_replicate_vcov directly
             from diff_diff.survey import compute_replicate_vcov

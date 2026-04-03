@@ -912,6 +912,44 @@ class TestBootstrapLonelyPSUAdjust:
 
 
 # ===========================================================================
+class TestRaoWuLonelyPSUAdjust:
+    """Tests for lonely_psu='adjust' in Rao-Wu bootstrap (SunAbraham consumer)."""
+
+    def test_rao_wu_adjust_direct(self):
+        """Direct test of generate_rao_wu_weights with lonely_psu='adjust'."""
+        from diff_diff.bootstrap_utils import generate_rao_wu_weights
+        from diff_diff.survey import ResolvedSurveyDesign
+
+        np.random.seed(42)
+        n = 20
+        # Two singleton strata (0, 1), two multi-PSU strata (2, 3)
+        strata = np.array([0] * 5 + [1] * 5 + [2] * 5 + [3] * 5)
+        psu = np.array([0] * 5 + [1] * 5 + [2, 3, 4, 5, 6] + [7, 8, 9, 10, 11])
+
+        resolved = ResolvedSurveyDesign(
+            weights=np.ones(n),
+            weight_type="pweight",
+            strata=strata,
+            psu=psu,
+            fpc=None,
+            n_strata=4,
+            n_psu=12,
+            lonely_psu="adjust",
+        )
+        # Run multiple draws to check that singleton weights are not constant
+        base = resolved.weights.copy()
+        any_different = False
+        for seed in range(42, 52):
+            rng = np.random.default_rng(seed)
+            rescaled = generate_rao_wu_weights(resolved, rng)
+            # Singleton PSU weights should vary across draws (pooled resampling)
+            if not np.allclose(rescaled[:5], base[:5]):
+                any_different = True
+                break
+        assert any_different, "Singleton PSU weights should vary with 'adjust'"
+
+
+# ===========================================================================
 # 8e-i: CV on Estimates
 # ===========================================================================
 

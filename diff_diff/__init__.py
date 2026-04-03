@@ -308,6 +308,7 @@ __all__ = [
     "make_post_indicator",
     "wide_to_long",
     "balance_panel",
+    "trim_weights",
     "validate_did_data",
     "summarize_did_data",
     "generate_did_data",

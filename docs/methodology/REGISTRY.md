@@ -864,7 +864,7 @@ where `W_it(h) = 1[K_it = h]` are lead indicators, estimated on `Omega_0` only.
 - Bootstrap does not update pre-period SEs (they are from the lead regression)
 - When `balance_e` is set, lead indicators are restricted to balanced cohorts; the full Omega_0 sample (including never-treated) is kept for within-transformation
 - Only affects event study aggregation; overall ATT and group aggregation unchanged
-- **Note:** `pretrends=True` with `survey_design` raises `NotImplementedError` because the lead regression uses unweighted demeaning (same limitation as `pretrend_test()`)
+- **Note:** `pretrends=True` with `survey_design` is supported. The lead regression uses survey-weighted demeaning, WLS point estimates, and `compute_survey_vcov()` for design-based VCV. The F-test in `pretrend_test()` uses the full-design `df_survey` as denominator df. The Omega_0 subset of `resolved_survey` is used for VCV computation (array alignment), but inference df comes from the full design for consistency.
 
 *Edge cases:*
 - **Unbalanced panels:** FE estimated via iterative alternating projection (Gauss-Seidel), equivalent to OLS with unit+time dummies. Converges in O(max_iter) passes; typically 5-20 iterations for unbalanced panels, 1-2 for balanced. One-pass demeaning is only exact for balanced panels.
@@ -2214,9 +2214,13 @@ ContinuousDiD, EfficientDiD):
   Rescaled weight: `w*_i = w_i * (n_h / m_h) * r_hi` where `r_hi` = count of PSU *i* drawn.
 - **Note:** FPC enters through the resample size `m_h`, not as a post-hoc scaling factor.
   When `f_h >= 1` (census stratum), observations keep original weights (zero variance).
-- **Note:** Bootstrap paths support `lonely_psu="remove"` and `"certainty"` only.
-  `lonely_psu="adjust"` raises `NotImplementedError` for survey-aware bootstrap;
-  use analytical inference for designs requiring `adjust` semantics.
+- **Note:** Bootstrap paths support all three `lonely_psu` modes: `"remove"`, `"certainty"`,
+  and `"adjust"`. For `"adjust"`, singleton PSUs from different strata are pooled into a
+  combined pseudo-stratum and weights are generated for the pooled group. This is the
+  bootstrap analogue of the TSL "adjust" behavior (centering around the global mean).
+  Applies to both multiplier bootstrap (CallawaySantAnna, ImputationDiD, TwoStageDiD,
+  ContinuousDiD, EfficientDiD) and Rao-Wu bootstrap (SunAbraham, SyntheticDiD, TROP).
+  FPC scaling is skipped for pooled singletons (conservative). Reference: Rust & Rao (1996).
 - **Deviation from R:** For the no-FPC case (`m_h = n_h - 1`), this matches R
   `survey::as.svrepdesign(type="subbootstrap")`. The FPC-adjusted resample size
   `m_h = round((1-f_h)*(n_h-1))` follows Rao, Wu & Yue (1992) Section 3.

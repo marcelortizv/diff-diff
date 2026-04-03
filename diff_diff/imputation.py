@@ -1747,6 +1747,10 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                                 else None
                             ),
                         )
+                    # Use full-design df for consistent inference
+                    _survey_df_pre = (
+                        resolved_survey.df_survey if resolved_survey is not None else None
+                    )
                     pre_effects, _, _ = self._compute_lead_coefficients(
                         df_0,
                         outcome,
@@ -1760,6 +1764,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
                         balanced_cohorts=balanced_cohorts,
                         survey_weights_0=_sw_0_pre,
                         resolved_survey_0=_rs_0_pre,
+                        survey_df=_survey_df_pre,
                     )
                     event_study_effects.update(pre_effects)
 
@@ -2018,6 +2023,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         balanced_cohorts: Optional[set] = None,
         survey_weights_0: Optional[np.ndarray] = None,
         resolved_survey_0=None,
+        survey_df: Optional[int] = None,
     ) -> Tuple[Dict[int, Dict[str, Any]], np.ndarray, np.ndarray]:
         """
         Compute pre-period lead coefficients via within-transformed OLS (Test 1).
@@ -2136,8 +2142,8 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         gamma = coefficients[:n_leads]
         V_gamma = vcov[:n_leads, :n_leads]
 
-        # Use survey df for t-distribution inference when present
-        _df = resolved_survey_0.df_survey if resolved_survey_0 is not None else None
+        # Use full-design survey df for t-distribution inference
+        _df = survey_df
 
         # Build per-horizon effects
         effects = {}
@@ -2264,6 +2270,7 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             alpha=self.alpha,
             survey_weights_0=_sw_0_pt,
             resolved_survey_0=_rs_0_pt,
+            survey_df=(resolved_survey.df_survey if resolved_survey is not None else None),
         )
 
         n_leads_actual = len(pre_rel_times)

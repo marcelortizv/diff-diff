@@ -1272,6 +1272,12 @@ def generate_survey_did_data(
                 f"(g >= 2 ensures at least one pre-treatment period)"
             )
 
+    if not np.isfinite(psu_period_factor) or psu_period_factor < 0:
+        raise ValueError(
+            f"psu_period_factor must be finite and non-negative, "
+            f"got {psu_period_factor}"
+        )
+
     valid_wv = ("none", "moderate", "high")
     if weight_variation not in valid_wv:
         raise ValueError(

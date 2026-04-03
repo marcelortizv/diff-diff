@@ -2147,7 +2147,10 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         if resolved_survey_0 is not None:
             from diff_diff.survey import compute_survey_vcov
 
-            residuals = y_dm - X_dm @ coefficients
+            # Use residuals from solve_ols (safe for rank-deficient fits:
+            # solve_ols rebuilds fitted values from kept columns only,
+            # so residuals are finite even when some coefficients are NaN).
+            residuals = result[1]
             vcov = compute_survey_vcov(X_dm, residuals, resolved_survey_0)
 
         n_leads = len(lead_cols)
@@ -2191,6 +2194,15 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             raise RuntimeError("Must call fit() before pretrend_test().")
 
         fd = self._fit_data
+        resolved_survey = fd.get("resolved_survey")
+        if resolved_survey is not None and resolved_survey.uses_replicate_variance:
+            raise NotImplementedError(
+                "pretrend_test() is not yet supported for replicate-weight "
+                "survey designs. Per-replicate Equation 9 lead regression "
+                "refits are not implemented. Use analytical survey designs "
+                "(strata/PSU/FPC) or call pretrend_test() without survey."
+            )
+
         df = fd["df"]
         outcome = fd["outcome"]
         unit = fd["unit"]

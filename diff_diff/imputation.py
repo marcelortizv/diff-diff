@@ -236,8 +236,20 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
         if missing:
             raise ValueError(f"Missing columns: {missing}")
 
-        # pretrends + survey_design is supported (Phase 8e-iii):
-        # survey weights are threaded through _compute_lead_coefficients().
+        # pretrends + analytical survey is supported (Phase 8e-iii).
+        # Replicate-weight surveys need per-replicate lead regression refits
+        # which are not yet implemented — reject that combination.
+        if (
+            self.pretrends
+            and survey_design is not None
+            and survey_design.replicate_method is not None
+            and aggregate in ("event_study", "all")
+        ):
+            raise NotImplementedError(
+                "pretrends=True is not yet compatible with replicate-weight "
+                "survey designs. Analytical survey designs (strata/PSU/FPC) "
+                "are supported. Use pretrends=False with replicate weights."
+            )
 
         # Create working copy
         df = data.copy()

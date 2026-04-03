@@ -1175,3 +1175,39 @@ class TestImputationPretrendsSurvey:
         if pt["n_leads"] > 0:
             assert np.isfinite(pt["f_stat"])
             assert np.isfinite(pt["p_value"])
+
+    def test_pretrends_replicate_raises(self, staggered_data):
+        """pretrends=True + replicate-weight survey raises NotImplementedError."""
+        from diff_diff import ImputationDiD
+
+        data = staggered_data
+        # Add BRR replicate weights
+        rng = np.random.RandomState(42)
+        units = sorted(data["unit"].unique())
+        rep_cols = []
+        for r in range(10):
+            signs = rng.choice([-1, 1], size=len(units))
+            sign_map = dict(zip(units, signs))
+            pert = data["unit"].map(sign_map).values.astype(float)
+            w_r = data["weight"].values * (1.0 + 0.5 * pert)
+            w_r = np.maximum(w_r, 0.0)
+            col = f"brr_{r}"
+            data[col] = w_r
+            rep_cols.append(col)
+
+        sd = SurveyDesign(
+            weights="weight",
+            replicate_weights=rep_cols,
+            replicate_method="BRR",
+        )
+        est = ImputationDiD(pretrends=True, horizon_max=3)
+        with pytest.raises(NotImplementedError, match="replicate"):
+            est.fit(
+                data,
+                outcome="outcome",
+                unit="unit",
+                time="time",
+                first_treat="first_treat",
+                survey_design=sd,
+                aggregate="event_study",
+            )

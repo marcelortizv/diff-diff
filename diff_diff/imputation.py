@@ -2103,17 +2103,20 @@ class ImputationDiD(ImputationDiDBootstrapMixin):
             ]
         )
 
-        # OLS with cluster-robust SEs (WLS when survey weights present)
+        # OLS for point estimates + VCV. When survey VCV will replace the
+        # cluster-robust VCV, skip cluster_ids to avoid errors on domains
+        # with few PSUs (the cluster-robust VCV is discarded anyway).
         cluster_ids = df_0[cluster_var].values
         _ols_weights = survey_weights_0
         _ols_weight_type = "pweight" if survey_weights_0 is not None else None
+        _use_survey_vcov = resolved_survey_0 is not None
         try:
             result = solve_ols(
                 X_dm,
                 y_dm,
                 weights=_ols_weights,
                 weight_type=_ols_weight_type,
-                cluster_ids=cluster_ids,
+                cluster_ids=None if _use_survey_vcov else cluster_ids,
                 return_vcov=True,
                 rank_deficient_action=self.rank_deficient_action,
                 column_names=all_x_cols,

@@ -989,6 +989,22 @@ class TestCoefficientOfVariation:
         )
         assert np.isnan(r.coef_var)
 
+    def test_coef_var_zero_se(self):
+        """SE=0 with nonzero estimate -> CV=0.0 (e.g., FPC census)."""
+        from diff_diff.results import DiDResults
+
+        r = DiDResults(
+            att=2.0,
+            se=0.0,
+            t_stat=np.inf,
+            p_value=0.0,
+            conf_int=(2.0, 2.0),
+            n_obs=100,
+            n_treated=50,
+            n_control=50,
+        )
+        assert r.coef_var == 0.0
+
     def test_coef_var_nan_se(self):
         """NaN SE -> CV=NaN."""
         from diff_diff.results import DiDResults

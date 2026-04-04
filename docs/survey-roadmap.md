@@ -328,7 +328,14 @@ Combining them raises `NotImplementedError` or `ValueError`:
 | ImputationDiD | `pretrends=True` + replicate weights | Per-replicate lead regression refits not implemented |
 | ImputationDiD | `pretrend_test()` + replicate weights | Per-replicate Equation 9 refits not implemented |
 | DifferenceInDifferences, TwoWayFixedEffects | `inference='wild_bootstrap'` + `survey_design` | Raises `NotImplementedError`; use analytical survey inference (the default) instead |
-| MultiPeriodDiD | `inference='wild_bootstrap'` + `survey_design` | Warns and falls back to analytical inference (no error raised) |
+
+### Warning/Fallback Behaviors
+
+These do not raise errors but silently change behavior:
+
+| Estimator | Limitation | Behavior |
+|-----------|-----------|----------|
+| MultiPeriodDiD | `inference='wild_bootstrap'` + `survey_design` | Warns and falls back to analytical inference |
 
 ---
 

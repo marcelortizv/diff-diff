@@ -2,7 +2,8 @@ Wooldridge Extended Two-Way Fixed Effects (ETWFE)
 ===================================================
 
 Extended Two-Way Fixed Effects estimator from Wooldridge (2021, 2023),
-equivalent to the Stata ``jwdid`` package (Friosavila 2021).
+based on the Stata ``jwdid`` package specification (Friosavila 2021),
+with documented SE/aggregation deviations noted in the Methodology Registry.
 
 This module implements ETWFE via a single saturated regression that:
 

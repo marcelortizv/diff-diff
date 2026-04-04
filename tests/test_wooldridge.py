@@ -534,8 +534,8 @@ class TestMethodologyCorrectness:
         norm_weights = [w[k] / w_total for k in post_keys]
         assert abs(sum(norm_weights) - 1.0) < 1e-10
 
-    def test_logit_delta_gradient_matches_finite_difference(self):
-        """Analytic delta-method gradient is finite and produces non-negative SE."""
+    def test_logit_delta_method_se_finite(self):
+        """Logit delta-method SEs should be finite and non-negative."""
         from diff_diff.datasets import load_mpdta
 
         df = load_mpdta().copy()
@@ -546,18 +546,13 @@ class TestMethodologyCorrectness:
             df, outcome="lemp_bin", unit="countyreal", time="year", cohort="first_treat"
         )
 
-        grad_found = False
+        assert len(results.group_time_effects) > 0
         for key, cell in results.group_time_effects.items():
-            if "_gradient" not in cell:
-                continue
-            grad_found = True
-            analytic_grad = cell["_gradient"]
-            assert np.all(np.isfinite(analytic_grad)), f"Non-finite gradient at {key}"
             assert cell["se"] >= 0, f"Negative SE at {key}"
-        assert grad_found, "No _gradient entries found in group_time_effects"
+            assert np.isfinite(cell["se"]), f"Non-finite SE at {key}"
 
-    def test_poisson_delta_gradient_finite_check(self):
-        """Poisson gradient entries are finite and produce non-negative SE."""
+    def test_poisson_delta_method_se_finite(self):
+        """Poisson delta-method SEs should be finite and non-negative."""
         from diff_diff.datasets import load_mpdta
 
         df = load_mpdta().copy()
@@ -568,14 +563,10 @@ class TestMethodologyCorrectness:
             df, outcome="emp_count", unit="countyreal", time="year", cohort="first_treat"
         )
 
-        grad_found = False
+        assert len(results.group_time_effects) > 0
         for key, cell in results.group_time_effects.items():
-            if "_gradient" not in cell:
-                continue
-            grad_found = True
-            assert np.all(np.isfinite(cell["_gradient"])), f"Non-finite gradient at {key}"
-            assert cell["se"] >= 0
-        assert grad_found, "No _gradient entries found in group_time_effects"
+            assert cell["se"] >= 0, f"Negative SE at {key}"
+            assert np.isfinite(cell["se"]), f"Non-finite SE at {key}"
 
     def test_ols_etwfe_att_matches_callaway_santanna(self):
         """OLS ETWFE ATT(g,t) equals CallawaySantAnna ATT(g,t) (Proposition 3.1)."""

@@ -546,28 +546,28 @@ class WooldridgeDiD:
         # 9. Optional multiplier bootstrap (overrides analytic SE for overall ATT)
         if self.n_bootstrap > 0:
             rng = np.random.default_rng(self.seed)
-            units_arr = sample[unit].values
-            unique_units = np.unique(units_arr)
-            n_clusters = len(unique_units)
+            # Draw weights at the analytic cluster level (not always unit)
+            unique_boot_clusters = np.unique(cluster_ids)
+            n_boot_clusters = len(unique_boot_clusters)
             post_keys = [(g, t) for (g, t) in gt_keys_ordered if t >= g]
             w_total_b = sum(gt_weights.get(k, 0) for k in post_keys)
             boot_atts: List[float] = []
             for _ in range(self.n_bootstrap):
                 if self.bootstrap_weights == "rademacher":
-                    unit_weights = rng.choice([-1.0, 1.0], size=n_clusters)
+                    cl_weights = rng.choice([-1.0, 1.0], size=n_boot_clusters)
                 elif self.bootstrap_weights == "webb":
-                    unit_weights = rng.choice(
+                    cl_weights = rng.choice(
                         [-np.sqrt(1.5), -1.0, -np.sqrt(0.5), np.sqrt(0.5), 1.0, np.sqrt(1.5)],
-                        size=n_clusters,
+                        size=n_boot_clusters,
                     )
                 else:  # mammen
                     phi = (1 + np.sqrt(5)) / 2
-                    unit_weights = rng.choice(
+                    cl_weights = rng.choice(
                         [-(phi - 1), phi],
                         p=[phi / np.sqrt(5), (phi - 1) / np.sqrt(5)],
-                        size=n_clusters,
+                        size=n_boot_clusters,
                     )
-                obs_weights = unit_weights[np.searchsorted(unique_units, units_arr)]
+                obs_weights = cl_weights[np.searchsorted(unique_boot_clusters, cluster_ids)]
                 y_boot = y + obs_weights * resids
                 coefs_b, _, _ = solve_ols(
                     X,
@@ -695,7 +695,12 @@ class WooldridgeDiD:
             d_diff = _logistic_deriv(eta_base) - _logistic_deriv(eta_0)
             grad = np.mean(X_with_intercept[cell_mask] * d_diff[:, None], axis=0)
             grad[1 + idx] = float(np.mean(_logistic_deriv(eta_base)))
-            se = float(np.sqrt(max(grad @ vcov_full @ grad, 0.0)))
+            # Compute SE in reduced parameter space if rank-deficient
+            if np.any(nan_mask):
+                grad_r = grad[kept_beta]
+                se = float(np.sqrt(max(grad_r @ vcov_reduced @ grad_r, 0.0)))
+            else:
+                se = float(np.sqrt(max(grad @ vcov_full @ grad, 0.0)))
             t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha)
             gt_effects[(g, t)] = {
                 "att": att,
@@ -703,16 +708,18 @@ class WooldridgeDiD:
                 "t_stat": t_stat,
                 "p_value": p_value,
                 "conf_int": conf_int,
-                "_gradient": grad.copy(),
             }
             gt_weights[(g, t)] = int(cell_mask.sum())
-            gt_grads[(g, t)] = grad
+            # Store gradient in reduced space for aggregate SE
+            gt_grads[(g, t)] = grad[kept_beta] if np.any(nan_mask) else grad
 
         gt_keys_ordered = [k for k in gt_keys if k in gt_effects]
-        # ATT-level covariance: J @ vcov_full @ J' where J rows are per-cell gradients
+        # Use reduced vcov for all downstream SE computations
+        _vcov_se = vcov_reduced if np.any(nan_mask) else vcov_full
+        # ATT-level covariance: J @ vcov @ J' where J rows are per-cell gradients
         if gt_keys_ordered:
             J = np.array([gt_grads[k] for k in gt_keys_ordered])
-            gt_vcov = J @ vcov_full @ J.T
+            gt_vcov = J @ _vcov_se @ J.T
         else:
             gt_vcov = None
 
@@ -722,7 +729,7 @@ class WooldridgeDiD:
         if w_total > 0 and post_keys:
             overall_att = sum(gt_weights[k] * gt_effects[k]["att"] for k in post_keys) / w_total
             agg_grad = sum((gt_weights[k] / w_total) * gt_grads[k] for k in post_keys)
-            overall_se = float(np.sqrt(max(agg_grad @ vcov_full @ agg_grad, 0.0)))
+            overall_se = float(np.sqrt(max(agg_grad @ _vcov_se @ agg_grad, 0.0)))
             t_stat, p_value, conf_int = safe_inference(overall_att, overall_se, alpha=self.alpha)
             overall = {
                 "att": overall_att,
@@ -853,7 +860,12 @@ class WooldridgeDiD:
             diff_mu = mu_1 - mu_0
             grad = np.mean(X_full[cell_mask] * diff_mu[:, None], axis=0)
             grad[1 + idx] = float(np.mean(mu_1))
-            se = float(np.sqrt(max(grad @ vcov_full @ grad, 0.0)))
+            # Compute SE in reduced parameter space if rank-deficient
+            if np.any(nan_mask):
+                grad_r = grad[kept_beta]
+                se = float(np.sqrt(max(grad_r @ vcov_reduced @ grad_r, 0.0)))
+            else:
+                se = float(np.sqrt(max(grad @ vcov_full @ grad, 0.0)))
             t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha)
             gt_effects[(g, t)] = {
                 "att": att,
@@ -861,16 +873,16 @@ class WooldridgeDiD:
                 "t_stat": t_stat,
                 "p_value": p_value,
                 "conf_int": conf_int,
-                "_gradient": grad.copy(),
             }
             gt_weights[(g, t)] = int(cell_mask.sum())
-            gt_grads[(g, t)] = grad
+            gt_grads[(g, t)] = grad[kept_beta] if np.any(nan_mask) else grad
 
         gt_keys_ordered = [k for k in gt_keys if k in gt_effects]
-        # ATT-level covariance: J @ vcov_full @ J' where J rows are per-cell gradients
+        _vcov_se = vcov_reduced if np.any(nan_mask) else vcov_full
+        # ATT-level covariance: J @ vcov @ J' where J rows are per-cell gradients
         if gt_keys_ordered:
             J = np.array([gt_grads[k] for k in gt_keys_ordered])
-            gt_vcov = J @ vcov_full @ J.T
+            gt_vcov = J @ _vcov_se @ J.T
         else:
             gt_vcov = None
 
@@ -880,7 +892,7 @@ class WooldridgeDiD:
         if w_total > 0 and post_keys:
             overall_att = sum(gt_weights[k] * gt_effects[k]["att"] for k in post_keys) / w_total
             agg_grad = sum((gt_weights[k] / w_total) * gt_grads[k] for k in post_keys)
-            overall_se = float(np.sqrt(max(agg_grad @ vcov_full @ agg_grad, 0.0)))
+            overall_se = float(np.sqrt(max(agg_grad @ _vcov_se @ agg_grad, 0.0)))
             t_stat, p_value, conf_int = safe_inference(overall_att, overall_se, alpha=self.alpha)
             overall = {
                 "att": overall_att,

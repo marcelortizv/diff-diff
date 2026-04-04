@@ -63,6 +63,7 @@ class EfficientDiDBootstrapMixin:
         cluster_indices: Optional[np.ndarray] = None,
         n_clusters: Optional[int] = None,
         resolved_survey: object = None,
+        unit_level_weights: Optional[np.ndarray] = None,
     ) -> EDiDBootstrapResults:
         """Run multiplier bootstrap on stored EIF values.
 
@@ -136,11 +137,18 @@ class EfficientDiDBootstrapMixin:
         original_atts = np.array([group_time_effects[gt]["effect"] for gt in gt_pairs])
 
         # Perturbed ATTs: (n_bootstrap, n_gt)
+        # Under survey design, perturb survey-score object w_i * eif_i / sum(w)
+        # to match the analytical variance convention (compute_survey_if_variance).
         bootstrap_atts = np.zeros((self.n_bootstrap, n_gt))
         for j, gt in enumerate(gt_pairs):
             eif_gt = eif_by_gt[gt]  # shape (n_units,)
             with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-                perturbation = (all_weights @ eif_gt) / n_units
+                if unit_level_weights is not None:
+                    total_w = float(np.sum(unit_level_weights))
+                    eif_scaled = unit_level_weights * eif_gt / total_w
+                    perturbation = all_weights @ eif_scaled
+                else:
+                    perturbation = (all_weights @ eif_gt) / n_units
             bootstrap_atts[:, j] = original_atts[j] + perturbation
 
         # Post-treatment mask — also exclude NaN effects

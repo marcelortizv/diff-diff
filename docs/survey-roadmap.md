@@ -36,7 +36,7 @@ Phase 5 infrastructure (bootstrap+survey interaction):
 | SunAbraham | Pairs bootstrap + survey | **Resolved** (Phase 6, Rao-Wu rescaled) |
 | ContinuousDiD | Multiplier bootstrap + survey | **Resolved** (Phase 6, multiplier at PSU) |
 | EfficientDiD | Multiplier bootstrap + survey | **Resolved** (Phase 6, multiplier at PSU) |
-| EfficientDiD | Covariates (DR path) + survey | DR nuisance estimation needs survey weight threading |
+| EfficientDiD | Covariates (DR path) + survey | **Resolved**: survey weights threaded through DR nuisance estimation |
 
 All blocked combinations raise `NotImplementedError` when attempted, with a
 message pointing to the planned phase or describing the limitation.
@@ -302,7 +302,6 @@ multi-absorb + survey weights).
 
 | Limitation | Reason |
 |-----------|--------|
-| `covariates` + `survey_design` | DR nuisance path doesn't thread survey weights |
 | `cluster` + `survey_design` | Use `survey_design` with PSU/strata instead |
 
 ### Bootstrap + Replicate Weights (Mutual Exclusion)

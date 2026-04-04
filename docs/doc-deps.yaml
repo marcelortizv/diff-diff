@@ -1,0 +1,544 @@
+# Documentation Dependency Map
+# Maps source files to documentation that may need updating when the source changes.
+# Consumed by /docs-impact skill and referenced in CLAUDE.md.
+#
+# Relationship types:
+#   methodology    - REGISTRY.md section (update if algorithm/edge-case behavior changes)
+#   tutorial       - Jupyter notebook demonstrating the feature
+#   api_reference  - Sphinx RST auto-generated from docstrings (update if signature/docstring changes)
+#   user_guide     - README.md, llms*.txt, choosing_estimator.rst sections
+#   roadmap        - survey-roadmap.md (ROADMAP.md is surfaced globally by /docs-impact)
+#   performance    - benchmarks.rst, performance-plan.md
+#   internal       - CLAUDE.md, CONTRIBUTING.md (developer-facing)
+#
+# Drift risk levels:
+#   high   - historically drifts or has dense cross-references
+#   medium - moderate cross-references, changes occasionally
+#   low    - stable relationship, rarely needs updating
+
+# ──────────────────────────────────────────────────────────────────────
+# Groups: multi-file modules that share documentation dependencies.
+# Members resolve to the first entry (the primary module) for doc lookup.
+# ────────────���─────────────────────────────────────────────────────────
+groups:
+  staggered:
+    - diff_diff/staggered.py
+    - diff_diff/staggered_aggregation.py
+    - diff_diff/staggered_bootstrap.py
+    - diff_diff/staggered_results.py
+  staggered_triple_diff:
+    - diff_diff/staggered_triple_diff.py
+    - diff_diff/staggered_triple_diff_results.py
+  trop:
+    - diff_diff/trop.py
+    - diff_diff/trop_global.py
+    - diff_diff/trop_local.py
+    - diff_diff/trop_results.py
+  imputation:
+    - diff_diff/imputation.py
+    - diff_diff/imputation_bootstrap.py
+    - diff_diff/imputation_results.py
+  two_stage:
+    - diff_diff/two_stage.py
+    - diff_diff/two_stage_bootstrap.py
+    - diff_diff/two_stage_results.py
+  efficient_did:
+    - diff_diff/efficient_did.py
+    - diff_diff/efficient_did_bootstrap.py
+    - diff_diff/efficient_did_covariates.py
+    - diff_diff/efficient_did_results.py
+    - diff_diff/efficient_did_weights.py
+  continuous_did:
+    - diff_diff/continuous_did.py
+    - diff_diff/continuous_did_bspline.py
+    - diff_diff/continuous_did_results.py
+  stacked_did:
+    - diff_diff/stacked_did.py
+    - diff_diff/stacked_did_results.py
+  visualization:
+    - diff_diff/visualization/__init__.py
+    - diff_diff/visualization/_common.py
+    - diff_diff/visualization/_continuous.py
+    - diff_diff/visualization/_diagnostic.py
+    - diff_diff/visualization/_event_study.py
+    - diff_diff/visualization/_power.py
+    - diff_diff/visualization/_staggered.py
+    - diff_diff/visualization/_synthetic.py
+
+# ──────────────────────────────────────────────────────────────────────
+# Source-to-docs mappings
+# ────────���─────────────────────────��───────────────────────────────────
+sources:
+
+  # ── Base estimators ──────��───────────────────────────────────────────
+
+  diff_diff/estimators.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "DifferenceInDifferences, TwoWayFixedEffects, MultiPeriodDiD"
+        type: methodology
+      - path: docs/api/estimators.rst
+        type: api_reference
+      - path: docs/tutorials/01_basic_did.ipynb
+        type: tutorial
+      - path: docs/tutorials/04_parallel_trends.ipynb
+        type: tutorial
+      - path: docs/tutorials/09_real_world_examples.ipynb
+        type: tutorial
+      - path: README.md
+        section: "DifferenceInDifferences"
+        type: user_guide
+      - path: docs/llms-full.txt
+        section: "DifferenceInDifferences"
+        type: user_guide
+      - path: docs/llms.txt
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/benchmarks.rst
+        type: performance
+
+  diff_diff/twfe.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "TwoWayFixedEffects"
+        type: methodology
+      - path: docs/api/estimators.rst
+        type: api_reference
+
+  # ── CallawaySantAnna (staggered group) ─────��────────────────────────
+
+  diff_diff/staggered.py:
+    drift_risk: high
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "CallawaySantAnna"
+        type: methodology
+      - path: docs/api/staggered.rst
+        type: api_reference
+      - path: docs/tutorials/02_staggered_did.ipynb
+        type: tutorial
+      - path: docs/tutorials/16_survey_did.ipynb
+        type: tutorial
+        note: "CallawaySantAnna survey examples"
+      - path: README.md
+        section: "CallawaySantAnna"
+        type: user_guide
+      - path: docs/llms-full.txt
+        section: "CallawaySantAnna"
+        type: user_guide
+      - path: docs/llms.txt
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/benchmarks.rst
+        type: performance
+      - path: docs/survey-roadmap.md
+        type: roadmap
+        note: "Phase 4/6/7 CS survey sections"
+
+  # ── StaggeredTripleDifference (staggered_triple_diff group) ─────────
+
+  diff_diff/staggered_triple_diff.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "StaggeredTripleDifference"
+        type: methodology
+      - path: docs/api/staggered.rst
+        type: api_reference
+
+  # ── SunAbraham ──────────────────────────────────────────────────────
+
+  diff_diff/sun_abraham.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "SunAbraham"
+        type: methodology
+      - path: docs/api/staggered.rst
+        type: api_reference
+      - path: docs/tutorials/02_staggered_did.ipynb
+        type: tutorial
+        note: "SunAbraham comparison section"
+      - path: README.md
+        section: "SunAbraham"
+        type: user_guide
+      - path: docs/llms-full.txt
+        section: "SunAbraham"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/benchmarks.rst
+        type: performance
+
+  # ── ImputationDiD (imputation group) ───��────────────────────────────
+
+  diff_diff/imputation.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "ImputationDiD"
+        type: methodology
+      - path: docs/api/imputation.rst
+        type: api_reference
+      - path: docs/tutorials/11_imputation_did.ipynb
+        type: tutorial
+      - path: README.md
+        section: "ImputationDiD"
+        type: user_guide
+      - path: docs/llms-full.txt
+        section: "ImputationDiD"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+
+  # ── TwoStageDiD (two_stage group) ────────────���─────────────────────
+
+  diff_diff/two_stage.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "TwoStageDiD"
+        type: methodology
+      - path: docs/api/two_stage.rst
+        type: api_reference
+      - path: docs/tutorials/12_two_stage_did.ipynb
+        type: tutorial
+      - path: README.md
+        section: "TwoStageDiD"
+        type: user_guide
+      - path: docs/llms-full.txt
+        section: "TwoStageDiD"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+
+  # ── EfficientDiD (efficient_did group) ──────────────────────────────
+
+  diff_diff/efficient_did.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "EfficientDiD"
+        type: methodology
+      - path: docs/api/efficient_did.rst
+        type: api_reference
+      - path: docs/tutorials/15_efficient_did.ipynb
+        type: tutorial
+      - path: README.md
+        section: "EfficientDiD"
+        type: user_guide
+      - path: docs/llms-full.txt
+        section: "EfficientDiD"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/benchmarks.rst
+        type: performance
+
+  # ── ContinuousDiD (continuous_did group) ────────────────────��───────
+
+  diff_diff/continuous_did.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "ContinuousDiD"
+        type: methodology
+      - path: docs/methodology/continuous-did.md
+        type: methodology
+        note: "Detailed CDiD implementation docs"
+      - path: docs/api/continuous_did.rst
+        type: api_reference
+      - path: docs/tutorials/14_continuous_did.ipynb
+        type: tutorial
+      - path: README.md
+        section: "ContinuousDiD"
+        type: user_guide
+      - path: docs/llms-full.txt
+        section: "ContinuousDiD"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+
+  # ── SyntheticDiD ───────────��───────────────────────────────────────
+
+  diff_diff/synthetic_did.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "SyntheticDiD"
+        type: methodology
+      - path: docs/api/estimators.rst
+        type: api_reference
+      - path: docs/tutorials/03_synthetic_did.ipynb
+        type: tutorial
+      - path: README.md
+        section: "SyntheticDiD"
+        type: user_guide
+      - path: docs/llms-full.txt
+        section: "SyntheticDiD"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/benchmarks.rst
+        type: performance
+
+  # ── TripleDifference ───────────────────────────────────────────────
+
+  diff_diff/triple_diff.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "TripleDifference"
+        type: methodology
+      - path: docs/api/triple_diff.rst
+        type: api_reference
+      - path: docs/tutorials/08_triple_diff.ipynb
+        type: tutorial
+      - path: README.md
+        section: "TripleDifference"
+        type: user_guide
+      - path: docs/llms-full.txt
+        section: "TripleDifference"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+
+  # ── StackedDiD (stacked_did group) ─────────────────────────────────
+
+  diff_diff/stacked_did.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "StackedDiD"
+        type: methodology
+      - path: docs/api/stacked_did.rst
+        type: api_reference
+      - path: docs/tutorials/13_stacked_did.ipynb
+        type: tutorial
+      - path: README.md
+        section: "StackedDiD"
+        type: user_guide
+      - path: docs/llms-full.txt
+        section: "StackedDiD"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+
+  # ── TROP (trop group) ──────────────���───────────────────────────────
+
+  diff_diff/trop.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "TROP"
+        type: methodology
+      - path: docs/api/trop.rst
+        type: api_reference
+      - path: docs/tutorials/10_trop.ipynb
+        type: tutorial
+      - path: README.md
+        section: "TROP"
+        type: user_guide
+      - path: docs/llms-full.txt
+        section: "TROP"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        type: user_guide
+      - path: docs/performance-plan.md
+        type: performance
+
+  # ── HonestDiD ───────��──────────────────────────────────────────────
+
+  diff_diff/honest_did.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "HonestDiD"
+        type: methodology
+      - path: docs/api/honest_did.rst
+        type: api_reference
+      - path: docs/tutorials/05_honest_did.ipynb
+        type: tutorial
+      - path: README.md
+        section: "HonestDiD"
+        type: user_guide
+      - path: docs/llms-full.txt
+        section: "HonestDiD"
+        type: user_guide
+
+  # ── BaconDecomposition ───���─────────────────────────────────────────
+
+  diff_diff/bacon.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "BaconDecomposition"
+        type: methodology
+      - path: docs/api/bacon.rst
+        type: api_reference
+      - path: README.md
+        section: "BaconDecomposition"
+        type: user_guide
+
+  # ── Diagnostics & analysis ───────���─────────────────────────────────
+
+  diff_diff/diagnostics.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Diagnostics"
+        type: methodology
+      - path: docs/api/diagnostics.rst
+        type: api_reference
+      - path: docs/tutorials/04_parallel_trends.ipynb
+        type: tutorial
+
+  diff_diff/pretrends.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Pre-trends"
+        type: methodology
+      - path: docs/api/pretrends.rst
+        type: api_reference
+      - path: docs/tutorials/04_parallel_trends.ipynb
+        type: tutorial
+      - path: docs/tutorials/07_pretrends_power.ipynb
+        type: tutorial
+
+  diff_diff/power.py:
+    drift_risk: low
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Power Analysis"
+        type: methodology
+      - path: docs/api/power.rst
+        type: api_reference
+      - path: docs/tutorials/06_power_analysis.ipynb
+        type: tutorial
+      - path: docs/tutorials/07_pretrends_power.ipynb
+        type: tutorial
+
+  # ── Survey support ─────────────────────────────────────────────────
+
+  diff_diff/survey.py:
+    drift_risk: high
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Survey"
+        type: methodology
+      - path: docs/survey-roadmap.md
+        type: roadmap
+      - path: docs/tutorials/16_survey_did.ipynb
+        type: tutorial
+      - path: README.md
+        section: "Survey"
+        type: user_guide
+      - path: docs/llms-full.txt
+        section: "Survey"
+        type: user_guide
+      - path: docs/choosing_estimator.rst
+        section: "Survey Design Support"
+        type: user_guide
+
+  # ── Infrastructure ─────────────────────────────────────────────────
+
+  diff_diff/linalg.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Variance Estimation, Cluster-Robust SE"
+        type: methodology
+      - path: docs/performance-plan.md
+        type: performance
+      - path: docs/benchmarks.rst
+        type: performance
+      - path: docs/api/utils.rst
+        type: api_reference
+
+  diff_diff/utils.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Inference, safe_inference NaN gating"
+        type: methodology
+      - path: CLAUDE.md
+        section: "safe_inference pattern"
+        type: internal
+      - path: docs/api/utils.rst
+        type: api_reference
+
+  diff_diff/results.py:
+    drift_risk: medium
+    docs:
+      - path: docs/api/results.rst
+        type: api_reference
+      - path: docs/llms-full.txt
+        section: "Results API"
+        type: user_guide
+      - path: docs/llms.txt
+        type: user_guide
+
+  diff_diff/bootstrap_utils.py:
+    drift_risk: medium
+    docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Bootstrap, Survey Bootstrap"
+        type: methodology
+      - path: docs/survey-roadmap.md
+        type: roadmap
+        note: "Phase 6 bootstrap+survey interaction"
+
+  diff_diff/prep.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/prep.rst
+        type: api_reference
+
+  diff_diff/prep_dgp.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/prep.rst
+        type: api_reference
+
+  diff_diff/datasets.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/datasets.rst
+        type: api_reference
+      - path: docs/tutorials/09_real_world_examples.ipynb
+        type: tutorial
+
+  diff_diff/practitioner.py:
+    drift_risk: low
+    docs:
+      - path: docs/llms-practitioner.txt
+        type: user_guide
+
+  # ── Visualization (visualization group) ────────────────────────────
+
+  diff_diff/visualization/__init__.py:
+    drift_risk: low
+    docs:
+      - path: docs/api/visualization.rst
+        type: api_reference
+
+  # ── Minimal entries (infrastructure files) ─────────────────────────
+
+  diff_diff/__init__.py:
+    drift_risk: low
+    docs:
+      - path: docs/llms.txt
+        type: user_guide
+        note: "Public API surface"
+
+  diff_diff/_backend.py:
+    drift_risk: low
+    docs:
+      - path: docs/performance-plan.md
+        type: performance
+        note: "Rust backend detection"

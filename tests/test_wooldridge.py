@@ -817,3 +817,87 @@ class TestBootstrapValidation:
             WooldridgeDiD(method="poisson", n_bootstrap=50).fit(
                 df, outcome="y", unit="unit", time="time", cohort="cohort"
             )
+
+
+class TestBootstrapClusterLevel:
+    """Regression test: bootstrap must draw weights at the analytic cluster level."""
+
+    def test_bootstrap_with_coarser_cluster(self):
+        """Bootstrap with cluster != unit should produce different SE than unit-level."""
+        rng = np.random.default_rng(42)
+        rows = []
+        for u in range(80):
+            cohort = 3 if u < 40 else 0
+            region = u // 10  # 8 regions, coarser than 80 units
+            for t in range(1, 6):
+                y = rng.standard_normal() + (1.0 if cohort > 0 and t >= cohort else 0)
+                rows.append({"unit": u, "time": t, "cohort": cohort, "y": y, "region": region})
+        df = pd.DataFrame(rows)
+
+        # Bootstrap at unit level (default)
+        r_unit = WooldridgeDiD(n_bootstrap=99, seed=0).fit(
+            df, outcome="y", unit="unit", time="time", cohort="cohort"
+        )
+        # Bootstrap at region level (coarser)
+        r_region = WooldridgeDiD(n_bootstrap=99, seed=0, cluster="region").fit(
+            df, outcome="y", unit="unit", time="time", cohort="cohort"
+        )
+        assert np.isfinite(r_unit.overall_se)
+        assert np.isfinite(r_region.overall_se)
+        # Coarser clustering with fewer clusters should produce different SE
+        assert r_unit.overall_se != r_region.overall_se
+
+
+class TestNonlinearRankDeficiency:
+    """Regression test: rank-deficient logit/Poisson must produce finite SEs
+    for estimable ATT cells when nuisance columns are dropped."""
+
+    def test_logit_with_duplicated_nuisance_column(self):
+        """Logit with a duplicated covariate column should drop it and still
+        produce finite SEs for estimable cells."""
+        rng = np.random.default_rng(42)
+        rows = []
+        for u in range(60):
+            cohort = 3 if u < 30 else 0
+            for t in range(1, 6):
+                treated = int(cohort > 0 and t >= cohort)
+                eta = -0.5 + 1.0 * treated + 0.1 * rng.standard_normal()
+                y = int(rng.random() < 1 / (1 + np.exp(-eta)))
+                x1 = rng.standard_normal()
+                rows.append(
+                    {"unit": u, "time": t, "cohort": cohort, "y": y, "x1": x1, "x1_dup": x1}
+                )
+        df = pd.DataFrame(rows)
+        est = WooldridgeDiD(method="logit", rank_deficient_action="silent")
+        r = est.fit(
+            df, outcome="y", unit="unit", time="time", cohort="cohort", exovar=["x1", "x1_dup"]
+        )
+        assert len(r.group_time_effects) > 0
+        for cell in r.group_time_effects.values():
+            assert np.isfinite(cell["se"]), "SE should be finite for estimable cells"
+            assert cell["se"] >= 0
+
+    def test_poisson_with_duplicated_nuisance_column(self):
+        """Poisson with a duplicated covariate column should drop it and still
+        produce finite SEs for estimable cells."""
+        rng = np.random.default_rng(7)
+        rows = []
+        for u in range(60):
+            cohort = 3 if u < 30 else 0
+            for t in range(1, 6):
+                treated = int(cohort > 0 and t >= cohort)
+                mu = np.exp(0.5 + 0.8 * treated + 0.1 * rng.standard_normal())
+                y = rng.poisson(mu)
+                x1 = rng.standard_normal()
+                rows.append(
+                    {"unit": u, "time": t, "cohort": cohort, "y": float(y), "x1": x1, "x1_dup": x1}
+                )
+        df = pd.DataFrame(rows)
+        est = WooldridgeDiD(method="poisson", rank_deficient_action="silent")
+        r = est.fit(
+            df, outcome="y", unit="unit", time="time", cohort="cohort", exovar=["x1", "x1_dup"]
+        )
+        assert len(r.group_time_effects) > 0
+        for cell in r.group_time_effects.values():
+            assert np.isfinite(cell["se"]), "SE should be finite for estimable cells"
+            assert cell["se"] >= 0

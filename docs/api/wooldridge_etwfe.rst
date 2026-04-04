@@ -69,7 +69,7 @@ Results container returned by ``WooldridgeDiD.fit()``.
 Example Usage
 -------------
 
-Basic OLS (matches Stata ``jwdid y, ivar(unit) tvar(time) gvar(cohort)``)::
+Basic OLS (follows Stata ``jwdid y, ivar(unit) tvar(time) gvar(cohort)``)::
 
     import pandas as pd
     from diff_diff import WooldridgeDiD
@@ -92,7 +92,7 @@ View cohort×time cell estimates (post-treatment)::
             print(f"g={g} t={t}  ATT={v['att']:.4f}  SE={v['se']:.4f}")
 
 Poisson QMLE for non-negative outcomes
-(matches Stata ``jwdid emp, method(poisson)``)::
+(follows Stata ``jwdid emp, method(poisson)``)::
 
     import numpy as np
     df['emp'] = np.exp(df['lemp'])
@@ -104,7 +104,7 @@ Poisson QMLE for non-negative outcomes
     print(r_pois.summary('simple'))
 
 Logit for binary outcomes
-(matches Stata ``jwdid y, method(logit)``)::
+(follows Stata ``jwdid y, method(logit)``)::
 
     m_logit = WooldridgeDiD(method='logit')
     r_logit = m_logit.fit(df, outcome='hi_emp', unit='countyreal',

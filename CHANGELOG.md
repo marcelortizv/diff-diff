@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.4] - 2026-04-04
+
+### Added
+- **SDR replicate method** (Phase 8a) — Successive Difference Replication for ACS PUMS users. `SurveyDesign(replicate_method="SDR")` with variance formula `V = 4/R * sum((theta_r - theta)^2)`.
+- **FPC support for ImputationDiD and TwoStageDiD** (Phase 8b) — finite population correction now threaded through TSL variance for both estimators.
+- **Lonely PSU "adjust" in bootstrap** (Phase 8d) — `lonely_psu="adjust"` now works with survey-aware bootstrap (previously raised `NotImplementedError`). Uses Rust & Rao (1996) grand-mean centering.
+- **CV on estimates** (Phase 8e) — `coef_var` property on all results objects (SE/estimate). Handles edge cases (SE=0, estimate=0).
+- **Weight trimming utility** (Phase 8e) — `trim_weights(data, weight_col, upper=None, lower=None, quantile=None)` in `prep.py` for capping extreme survey weights.
+- **ImputationDiD pretrends + survey** (Phase 8e) — pre-trends F-test now survey-aware using subpopulation approach for correct variance under complex designs.
+- Updated ImputationDiD tutorial to demonstrate `pretrends=True` event study
+- Updated survey tutorial: narrative improvements, chart rendering fixes
+
+### Fixed
+- Fix survey pretrend F-test df calculation and rank-deficient survey VCV handling
+- Fix `trim_weights` NaN poisoning when weight column contains missing values
+- Fix single-singleton PSU warning for lonely_psu="adjust"
+
 ## [2.8.3] - 2026-04-02
 
 ### Added
@@ -1112,6 +1129,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.8.4]: https://github.com/igerber/diff-diff/compare/v2.8.3...v2.8.4
 [2.8.3]: https://github.com/igerber/diff-diff/compare/v2.8.2...v2.8.3
 [2.8.2]: https://github.com/igerber/diff-diff/compare/v2.8.1...v2.8.2
 [2.8.1]: https://github.com/igerber/diff-diff/compare/v2.8.0...v2.8.1

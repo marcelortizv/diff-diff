@@ -571,6 +571,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             # Use the resolved survey's weights (already normalized per weight_type)
             # subset to unit level via _unit_first_panel_row (aligned to all_units)
             unit_level_weights = self._unit_resolved_survey.weights
+        self._unit_level_weights = unit_level_weights
 
         cohort_fractions: Dict[float, float] = {}
         if unit_level_weights is not None:
@@ -673,6 +674,15 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 effective_p1_col = period_to_col[effective_base]
             else:
                 effective_p1_col = period_1_col
+
+            # Guard: skip cohorts with zero survey weight (all units zero-weighted)
+            if cohort_fractions[g] <= 0:
+                warnings.warn(
+                    f"Cohort {g} has zero survey weight; skipping.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                continue
 
             # Estimate all (g, t) cells including pre-treatment. Under PT-Post,
             # pre-treatment cells serve as placebo/pre-trend diagnostics, matching
@@ -976,6 +986,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 cluster_indices=unit_cluster_indices,
                 n_clusters=n_clusters,
                 resolved_survey=self._unit_resolved_survey,
+                unit_level_weights=self._unit_level_weights,
             )
             # Update estimates with bootstrap inference
             overall_se = bootstrap_results.overall_att_se
@@ -1137,6 +1148,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         unit_cohorts: np.ndarray,
         cohort_fractions: Dict[float, float],
         n_units: int,
+        unit_weights: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Compute weight influence function correction (O(1) scale, matching EIF).
 
@@ -1156,6 +1168,9 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             ``{cohort: n_cohort / n}`` for each cohort.
         n_units : int
             Total number of units.
+        unit_weights : ndarray, shape (n_units,), optional
+            Survey weights at the unit level.  When provided, uses the
+            survey-weighted WIF formula: IF_i(p_g) = (w_i * 1{G_i=g} - pg_k).
 
         Returns
         -------
@@ -1169,10 +1184,19 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             return np.zeros(n_units)
 
         indicator = (unit_cohorts[:, None] == groups_for_keepers[None, :]).astype(float)
-        indicator_sum = np.sum(indicator - pg_keepers, axis=1)
+
+        if unit_weights is not None:
+            # Survey-weighted WIF (matches staggered_aggregation.py:392-401):
+            # IF_i(p_g) = (w_i * 1{G_i=g} - pg_k), NOT (1{G_i=g} - pg_k)
+            weighted_indicator = indicator * unit_weights[:, None]
+            indicator_diff = weighted_indicator - pg_keepers
+            indicator_sum = np.sum(indicator_diff, axis=1)
+        else:
+            indicator_diff = indicator - pg_keepers
+            indicator_sum = np.sum(indicator_diff, axis=1)
 
         with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-            if1 = (indicator - pg_keepers) / sum_pg
+            if1 = indicator_diff / sum_pg
             if2 = np.outer(indicator_sum, pg_keepers) / sum_pg**2
             wif_matrix = if1 - if2
             wif_contrib = wif_matrix @ effects
@@ -1229,7 +1253,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
 
         # WIF correction: accounts for uncertainty in cohort-size weights
         wif = self._compute_wif_contribution(
-            keepers, effects, unit_cohorts, cohort_fractions, n_units
+            keepers, effects, unit_cohorts, cohort_fractions, n_units,
+            unit_weights=self._unit_level_weights,
         )
         agg_eif_total = agg_eif + wif  # both O(1) scale
 
@@ -1325,7 +1350,8 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 es_keepers = [(g, t) for (g, t) in gt_pairs]
                 es_effects = effs
                 wif = self._compute_wif_contribution(
-                    es_keepers, es_effects, unit_cohorts, cohort_fractions, n_units
+                    es_keepers, es_effects, unit_cohorts, cohort_fractions, n_units,
+                    unit_weights=self._unit_level_weights,
                 )
                 agg_eif = agg_eif + wif
 

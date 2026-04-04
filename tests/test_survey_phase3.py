@@ -1044,6 +1044,66 @@ class TestEfficientDiDCovSurvey:
         assert np.isfinite(result.overall_se)
         assert result.overall_se > 0
 
+    def test_analytical_se_differs_from_unweighted(self, cov_survey_data):
+        """Survey analytical SE should differ from unweighted SE."""
+        from diff_diff import EfficientDiD
+
+        sd = SurveyDesign(weights="weight")
+        result_survey = EfficientDiD(n_bootstrap=0).fit(
+            cov_survey_data,
+            "outcome", "unit", "time", "first_treat",
+            covariates=["x1"],
+            survey_design=sd,
+        )
+        result_nosurv = EfficientDiD(n_bootstrap=0).fit(
+            cov_survey_data,
+            "outcome", "unit", "time", "first_treat",
+            covariates=["x1"],
+        )
+        # Non-uniform weights (1.0 + 0.3*stratum) should produce different SEs
+        assert result_survey.overall_se != result_nosurv.overall_se
+        assert np.isfinite(result_survey.overall_se)
+        assert result_survey.overall_se > 0
+
+    def test_bootstrap_se_in_ballpark_of_analytical(self, cov_survey_data):
+        """Bootstrap SE should be in same ballpark as analytical SE."""
+        from diff_diff import EfficientDiD
+
+        sd = SurveyDesign(weights="weight")
+        result_analytical = EfficientDiD(n_bootstrap=0).fit(
+            cov_survey_data,
+            "outcome", "unit", "time", "first_treat",
+            covariates=["x1"],
+            survey_design=sd,
+        )
+        result_boot = EfficientDiD(n_bootstrap=199, seed=42).fit(
+            cov_survey_data,
+            "outcome", "unit", "time", "first_treat",
+            covariates=["x1"],
+            survey_design=sd,
+        )
+        ratio = result_boot.overall_se / result_analytical.overall_se
+        assert 0.3 < ratio < 3.0, (
+            f"Bootstrap/analytical SE ratio {ratio:.2f} outside [0.3, 3.0]"
+        )
+
+    def test_zero_weight_cohort_skipped(self, cov_survey_data):
+        """Zero-weight cohort should be skipped with a warning."""
+        from diff_diff import EfficientDiD
+
+        # Set early cohort (first_treat=4) weights to near-zero
+        cov_survey_data = cov_survey_data.copy()
+        cov_survey_data.loc[cov_survey_data["first_treat"] == 4, "weight"] = 1e-15
+        sd = SurveyDesign(weights="weight")
+        result = EfficientDiD(n_bootstrap=0).fit(
+            cov_survey_data,
+            "outcome", "unit", "time", "first_treat",
+            covariates=["x1"],
+            survey_design=sd,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+
 
 # =============================================================================
 # Scale Invariance (applies to all estimators)

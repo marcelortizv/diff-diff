@@ -488,6 +488,10 @@ def compute_generated_outcomes_cov(
     g_mask = cohort_masks[target_g]
     pi_g = cohort_fractions[target_g]
 
+    # Guard: zero survey weight for the target cohort → no DR estimation possible
+    if pi_g <= 0:
+        return np.zeros((n_units, H))
+
     gen_out = np.zeros((n_units, H))
 
     for j, (gp, tpre) in enumerate(valid_pairs):

@@ -92,7 +92,7 @@ Survey-aware bootstrap for all 8 bootstrap-using estimators. Two strategies:
 
 ### Replicate Weight Variance ✅ (2026-03-26)
 Re-run WLS for each replicate weight column, compute variance from distribution
-of estimates. Supports BRR, Fay's BRR, JK1, JKn methods.
+of estimates. Supports BRR, Fay's BRR, JK1, JKn, and SDR methods.
 JKn requires explicit `replicate_strata` (per-replicate stratum assignment).
 - `replicate_weights`, `replicate_method`, `fay_rho` fields on SurveyDesign
 - `compute_replicate_vcov()` for OLS-based estimators (re-runs WLS per replicate)

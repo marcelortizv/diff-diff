@@ -1087,8 +1087,7 @@ def _resolve_survey_for_fit(survey_design, data, inference_mode="analytical"):
     if inference_mode == "wild_bootstrap":
         raise NotImplementedError(
             "Wild bootstrap with survey weights is not yet supported. "
-            "Use inference='analytical' with survey_design, or use "
-            "survey-aware multiplier bootstrap (n_bootstrap > 0)."
+            "Use analytical survey inference (the default) instead."
         )
 
     resolved = survey_design.resolve(data)

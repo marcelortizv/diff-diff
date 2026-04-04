@@ -1088,14 +1088,12 @@ class TestEfficientDiDCovSurvey:
         )
 
     def test_zero_weight_cohort_skipped(self, cov_survey_data):
-        """Zero-weight cohort should be skipped with a warning."""
+        """Zero-weight treated cohort should be skipped with a warning."""
         from diff_diff import EfficientDiD
 
         # Set early cohort (first_treat=4) weights to exactly zero
         cov_survey_data = cov_survey_data.copy()
         cov_survey_data.loc[cov_survey_data["first_treat"] == 4, "weight"] = 0.0
-        # Need small positive weight for pweight validation (can't be all zero)
-        # Keep remaining cohorts with positive weights
         sd = SurveyDesign(weights="weight")
         with pytest.warns(UserWarning, match="zero survey weight"):
             result = EfficientDiD(n_bootstrap=0).fit(
@@ -1106,6 +1104,21 @@ class TestEfficientDiDCovSurvey:
             )
         assert np.isfinite(result.overall_att)
         assert np.isfinite(result.overall_se)
+
+    def test_zero_weight_never_treated_raises(self, cov_survey_data):
+        """Zero-weight never-treated group should raise ValueError."""
+        from diff_diff import EfficientDiD
+
+        cov_survey_data = cov_survey_data.copy()
+        cov_survey_data.loc[cov_survey_data["first_treat"] == 0, "weight"] = 0.0
+        sd = SurveyDesign(weights="weight")
+        with pytest.raises(ValueError, match="zero survey weight"):
+            EfficientDiD(n_bootstrap=0).fit(
+                cov_survey_data,
+                "outcome", "unit", "time", "first_treat",
+                covariates=["x1"],
+                survey_design=sd,
+            )
 
 
 # =============================================================================

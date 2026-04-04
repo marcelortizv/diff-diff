@@ -608,11 +608,10 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
 
         # Guard: never-treated with zero survey weight → no valid comparisons
         if cohort_fractions.get(np.inf, 0.0) <= 0 and use_covariates:
-            warnings.warn(
-                "Never-treated group has zero survey weight; no valid "
-                "comparisons possible for covariates path.",
-                UserWarning,
-                stacklevel=2,
+            raise ValueError(
+                "Never-treated group has zero survey weight. The doubly "
+                "robust covariates path requires a never-treated control "
+                "group with positive survey weight for nuisance estimation."
             )
 
         # ----- Covariate preparation (if provided) -----
@@ -1274,17 +1273,27 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             keepers, effects, unit_cohorts, cohort_fractions, n_units,
             unit_weights=self._unit_level_weights,
         )
-        # Compute SE: survey path uses score-level psi + compute_survey_if_variance
-        # to avoid double-weighting (compute_survey_vcov applies w_i internally,
-        # which would double-weight the survey-weighted WIF term).
+        # Compute SE: survey path uses score-level psi to avoid double-weighting
+        # (compute_survey_vcov applies w_i internally, which would double-weight
+        # the survey-weighted WIF term). Dispatch replicate vs TSL.
         if self._unit_resolved_survey is not None:
             uw = self._unit_level_weights
             total_w = float(np.sum(uw))
-            # Score-level: standard = w*eif/sum(w), wif already has w_i in indicator
             psi_total = uw * agg_eif / total_w + wif / total_w
-            from diff_diff.survey import compute_survey_if_variance
 
-            variance = compute_survey_if_variance(psi_total, self._unit_resolved_survey)
+            if (hasattr(self._unit_resolved_survey, 'uses_replicate_variance')
+                    and self._unit_resolved_survey.uses_replicate_variance):
+                from diff_diff.survey import compute_replicate_if_variance
+
+                variance, _ = compute_replicate_if_variance(
+                    psi_total, self._unit_resolved_survey
+                )
+            else:
+                from diff_diff.survey import compute_survey_if_variance
+
+                variance = compute_survey_if_variance(
+                    psi_total, self._unit_resolved_survey
+                )
             se = float(np.sqrt(max(variance, 0.0))) if np.isfinite(variance) else np.nan
         else:
             agg_eif_total = agg_eif + wif
@@ -1387,9 +1396,20 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                 uw = self._unit_level_weights
                 total_w = float(np.sum(uw))
                 psi_total = uw * agg_eif / total_w + wif_e / total_w
-                from diff_diff.survey import compute_survey_if_variance
 
-                variance = compute_survey_if_variance(psi_total, self._unit_resolved_survey)
+                if (hasattr(self._unit_resolved_survey, 'uses_replicate_variance')
+                        and self._unit_resolved_survey.uses_replicate_variance):
+                    from diff_diff.survey import compute_replicate_if_variance
+
+                    variance, _ = compute_replicate_if_variance(
+                        psi_total, self._unit_resolved_survey
+                    )
+                else:
+                    from diff_diff.survey import compute_survey_if_variance
+
+                    variance = compute_survey_if_variance(
+                        psi_total, self._unit_resolved_survey
+                    )
                 agg_se = float(np.sqrt(max(variance, 0.0))) if np.isfinite(variance) else np.nan
             else:
                 agg_eif = agg_eif + wif_e

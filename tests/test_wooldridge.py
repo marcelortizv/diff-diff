@@ -1043,3 +1043,166 @@ class TestOutcomeValidation:
             WooldridgeDiD(method="poisson").fit(
                 df, outcome="y", unit="unit", time="time", cohort="cohort"
             )
+
+
+class TestUnbalancedOLS:
+    """Regression: OLS with exact FE absorption on unbalanced panels.
+
+    The iterative alternating-projections within-transform must match
+    explicit unit+time dummy OLS on unbalanced data (P0 fix).
+    """
+
+    @pytest.fixture
+    def unbalanced_data(self):
+        """Panel where some units have fewer periods (dropout)."""
+        rng = np.random.RandomState(42)
+        rows = []
+        for u in range(20):
+            g = 3 if u < 10 else 0
+            # Make 3 units unbalanced (observed only periods 1-3)
+            max_t = 3 if u in [2, 5, 7] else 5
+            for t in range(1, max_t + 1):
+                effect = 0.5 if g > 0 and t >= g else 0.0
+                y = rng.normal() + effect
+                rows.append({"unit": u, "time": t, "cohort": g, "y": y})
+        return pd.DataFrame(rows)
+
+    def test_parity_with_dummy_ols_not_yet_treated(self, unbalanced_data):
+        from diff_diff.linalg import solve_ols
+
+        df = unbalanced_data
+        r = WooldridgeDiD(control_group="not_yet_treated").fit(
+            df, outcome="y", unit="unit", time="time", cohort="cohort"
+        )
+
+        # Build explicit dummy regression on same sample
+        sample = _filter_sample(df, "unit", "time", "cohort", "not_yet_treated", 0)
+        X_int, _, gt_keys = _build_interaction_matrix(
+            sample, cohort="cohort", time="time", anticipation=0,
+            control_group="not_yet_treated", method="ols",
+        )
+        unit_dummies = pd.get_dummies(sample["unit"], drop_first=True).values.astype(float)
+        time_dummies = pd.get_dummies(sample["time"], drop_first=True).values.astype(float)
+        intercept = np.ones((len(sample), 1))
+        X_full = np.hstack([intercept, X_int, unit_dummies, time_dummies])
+        y = sample["y"].values
+
+        coefs_dummy, _, _ = solve_ols(X_full, y)
+        n_int = X_int.shape[1]
+
+        for i, (g, t) in enumerate(gt_keys):
+            if (g, t) in r.group_time_effects:
+                np.testing.assert_allclose(
+                    r.group_time_effects[(g, t)]["att"],
+                    coefs_dummy[1 + i],
+                    atol=1e-6,
+                    err_msg=f"ATT mismatch at cell ({g},{t})",
+                )
+
+    def test_never_treated_unbalanced_finite(self, unbalanced_data):
+        """never_treated on unbalanced data should produce finite results.
+
+        Explicit-dummy parity is not meaningful for never_treated because the
+        all-cells interaction matrix creates rank deficiency with unit dummies
+        (within-transform avoids this by absorbing FE before solving).
+        """
+        df = unbalanced_data
+        r = WooldridgeDiD(control_group="never_treated").fit(
+            df, outcome="y", unit="unit", time="time", cohort="cohort"
+        )
+        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.overall_se)
+        # Should have pre-treatment placebo cells (OLS never_treated)
+        pre_cells = [(g, t) for (g, t) in r.group_time_effects if t < g]
+        assert len(pre_cells) > 0
+
+
+class TestNonlinearNeverTreated:
+    """Regression: nonlinear never_treated uses post-treatment cells only (P1 fix).
+
+    Nonlinear methods with never_treated must produce a complete post-treatment
+    ATT grid without arbitrary QR-based column dropping.
+    """
+
+    @pytest.fixture
+    def binary_data(self):
+        rng = np.random.RandomState(42)
+        rows = []
+        for u in range(60):
+            g = 3 if u < 20 else (4 if u < 40 else 0)
+            for t in range(1, 6):
+                effect = 0.3 if g > 0 and t >= g else 0.0
+                p = 1 / (1 + np.exp(-(rng.normal() * 0.3 + effect)))
+                y = int(rng.random() < p)
+                rows.append({"unit": u, "time": t, "cohort": g, "y": float(y)})
+        return pd.DataFrame(rows)
+
+    @pytest.fixture
+    def count_data(self):
+        rng = np.random.RandomState(42)
+        rows = []
+        for u in range(60):
+            g = 3 if u < 20 else (4 if u < 40 else 0)
+            for t in range(1, 6):
+                effect = 0.3 if g > 0 and t >= g else 0.0
+                y = rng.poisson(np.exp(0.5 + effect))
+                rows.append({"unit": u, "time": t, "cohort": g, "y": float(y)})
+        return pd.DataFrame(rows)
+
+    def test_logit_never_treated_post_treatment_only(self, binary_data):
+        r = WooldridgeDiD(method="logit", control_group="never_treated").fit(
+            binary_data, outcome="y", unit="unit", time="time", cohort="cohort"
+        )
+        # All cells should be post-treatment
+        for (g, t) in r.group_time_effects:
+            assert t >= g, f"Pre-treatment cell ({g},{t}) in nonlinear never_treated"
+        # All expected post-treatment cells present
+        expected = {(g, t) for g in [3, 4] for t in range(1, 6) if t >= g}
+        assert set(r.group_time_effects.keys()) == expected
+        assert np.isfinite(r.overall_att)
+
+    def test_poisson_never_treated_post_treatment_only(self, count_data):
+        r = WooldridgeDiD(method="poisson", control_group="never_treated").fit(
+            count_data, outcome="y", unit="unit", time="time", cohort="cohort"
+        )
+        for (g, t) in r.group_time_effects:
+            assert t >= g, f"Pre-treatment cell ({g},{t}) in nonlinear never_treated"
+        expected = {(g, t) for g in [3, 4] for t in range(1, 6) if t >= g}
+        assert set(r.group_time_effects.keys()) == expected
+        assert np.isfinite(r.overall_att)
+
+    def test_interaction_matrix_fewer_cols_for_nonlinear(self):
+        """For never_treated, nonlinear methods get fewer interaction columns
+        than OLS (no pre-treatment cells)."""
+        rng = np.random.RandomState(42)
+        rows = []
+        for u in range(20):
+            g = 3 if u < 10 else 0
+            for t in range(1, 6):
+                rows.append({"unit": u, "time": t, "cohort": g, "y": 0.0})
+        df = pd.DataFrame(rows)
+
+        X_ols, _, _ = _build_interaction_matrix(
+            df, "cohort", "time", 0, "never_treated", "ols"
+        )
+        X_logit, _, _ = _build_interaction_matrix(
+            df, "cohort", "time", 0, "never_treated", "logit"
+        )
+        X_nyt, _, _ = _build_interaction_matrix(
+            df, "cohort", "time", 0, "not_yet_treated", "ols"
+        )
+        # OLS never_treated > nonlinear never_treated == not_yet_treated
+        assert X_ols.shape[1] > X_logit.shape[1]
+        assert X_logit.shape[1] == X_nyt.shape[1]
+
+    def test_ols_never_treated_still_has_pre_treatment(self):
+        """OLS path should still include pre-treatment placebo cells."""
+        from diff_diff.datasets import load_mpdta
+
+        df = load_mpdta()
+        r = WooldridgeDiD(control_group="never_treated").fit(
+            df, outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
+        )
+        # OLS never_treated should have pre-treatment cells
+        pre_treatment = [(g, t) for (g, t) in r.group_time_effects if t < g]
+        assert len(pre_treatment) > 0, "OLS never_treated lost pre-treatment placebo cells"

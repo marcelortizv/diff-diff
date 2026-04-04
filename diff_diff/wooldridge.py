@@ -103,6 +103,7 @@ def _build_interaction_matrix(
     time: str,
     anticipation: int,
     control_group: str = "not_yet_treated",
+    method: str = "ols",
 ) -> Tuple[np.ndarray, List[str], List[Tuple[Any, Any]]]:
     """Build the saturated cohort×time interaction design matrix.
 
@@ -110,11 +111,16 @@ def _build_interaction_matrix(
     Pre-treatment obs from treated units sit in the regression baseline alongside
     not-yet-treated controls.
 
-    For ``never_treated``: ALL (g, t) pairs for each treated cohort. This
+    For ``never_treated`` + OLS: ALL (g, t) pairs for each treated cohort. This
     "absorbs" pre-treatment obs from treated units into their own indicators so
     they do not serve as implicit controls in the baseline. Only never-treated
     observations remain in the omitted category. Pre-treatment coefficients
     (t < g) serve as placebo/pre-trend tests.
+
+    For ``never_treated`` + nonlinear (logit/Poisson): post-treatment cells only.
+    Nonlinear paths use explicit cohort + time dummies (not within-transformation),
+    so including all (g, t) cells would create exact collinearity between each
+    cohort dummy and the sum of its cell indicators.
 
     Returns
     -------
@@ -127,13 +133,18 @@ def _build_interaction_matrix(
     cohort_vals = data[cohort].values
     time_vals = data[time].values
 
+    # OLS + never_treated: all (g,t) pairs (placebo via within-transform FE)
+    # Nonlinear + never_treated: post-treatment only (avoids cohort dummy collinearity)
+    # not_yet_treated: post-treatment only (always)
+    include_pre = control_group == "never_treated" and method == "ols"
+
     cols = []
     col_names = []
     gt_keys = []
 
     for g in groups:
         for t in times:
-            if control_group == "never_treated" or t >= g - anticipation:
+            if include_pre or t >= g - anticipation:
                 indicator = ((cohort_vals == g) & (time_vals == t)).astype(float)
                 cols.append(indicator)
                 col_names.append(f"g{g}_t{t}")
@@ -390,6 +401,7 @@ class WooldridgeDiD:
             time=time,
             anticipation=self.anticipation,
             control_group=self.control_group,
+            method=self.method,
         )
         if X_int.shape[1] == 0:
             raise ValueError(
@@ -525,7 +537,13 @@ class WooldridgeDiD:
         for i in range(X_design.shape[1]):
             tmp[f"_x{i}"] = X_design[:, i]
 
-        transformed = within_transform(tmp, all_vars, unit=unit, time=time, suffix="_demeaned")
+        # Use uniform weights to trigger iterative alternating projections,
+        # which is exact for both balanced and unbalanced panels.
+        # The one-pass formula (y - ȳ_i - ȳ_t + ȳ) is only exact for balanced panels.
+        transformed = within_transform(
+            tmp, all_vars, unit=unit, time=time, suffix="_demeaned",
+            weights=np.ones(len(tmp)),
+        )
 
         y = transformed[f"{outcome}_demeaned"].values
         X_cols = [f"_x{i}_demeaned" for i in range(X_design.shape[1])]

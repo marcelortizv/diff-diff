@@ -1100,6 +1100,7 @@ The saturated ETWFE regression includes:
 4. Additional covariates X_it interacted with cohort×time indicators (optional)
 
 The interaction coefficient `δ_{g,t}` identifies `ATT(g, t)` under parallel trends.
+- **Note:** OLS path uses iterative alternating-projection within-transformation (uniform weights) for exact FE absorption on both balanced and unbalanced panels. One-pass demeaning (`y - ȳ_i - ȳ_t + ȳ`) is only exact for balanced panels.
 
 *Nonlinear extensions (Wooldridge 2023):*
 
@@ -1150,6 +1151,7 @@ where `g(·)` is the link inverse (logistic or exp), `η_i` is the individual li
 - Never-treated control only: Pre-treatment periods still estimable as placebo ATTs
 - **Note:** Poisson QMLE with cohort+time dummies (not unit dummies) is consistent even in short panels (Wooldridge 1999, JBES). The exponential mean function is unique in that incidental parameters from group dummies do not cause inconsistency.
 - **Note:** Logit path uses cohort×time additive dummies (not unit dummies) to avoid incidental parameters bias — a standard limitation of logit FE in short panels. This matches Stata `jwdid method(logit)` which uses `i.gvar i.tvar`.
+- **Note:** Nonlinear methods (logit, Poisson) with `control_group="never_treated"` restrict the interaction matrix to post-treatment cells only. Pre-treatment placebo cells are OLS-only (where within-transformation absorbs FE). Including all (g,t) cells in the nonlinear design creates exact collinearity between cohort dummies and cell indicator sums, leading to a data-dependent normalization via QR dropping.
 
 *Algorithm:*
 1. Identify cohorts G and time periods T from data

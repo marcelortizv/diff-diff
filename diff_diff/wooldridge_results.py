@@ -192,9 +192,10 @@ class WooldridgeDiDResults:
                 f"{p:>8.4f}{stars}   [{ci_lo}, {ci_hi}]"
             )
 
+        ci_pct = f"{(1 - self.alpha) * 100:.0f}%"
         header = (
             f"{'Parameter':<22} {'Estimate':>10}  {'Std. Err.':>10}  "
-            f"{'t-stat':>8}  {'P>|t|':>8}   [95% CI]"
+            f"{'t-stat':>8}  {'P>|t|':>8}   [{ci_pct} CI]"
         )
         lines.append(header)
         lines.append("-" * 70)

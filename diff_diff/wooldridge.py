@@ -355,6 +355,21 @@ class WooldridgeDiD:
                 f"Set n_bootstrap=0 for analytic SEs."
             )
 
+        # 0c. Reject covariates for nonlinear methods until ASF math is updated
+        # The ASF counterfactual computation must zero the full treatment block
+        # (cell indicator + cell × covariate interactions) when computing eta_0.
+        # Currently only the scalar cell effect is subtracted. TODO: implement
+        # the full interacted ASF for nonlinear methods.
+        has_covariates = any(v for v in [exovar, xtvar, xgvar] if v)
+        if has_covariates and self.method != "ols":
+            raise NotImplementedError(
+                f"Covariate-adjusted ETWFE is not yet supported for "
+                f"method={self.method!r}. The nonlinear ASF computation does "
+                f"not yet account for treatment × covariate interactions. "
+                f"Use method='ols' for covariate-adjusted estimation, or "
+                f"omit exovar/xtvar/xgvar for nonlinear methods."
+            )
+
         # 1. Filter to analysis sample
         sample = _filter_sample(df, unit, time, cohort, self.control_group, self.anticipation)
 

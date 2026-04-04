@@ -159,61 +159,10 @@ results[["b4_subpop_female"]] <- c(
   list(n_obs_subpop = n_female, n_obs_full = nrow(nhanes))
 )
 
-# ---------------------------------------------------------------------------
-# B5: CallawaySantAnna RC-DiD (ATT only — R did is survey-naive for SE)
-# ---------------------------------------------------------------------------
-
-cat("  B5: CallawaySantAnna RC-DiD ...\n")
-
-has_did <- requireNamespace("did", quietly = TRUE)
-if (has_did) {
-  library(did)
-
-  # Remap periods for did::att_gt: period 1 (pre) and 2 (post)
-  # first_treat = 2 for treated (first treated at period 2), 0 for never-treated
-  nhanes_cs <- nhanes
-  nhanes_cs$period_cs <- nhanes_cs$period + 1L  # 0->1, 1->2
-  nhanes_cs$first_treat_cs <- ifelse(nhanes_cs$treated == 1L, 2L, 0L)
-
-  out_b5 <- tryCatch({
-    att_gt(
-      yname = "outcome",
-      tname = "period_cs",
-      idname = "unit_id",
-      gname = "first_treat_cs",
-      data = nhanes_cs,
-      weightsname = "WTMEC2YR",
-      est_method = "reg",
-      control_group = "nevertreated",
-      base_period = "varying",
-      panel = FALSE,
-      bstrap = FALSE,
-      cband = FALSE
-    )
-  }, error = function(e) {
-    cat(sprintf("    ERROR: %s\n", e$message))
-    NULL
-  })
-
-  if (!is.null(out_b5)) {
-    agg_b5 <- aggte(out_b5, type = "simple")
-    cat(sprintf("    Overall ATT = %.6f, SE = %.6f\n",
-                agg_b5$overall.att, agg_b5$overall.se))
-
-    results[["b5_cs_rc"]] <- list(
-      scenario = "B5",
-      description = "CallawaySantAnna RC-DiD (panel=FALSE)",
-      estimator = "did::att_gt",
-      estimation_method = "reg",
-      control_group = "nevertreated",
-      panel = FALSE,
-      overall_att = agg_b5$overall.att,
-      overall_se = agg_b5$overall.se
-    )
-  }
-} else {
-  cat("    SKIPPED: 'did' package not available\n")
-}
+# B5 (CallawaySantAnna RC-DiD) removed: R's did::att_gt cannot produce
+# golden values for a 2-period repeated cross-section due to internal
+# type conversion issues. CallawaySantAnna survey variance is validated
+# in the synthetic-data cross-validation suite instead.
 
 # ---------------------------------------------------------------------------
 # Embed dataset and save

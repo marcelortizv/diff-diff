@@ -654,11 +654,16 @@ comparisons match to machine precision (differences < 1e-10).
      - 2.1e-12
      - 2.7e-11 (0.0000%)
      - Exact
+   * - A4
+     - TWFE (strata + FPC + weights)
+     - 2.1e-12 (ATT only)
+     - n/a (TWFE absorbs unit FE)
+     - Exact
    * - A5
      - Subpopulation (elementary)
      - 1.5e-11
      - 7.5e-12 (0.0000%)
-     - Exact
+     - Differs (see note)
    * - A6
      - Covariates (meals, ell)
      - 2.2e-12
@@ -726,17 +731,20 @@ comparisons match to machine precision (differences < 1e-10).
 
 **Key Findings:**
 
-1. **Machine-precision agreement across all tests.** ATT/coefficient, SE, df, and
-   CI all match R's ``survey::svyglm()`` and ``svrepdesign()`` to 10-13 decimal
-   places. The tolerances (1-5% for SEs) were never remotely approached.
+1. **Machine-precision agreement** on ATT, SE, df, and CI wherever directly
+   comparable — differences are < 1e-10 (floating-point rounding only).
+   Tolerances are set to 1e-8 in the test suite.
 
 2. **All survey design features validated with real data:** stratification, PSU
    clustering, FPC corrections, probability weight normalization, nested PSU
-   handling (``nest=TRUE``), subpopulation analysis, covariate adjustment, and
-   JK1 replicate weight variance.
+   handling (``nest=TRUE``), subpopulation analysis, covariate adjustment,
+   Fay's BRR (212 replicates), and JK1 replicate weight variance.
 
-3. **Fay's BRR replicate weights** generated from the real API stratified design
-   (212 replicates) also match R exactly.
+3. **Known differences:** A4 (TWFE) validates ATT only — SE differs because
+   TWFE absorbs unit fixed effects. A5 (subpopulation) validates ATT/SE but
+   df differs: ``subpopulation()`` preserves all strata (df=397) while R's
+   ``subset()`` drops empty strata (df=199). This is a documented deviation
+   (see REGISTRY.md); the diff-diff approach is conservative per Lumley (2004).
 
 Reproducing Survey Validation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -288,6 +288,10 @@ class TestApiSchoolAccountability:
         assert result.survey_metadata.df_survey == r["df"], (
             f"A7 df: Python={result.survey_metadata.df_survey}, R={r['df']}"
         )
+        _assert_close(result.conf_int[0], r["ci_lower"], REP_CI_RTOL, REP_CI_ATOL,
+                       "A7 CI lower")
+        _assert_close(result.conf_int[1], r["ci_upper"], REP_CI_RTOL, REP_CI_ATOL,
+                       "A7 CI upper")
 
     def test_fpc_reduces_se(self, api_results):
         """FPC should reduce SE vs no-FPC (A1 SE < A2 SE)."""
@@ -490,6 +494,15 @@ class TestRecsReplicateWeights:
         assert reg.survey_df_ == r["df"], (
             f"C1 df: Python={reg.survey_df_}, R={r['df']}"
         )
+        # Compute CI from coef, SE, and survey df
+        from scipy.stats import t as t_dist
+        t_crit = t_dist.ppf(0.975, reg.survey_df_)
+        py_ci_lower = py_coef - t_crit * py_se
+        py_ci_upper = py_coef + t_crit * py_se
+        _assert_close(py_ci_lower, r["ci_lower"], REP_CI_RTOL, REP_CI_ATOL,
+                       "C1 CI lower")
+        _assert_close(py_ci_upper, r["ci_upper"], REP_CI_RTOL, REP_CI_ATOL,
+                       "C1 CI upper")
 
     def test_c2_full_regression(self, recs_results):
         """C2: Full regression TOTALBTU ~ KOWNRENT + TYPEHUQ + REGIONC."""
@@ -534,6 +547,14 @@ class TestRecsReplicateWeights:
         assert reg.survey_df_ == r["df"], (
             f"C2 df: Python={reg.survey_df_}, R={r['df']}"
         )
+        from scipy.stats import t as t_dist
+        t_crit = t_dist.ppf(0.975, reg.survey_df_)
+        py_ci_lower = py_coef - t_crit * py_se
+        py_ci_upper = py_coef + t_crit * py_se
+        _assert_close(py_ci_lower, r["ci_lower_kownrent"], REP_CI_RTOL, REP_CI_ATOL,
+                       "C2 CI lower")
+        _assert_close(py_ci_upper, r["ci_upper_kownrent"], REP_CI_RTOL, REP_CI_ATOL,
+                       "C2 CI upper")
 
     def test_c3_deff_diagnostics(self, recs_results):
         """C3: DEFF diagnostics from real JK1 replicate SEs.

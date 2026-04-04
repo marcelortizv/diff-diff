@@ -2358,12 +2358,20 @@ Domain estimation preserving full design structure.
 - **Note:** Weight validation relaxed from "strictly positive" to
   "non-negative" to support zero-weight observations. Negative weights
   still rejected. All-zero weight vectors rejected at solver level.
-- **Note:** Survey design df (`n_PSU - n_strata`) uses total design
-  structure (including zero-weight rows), matching R's `survey::degf()`
-  convention after `subset()`. The generic HC1/classical inference paths
-  use positive-weight count for df adjustments, ensuring zero-weight
+- **Note:** Survey design df (`n_PSU - n_strata`) uses the full design
+  structure (including zero-weight rows), ensuring variance estimation
+  accounts for all strata and PSUs. The generic HC1/classical inference
+  paths use positive-weight count for df adjustments, ensuring zero-weight
   padding is inference-invariant outside the survey vcov path. DEFF
   effective-n also uses positive-weight count.
+- **Deviation from R:** `subpopulation()` preserves all strata in df
+  computation even when a stratum has no positive-weight observations,
+  while R's `subset()` drops empty strata from `survey::degf()`. For
+  example, subsetting a 3-stratum design to one stratum gives df=n-3
+  in diff-diff vs df=n-1 in R. Both ATT and SE match; only df (and
+  therefore t-based CI width) differs. The diff-diff approach is
+  conservative (more strata → lower df → wider CI) and preserves the
+  full design structure per Lumley (2004) Section 3.4.
 - **Note:** For replicate-weight designs, `subpopulation()` zeros out both
   full-sample and replicate weight columns for excluded observations,
   preserving all replicate metadata.

@@ -168,8 +168,8 @@ framed around a state-level preventive care program evaluated with a
 stratified health survey (ACS/BRFSS-like). Covers: why survey design
 matters, SurveyDesign setup, basic DiD with survey, staggered DiD
 (CallawaySantAnna) with survey, replicate weights (JK1), subpopulation
-analysis, DEFF diagnostics, repeated cross-sections, and estimator
-support reference table. Uses `generate_survey_did_data()` DGP function
+analysis, DEFF diagnostics, repeated cross-sections, and a link to the
+compatibility matrix in `choosing_estimator.rst`. Uses `generate_survey_did_data()` DGP function
 added to `diff_diff.prep`.
 
 ### 7d. HonestDiD with Survey Variance ✅

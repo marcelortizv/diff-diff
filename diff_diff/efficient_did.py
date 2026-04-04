@@ -347,8 +347,6 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
         ValueError
             Missing columns, unbalanced panel, non-absorbing treatment,
             or PT-Post without a never-treated group.
-        NotImplementedError
-            If ``covariates`` and ``survey_design`` are both set.
         """
         self._validate_params()
 
@@ -380,16 +378,6 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
             self._survey_df = 0
 
         # Bootstrap + survey supported via PSU-level multiplier bootstrap.
-
-        # Guard covariates + survey (DR path does not yet thread survey weights)
-        if covariates is not None and len(covariates) > 0 and resolved_survey is not None:
-            raise NotImplementedError(
-                "Survey weights with covariates are not yet supported for "
-                "EfficientDiD. The doubly robust covariate path does not "
-                "thread survey weights through nuisance estimation. "
-                "Use covariates=None with survey_design, or drop survey_design "
-                "when using covariates."
-            )
 
         # Normalize empty covariates list to None (use nocov path)
         if covariates is not None and len(covariates) == 0:
@@ -742,6 +730,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                                 never_treated_mask,
                                 t_col_val,
                                 tpre_col_val,
+                                unit_weights=unit_level_weights,
                             )
                         # m_{g', tpre, 1}(X)
                         key_gp_tpre = (gp, tpre_col_val, effective_p1_col)
@@ -755,6 +744,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                                 gp_mask_for_reg,
                                 tpre_col_val,
                                 effective_p1_col,
+                                unit_weights=unit_level_weights,
                             )
                         # r_{g, inf}(X) and r_{g, g'}(X) via sieve (Eq 4.1-4.2)
                         for comp in {np.inf, gp}:
@@ -770,6 +760,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                                     k_max=self.sieve_k_max,
                                     criterion=self.sieve_criterion,
                                     ratio_clip=self.ratio_clip,
+                                    unit_weights=unit_level_weights,
                                 )
 
                     # Per-unit DR generated outcomes: shape (n_units, H)
@@ -801,6 +792,7 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                                 group_mask_s,
                                 k_max=self.sieve_k_max,
                                 criterion=self.sieve_criterion,
+                                unit_weights=unit_level_weights,
                             )
 
                     # Conditional Omega*(X) with per-unit propensities (Eq 3.12)
@@ -817,14 +809,19 @@ class EfficientDiD(EfficientDiDBootstrapMixin):
                         covariate_matrix=covariate_matrix,
                         s_hat_cache=s_hat_cache,
                         bandwidth=self.kernel_bandwidth,
+                        unit_weights=unit_level_weights,
                     )
 
                     # Per-unit weights: (n_units, H)
                     per_unit_w = compute_per_unit_weights(omega_cond)
 
-                    # ATT = mean_i( w(X_i) @ gen_out[i] )
+                    # ATT = (survey-)weighted mean of per-unit DR scores
                     if per_unit_w.shape[1] > 0:
-                        att_gt = float(np.mean(np.sum(per_unit_w * gen_out, axis=1)))
+                        per_unit_scores = np.sum(per_unit_w * gen_out, axis=1)
+                        if unit_level_weights is not None:
+                            att_gt = float(np.average(per_unit_scores, weights=unit_level_weights))
+                        else:
+                            att_gt = float(np.mean(per_unit_scores))
                     else:
                         att_gt = np.nan
 

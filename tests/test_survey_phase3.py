@@ -745,23 +745,29 @@ class TestEfficientDiDSurvey:
         assert np.isfinite(result.overall_att)
         assert np.isfinite(result.overall_se)
 
-    def test_covariates_survey_raises(self, staggered_survey_data):
-        """Covariates + survey should raise NotImplementedError."""
+    def test_covariates_survey_works(self, staggered_survey_data):
+        """Covariates + survey should produce finite results via DR path."""
         from diff_diff import EfficientDiD
 
-        # Add a covariate column
-        staggered_survey_data["x1"] = np.random.randn(len(staggered_survey_data))
+        # Add a time-invariant covariate
+        np.random.seed(123)
+        unit_vals = {u: np.random.randn() for u in staggered_survey_data["unit"].unique()}
+        staggered_survey_data["x1"] = staggered_survey_data["unit"].map(unit_vals)
         sd = SurveyDesign(weights="weight")
-        with pytest.raises(NotImplementedError, match="covariates"):
-            EfficientDiD(n_bootstrap=0).fit(
-                staggered_survey_data,
-                "outcome",
-                "unit",
-                "time",
-                "first_treat",
-                covariates=["x1"],
-                survey_design=sd,
-            )
+        result = EfficientDiD(n_bootstrap=0).fit(
+            staggered_survey_data,
+            "outcome",
+            "unit",
+            "time",
+            "first_treat",
+            covariates=["x1"],
+            survey_design=sd,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.overall_se > 0
+        assert result.estimation_path == "dr"
+        assert result.survey_metadata is not None
 
     def test_survey_metadata_fields(self, staggered_survey_data):
         """survey_metadata has correct fields."""
@@ -862,6 +868,181 @@ class TestEfficientDiDSurvey:
         assert result.group_effects is not None
         assert np.isfinite(result.overall_att)
         assert np.isfinite(result.overall_se)
+
+
+# =============================================================================
+# EfficientDiD Covariates + Survey
+# =============================================================================
+
+
+class TestEfficientDiDCovSurvey:
+    """Survey design support for EfficientDiD covariates (DR) path."""
+
+    @pytest.fixture
+    def cov_survey_data(self):
+        """Staggered panel with time-invariant covariates and survey columns."""
+        np.random.seed(42)
+        n_units = 60
+        n_periods = 8
+        rows = []
+        # Assign a time-invariant covariate per unit
+        unit_x1 = {u: np.random.randn() for u in range(n_units)}
+        for unit in range(n_units):
+            if unit < 20:
+                ft = 4
+            elif unit < 40:
+                ft = 6
+            else:
+                ft = 0
+
+            stratum = unit // 12
+            psu = unit // 5
+            fpc_val = 120.0
+            wt = 1.0 + 0.3 * stratum
+
+            for t in range(1, n_periods + 1):
+                y = 10.0 + unit * 0.05 + t * 0.2 + 0.5 * unit_x1[unit]
+                if ft > 0 and t >= ft:
+                    y += 2.0
+                y += np.random.normal(0, 0.5)
+
+                rows.append(
+                    {
+                        "unit": unit,
+                        "time": t,
+                        "first_treat": ft,
+                        "outcome": y,
+                        "weight": wt,
+                        "stratum": stratum,
+                        "psu": psu,
+                        "fpc": fpc_val,
+                        "x1": unit_x1[unit],
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    def test_uniform_weight_equivalence(self, cov_survey_data):
+        """Covariates + uniform survey weights ≈ covariates without survey."""
+        from diff_diff import EfficientDiD
+
+        # Set all weights to 1.0
+        cov_survey_data["weight"] = 1.0
+        sd = SurveyDesign(weights="weight")
+
+        result_survey = EfficientDiD(n_bootstrap=0).fit(
+            cov_survey_data,
+            "outcome", "unit", "time", "first_treat",
+            covariates=["x1"],
+            survey_design=sd,
+        )
+        result_nosurv = EfficientDiD(n_bootstrap=0).fit(
+            cov_survey_data,
+            "outcome", "unit", "time", "first_treat",
+            covariates=["x1"],
+        )
+        assert result_survey.estimation_path == "dr"
+        assert result_nosurv.estimation_path == "dr"
+        np.testing.assert_allclose(
+            result_survey.overall_att, result_nosurv.overall_att, atol=1e-8
+        )
+
+    def test_scale_invariance(self, cov_survey_data):
+        """Multiplying all weights by a constant doesn't change ATT."""
+        from diff_diff import EfficientDiD
+
+        sd1 = SurveyDesign(weights="weight")
+        result1 = EfficientDiD(n_bootstrap=0).fit(
+            cov_survey_data,
+            "outcome", "unit", "time", "first_treat",
+            covariates=["x1"],
+            survey_design=sd1,
+        )
+
+        cov_survey_data["weight_scaled"] = cov_survey_data["weight"] * 5.0
+        sd2 = SurveyDesign(weights="weight_scaled")
+        result2 = EfficientDiD(n_bootstrap=0).fit(
+            cov_survey_data,
+            "outcome", "unit", "time", "first_treat",
+            covariates=["x1"],
+            survey_design=sd2,
+        )
+        np.testing.assert_allclose(
+            result1.overall_att, result2.overall_att, atol=1e-8
+        )
+
+    def test_nontrivial_weight_effect(self, cov_survey_data):
+        """Heterogeneous weights produce different ATT from unweighted."""
+        from diff_diff import EfficientDiD
+
+        sd = SurveyDesign(weights="weight")
+        result_survey = EfficientDiD(n_bootstrap=0).fit(
+            cov_survey_data,
+            "outcome", "unit", "time", "first_treat",
+            covariates=["x1"],
+            survey_design=sd,
+        )
+        result_nosurv = EfficientDiD(n_bootstrap=0).fit(
+            cov_survey_data,
+            "outcome", "unit", "time", "first_treat",
+            covariates=["x1"],
+        )
+        # Non-uniform weights (1.0 + 0.3*stratum) should produce different ATT
+        assert abs(result_survey.overall_att - result_nosurv.overall_att) > 1e-6
+
+    def test_full_design_smoke(self, cov_survey_data):
+        """Strata + PSU + FPC + covariates produces finite results."""
+        from diff_diff import EfficientDiD
+
+        sd = SurveyDesign(
+            weights="weight", strata="stratum", psu="psu", fpc="fpc",
+            nest=True,
+        )
+        result = EfficientDiD(n_bootstrap=0).fit(
+            cov_survey_data,
+            "outcome", "unit", "time", "first_treat",
+            covariates=["x1"],
+            survey_design=sd,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.overall_se > 0
+        assert result.estimation_path == "dr"
+
+    def test_aggregation_with_survey(self, cov_survey_data):
+        """Event study and group aggregation work with covariates + survey."""
+        from diff_diff import EfficientDiD
+
+        sd = SurveyDesign(weights="weight")
+        result = EfficientDiD(n_bootstrap=0).fit(
+            cov_survey_data,
+            "outcome", "unit", "time", "first_treat",
+            covariates=["x1"],
+            aggregate="all",
+            survey_design=sd,
+        )
+        assert result.event_study_effects is not None
+        assert result.group_effects is not None
+        for _, eff in result.event_study_effects.items():
+            assert np.isfinite(eff["effect"])
+            assert np.isfinite(eff["se"])
+        for _, eff in result.group_effects.items():
+            assert np.isfinite(eff["effect"])
+            assert np.isfinite(eff["se"])
+
+    def test_bootstrap_covariates_survey(self, cov_survey_data):
+        """Bootstrap + covariates + survey produces finite results."""
+        from diff_diff import EfficientDiD
+
+        sd = SurveyDesign(weights="weight")
+        result = EfficientDiD(n_bootstrap=30, seed=42).fit(
+            cov_survey_data,
+            "outcome", "unit", "time", "first_treat",
+            covariates=["x1"],
+            survey_design=sd,
+        )
+        assert np.isfinite(result.overall_att)
+        assert np.isfinite(result.overall_se)
+        assert result.overall_se > 0
 
 
 # =============================================================================

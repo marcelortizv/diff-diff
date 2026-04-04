@@ -2222,8 +2222,9 @@ ContinuousDiD, EfficientDiD):
   ContinuousDiD, EfficientDiD) and Rao-Wu bootstrap (SunAbraham, SyntheticDiD, TROP).
   FPC scaling is skipped for pooled singletons (conservative). When only one singleton
   stratum exists total, pooling is not possible — the singleton contributes zero bootstrap
-  variance (same as `remove`), with a `UserWarning` emitted. This matches R's `survey`
-  package behavior. Reference: Rust & Rao (1996).
+  variance (same as `remove`), with a `UserWarning` emitted. This is a library-specific
+  documented fallback (R's analytical `adjust` uses grand-mean centering, but the bootstrap
+  analogue for a single singleton is not defined in the literature). Reference: Rust & Rao (1996).
 - **Deviation from R:** For the no-FPC case (`m_h = n_h - 1`), this matches R
   `survey::as.svrepdesign(type="subbootstrap")`. The FPC-adjusted resample size
   `m_h = round((1-f_h)*(n_h-1))` follows Rao, Wu & Yue (1992) Section 3.

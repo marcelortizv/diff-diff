@@ -552,8 +552,8 @@ def generate_survey_multiplier_weights_batch(
                 pooled_cols = np.array(_singleton_cols)
                 weights[:, pooled_cols] = pooled_weights
             else:
-                # Single singleton — cannot pool, zero weight (matches R survey
-                # package behavior where adjust with one singleton = remove).
+                # Single singleton — cannot pool, zero weight (library-specific
+                # fallback; bootstrap adjust with one singleton = remove).
                 import warnings
 
                 warnings.warn(
@@ -684,8 +684,8 @@ def generate_rao_wu_weights(
                     p = int(obs_psu[idx])
                     rescaled[idx] = base_weights[idx] * psu_scale_map.get(p, 1.0)
         else:
-            # Single singleton — cannot pool, keep base weights (matches R
-            # survey package: adjust with one singleton = remove).
+            # Single singleton — cannot pool, keep base weights (library-specific
+            # fallback; bootstrap adjust with one singleton = remove).
             import warnings
 
             warnings.warn(

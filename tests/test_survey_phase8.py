@@ -1201,6 +1201,14 @@ class TestTrimWeights:
         assert np.isfinite(result["w"].iloc[0])
         assert np.isfinite(result["w"].iloc[4])
 
+    def test_trim_lower_exceeds_upper_raises(self):
+        """lower > upper raises ValueError."""
+        from diff_diff.prep import trim_weights
+
+        data = pd.DataFrame({"w": [1.0, 5.0, 10.0]})
+        with pytest.raises(ValueError, match="lower.*<=.*upper"):
+            trim_weights(data, "w", upper=5.0, lower=6.0)
+
 
 # ===========================================================================
 # 8e-iii: ImputationDiD Pretrends + Survey

@@ -1280,6 +1280,12 @@ def trim_weights(
             raise ValueError(f"quantile must be in (0, 1), got {quantile}")
         upper = float(np.nanquantile(w, quantile))
 
+    if upper is not None and lower is not None and lower > upper:
+        raise ValueError(
+            f"lower ({lower}) must be <= upper ({upper}). "
+            f"When using quantile, the resolved upper cap may be below lower."
+        )
+
     if upper is not None:
         w = np.minimum(w, upper)
     if lower is not None:

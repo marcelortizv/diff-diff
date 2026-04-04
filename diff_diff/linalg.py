@@ -2342,3 +2342,69 @@ def _compute_confidence_interval(
     upper = estimate + critical_value * se
 
     return (lower, upper)
+
+
+def solve_poisson(
+    X: np.ndarray,
+    y: np.ndarray,
+    max_iter: int = 200,
+    tol: float = 1e-8,
+    init_beta: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Poisson IRLS (Newton-Raphson with log link).
+
+    Does NOT prepend an intercept — caller must include one if needed.
+    Returns (beta, W_final) where W_final = mu_hat (used for sandwich vcov).
+
+    Parameters
+    ----------
+    X : (n, k) design matrix (caller provides intercept / group FE dummies)
+    y : (n,) non-negative count outcomes
+    max_iter : maximum IRLS iterations
+    tol : convergence threshold on sup-norm of coefficient change
+    init_beta : optional starting coefficient vector; if None, zeros are used
+        with the first column treated as the intercept and initialized to
+        log(mean(y)) to improve convergence for large-scale outcomes.
+
+    Returns
+    -------
+    beta : (k,) coefficient vector
+    W : (n,) final fitted means mu_hat (weights for sandwich vcov)
+    """
+    n, k = X.shape
+    if init_beta is not None:
+        beta = init_beta.copy()
+    else:
+        beta = np.zeros(k)
+        # Initialise the intercept to log(mean(y)) so the first IRLS step
+        # starts near the unconditional mean rather than exp(0)=1, which
+        # causes overflow when y is large (e.g. employment levels).
+        mean_y = float(np.mean(y))
+        if mean_y > 0:
+            beta[0] = np.log(mean_y)
+    for _ in range(max_iter):
+        eta = np.clip(X @ beta, -500, 500)
+        mu = np.exp(eta)
+        score = X.T @ (y - mu)                   # gradient of log-likelihood
+        hess = X.T @ (mu[:, None] * X)           # -Hessian = X'WX, W=diag(mu)
+        try:
+            delta = np.linalg.solve(hess + 1e-12 * np.eye(k), score)
+        except np.linalg.LinAlgError:
+            break
+        # Damped step: cap the maximum coefficient change to avoid overshooting
+        max_step = np.max(np.abs(delta))
+        if max_step > 1.0:
+            delta = delta / max_step
+        beta_new = beta + delta
+        if np.max(np.abs(beta_new - beta)) < tol:
+            beta = beta_new
+            break
+        beta = beta_new
+    else:
+        warnings.warn(
+            "solve_poisson did not converge in {} iterations".format(max_iter),
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    mu_final = np.exp(np.clip(X @ beta, -500, 500))
+    return beta, mu_final

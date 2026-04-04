@@ -77,26 +77,21 @@ def _filter_sample(
 ) -> pd.DataFrame:
     """Return the analysis sample following jwdid selection rules.
 
-    For "not_yet_treated": keep all observations from treated units (pre- and
-    post-treatment) plus all never-treated and not-yet-treated observations.
-    For "never_treated": keep only post-treatment observations from treated
-    units (t >= g - anticipation) plus all never-treated observations.
-    Pre-treatment observations from treated units are excluded so they do not
-    serve as implicit controls in the regression baseline.
+    All treated units keep ALL observations (pre- and post-treatment) for
+    proper FE estimation. The control_group setting affects which additional
+    control observations are included, AND the interaction matrix structure
+    (see _build_interaction_matrix).
     """
     df = data.copy()
     # Normalise never-treated: fill NaN cohort with 0
     df[cohort] = df[cohort].fillna(0)
 
+    treated_mask = df[cohort] > 0
+
     if control_group == "never_treated":
-        # Post-treatment obs from treated units + all never-treated obs.
-        # Pre-treatment obs from treated units are excluded so the
-        # counterfactual is identified solely from never-treated units.
-        treated_mask = (df[cohort] > 0) & (df[time] >= df[cohort] - anticipation)
         control_mask = df[cohort] == 0
     else:  # not_yet_treated
-        # All treated-unit obs + never-treated + not-yet-treated obs
-        treated_mask = df[cohort] > 0
+        # Keep untreated-at-t observations for not-yet-treated units
         control_mask = (df[cohort] == 0) | (df[cohort] > df[time])
 
     return df[treated_mask | control_mask].copy()
@@ -107,8 +102,19 @@ def _build_interaction_matrix(
     cohort: str,
     time: str,
     anticipation: int,
+    control_group: str = "not_yet_treated",
 ) -> Tuple[np.ndarray, List[str], List[Tuple[Any, Any]]]:
     """Build the saturated cohort×time interaction design matrix.
+
+    For ``not_yet_treated``: only post-treatment cells (t >= g - anticipation).
+    Pre-treatment obs from treated units sit in the regression baseline alongside
+    not-yet-treated controls.
+
+    For ``never_treated``: ALL (g, t) pairs for each treated cohort. This
+    "absorbs" pre-treatment obs from treated units into their own indicators so
+    they do not serve as implicit controls in the baseline. Only never-treated
+    observations remain in the omitted category. Pre-treatment coefficients
+    (t < g) serve as placebo/pre-trend tests.
 
     Returns
     -------
@@ -127,7 +133,7 @@ def _build_interaction_matrix(
 
     for g in groups:
         for t in times:
-            if t >= g - anticipation:
+            if control_group == "never_treated" or t >= g - anticipation:
                 indicator = ((cohort_vals == g) & (time_vals == t)).astype(float)
                 cols.append(indicator)
                 col_names.append(f"g{g}_t{t}")
@@ -315,16 +321,46 @@ class WooldridgeDiD:
         df = data.copy()
         df[cohort] = df[cohort].fillna(0)
 
+        # 0. Reject bootstrap for nonlinear methods (not implemented)
+        if self.n_bootstrap > 0 and self.method != "ols":
+            raise ValueError(
+                f"Bootstrap inference is only supported for method='ols'. "
+                f"Got method={self.method!r} with n_bootstrap={self.n_bootstrap}. "
+                f"Set n_bootstrap=0 for analytic SEs."
+            )
+
         # 1. Filter to analysis sample
         sample = _filter_sample(df, unit, time, cohort, self.control_group, self.anticipation)
 
+        # 1b. Identification checks
+        groups = sorted(g for g in sample[cohort].unique() if g > 0)
+        if len(groups) == 0:
+            raise ValueError(
+                "No treated cohorts found in data. Ensure the cohort column "
+                "contains values > 0 for treated units."
+            )
+        if self.control_group == "never_treated" and not (sample[cohort] == 0).any():
+            raise ValueError(
+                "control_group='never_treated' but no never-treated units "
+                "(cohort == 0) found. Use 'not_yet_treated' or add "
+                "never-treated units."
+            )
+
         # 2. Build interaction matrix
         X_int, int_col_names, gt_keys = _build_interaction_matrix(
-            sample, cohort=cohort, time=time, anticipation=self.anticipation
+            sample,
+            cohort=cohort,
+            time=time,
+            anticipation=self.anticipation,
+            control_group=self.control_group,
         )
+        if X_int.shape[1] == 0:
+            raise ValueError(
+                "No valid treatment cells found. Check that treated units "
+                "have post-treatment observations in the data."
+            )
 
         # 3. Covariates
-        groups = sorted(g for g in sample[cohort].unique() if g > 0)
         X_cov = _prepare_covariates(
             sample,
             exovar=exovar,
@@ -444,6 +480,9 @@ class WooldridgeDiD:
         for idx, (g, t) in enumerate(gt_keys):
             if idx >= len(coefs):
                 break
+            # Skip cells whose coefficient was dropped (rank deficiency)
+            if np.isnan(coefs[idx]):
+                continue
             att = float(coefs[idx])
             se = float(np.sqrt(max(vcov[idx, idx], 0.0))) if vcov is not None else float("nan")
             t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha)
@@ -456,10 +495,14 @@ class WooldridgeDiD:
             }
             gt_weights[(g, t)] = int(((sample[cohort] == g) & (sample[time] == t)).sum())
 
-        # Extract vcov submatrix for beta_{g,t} only
-        n_gt = len(gt_keys)
-        gt_vcov = vcov[:n_gt, :n_gt] if vcov is not None else None
-        gt_keys_ordered = list(gt_keys)
+        # Extract vcov submatrix for identified β_{g,t} only (skip NaN/dropped)
+        gt_keys_ordered = list(gt_effects.keys())
+        if vcov is not None and gt_keys_ordered:
+            # Map from gt_keys_ordered to original indices in the coef vector
+            orig_indices = [i for i, k in enumerate(gt_keys) if k in gt_effects]
+            gt_vcov = vcov[np.ix_(orig_indices, orig_indices)]
+        else:
+            gt_vcov = None
 
         # 8. Simple aggregation (always computed)
         overall = _compute_weighted_agg(
@@ -721,7 +764,13 @@ class WooldridgeDiD:
         cluster_col = self.cluster if self.cluster else unit
         cluster_ids = sample[cluster_col].values
 
-        beta, mu_hat = solve_poisson(X_full, y)
+        beta, mu_hat = solve_poisson(X_full, y, rank_deficient_action=self.rank_deficient_action)
+
+        # Handle rank-deficient designs: zero out NaN entries so downstream
+        # matrix ops don't propagate NaN (dropped columns contribute nothing)
+        nan_mask = np.isnan(beta)
+        if np.any(nan_mask):
+            beta = np.where(nan_mask, 0.0, beta)
 
         # QMLE sandwich vcov via shared linalg backend
         resids = y - mu_hat

@@ -479,12 +479,15 @@ class TestMethodologyCorrectness:
         from diff_diff.datasets import load_mpdta
 
         df = load_mpdta()
-        est = WooldridgeDiD(control_group="never_treated")
+        # never_treated with within-transformation can produce collinear
+        # pre-treatment interactions; use silent to avoid warnings
+        est = WooldridgeDiD(control_group="never_treated", rank_deficient_action="silent")
         r = est.fit(df, outcome="lemp", unit="countyreal", time="year", cohort="first_treat")
         assert np.isfinite(r.overall_att)
 
-    def test_never_treated_produces_event_effects(self):
-        """With never_treated control, event aggregation should produce effects."""
+    def test_never_treated_produces_event_effects_with_placebo_leads(self):
+        """With never_treated, event aggregation should include negative event
+        times (placebo leads) because pre-treatment interactions are included."""
         from diff_diff.datasets import load_mpdta
 
         df = load_mpdta()
@@ -493,7 +496,13 @@ class TestMethodologyCorrectness:
         r.aggregate("event")
         assert r.event_study_effects is not None
         assert len(r.event_study_effects) > 0
-        assert all(k >= 0 for k in r.event_study_effects.keys())
+        # never_treated includes pre-treatment interaction indicators,
+        # so negative event times (placebo leads) should be present
+        neg_keys = [k for k in r.event_study_effects.keys() if k < 0]
+        assert len(neg_keys) > 0, (
+            "Expected negative event times (placebo leads) for never_treated, "
+            f"got keys: {sorted(r.event_study_effects.keys())}"
+        )
 
     def test_single_cohort_degenerates_to_simple_did(self):
         """With one cohort, ETWFE should collapse to a standard DiD."""
@@ -758,9 +767,9 @@ class TestControlGroupDistinction:
             f"({r_nyt.overall_att:.6f}); control_group has no effect"
         )
 
-    def test_never_treated_fewer_observations(self):
-        """never_treated should produce a smaller estimation sample than
-        not_yet_treated (pre-treatment obs from treated units excluded)."""
+    def test_never_treated_more_interaction_terms(self):
+        """never_treated should have more interaction terms (includes pre-treatment
+        placebo indicators) but the same sample size."""
         from diff_diff.datasets import load_mpdta
 
         df = load_mpdta()
@@ -770,10 +779,50 @@ class TestControlGroupDistinction:
         r_nt = WooldridgeDiD(control_group="never_treated").fit(
             df, outcome="lemp", unit="countyreal", time="year", cohort="first_treat"
         )
-        assert r_nt.n_obs < r_nyt.n_obs
+        # Same sample (all obs kept), but more (g,t) cells for never_treated
+        assert r_nt.n_obs == r_nyt.n_obs
+        assert len(r_nt.group_time_effects) > len(r_nyt.group_time_effects)
 
 
-class TestBootstrapWeightsValidation:
+class TestIdentificationChecks:
+    def test_no_treated_raises(self):
+        """Fitting with no treated cohorts should raise ValueError."""
+        df = pd.DataFrame(
+            {"unit": [1, 1, 2, 2], "time": [1, 2, 1, 2], "cohort": [0, 0, 0, 0], "y": [1, 2, 3, 4]}
+        )
+        with pytest.raises(ValueError, match="No treated cohorts"):
+            WooldridgeDiD().fit(df, outcome="y", unit="unit", time="time", cohort="cohort")
+
+    def test_never_treated_no_controls_raises(self):
+        """never_treated with no cohort==0 units should raise ValueError."""
+        df = pd.DataFrame(
+            {"unit": [1, 1, 2, 2], "time": [1, 2, 1, 2], "cohort": [2, 2, 3, 3], "y": [1, 2, 3, 4]}
+        )
+        with pytest.raises(ValueError, match="no never-treated"):
+            WooldridgeDiD(control_group="never_treated").fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+
+
+class TestBootstrapValidation:
     def test_invalid_bootstrap_weights_raises(self):
         with pytest.raises(ValueError, match="bootstrap_weights"):
             WooldridgeDiD(bootstrap_weights="invalid_dist")
+
+    def test_bootstrap_nonlinear_raises(self):
+        """Bootstrap with logit/poisson should raise ValueError."""
+        rng = np.random.default_rng(0)
+        rows = []
+        for u in range(40):
+            cohort = 3 if u < 20 else 0
+            for t in range(1, 5):
+                rows.append({"unit": u, "time": t, "cohort": cohort, "y": rng.standard_normal()})
+        df = pd.DataFrame(rows)
+        with pytest.raises(ValueError, match="Bootstrap inference is only supported"):
+            WooldridgeDiD(method="logit", n_bootstrap=50).fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+        with pytest.raises(ValueError, match="Bootstrap inference is only supported"):
+            WooldridgeDiD(method="poisson", n_bootstrap=50).fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )

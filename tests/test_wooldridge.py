@@ -983,3 +983,35 @@ class TestAnticipationEventLabels:
         summary = r.summary("event")
         # k=-1 should be labeled [antic] (within anticipation window)
         assert "[antic]" in summary, f"Expected [antic] label in summary, got:\n{summary}"
+
+
+class TestOutcomeValidation:
+    def test_logit_rejects_out_of_range(self):
+        """Logit should reject outcomes outside [0, 1]."""
+        df = pd.DataFrame(
+            {
+                "unit": [1, 1, 2, 2],
+                "time": [1, 2, 1, 2],
+                "cohort": [2, 2, 0, 0],
+                "y": [0.0, 5.0, 0.0, 1.0],
+            }
+        )
+        with pytest.raises(ValueError, match="outcomes in \\[0, 1\\]"):
+            WooldridgeDiD(method="logit").fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )
+
+    def test_poisson_rejects_negative(self):
+        """Poisson should reject negative outcomes."""
+        df = pd.DataFrame(
+            {
+                "unit": [1, 1, 2, 2],
+                "time": [1, 2, 1, 2],
+                "cohort": [2, 2, 0, 0],
+                "y": [1.0, -1.0, 2.0, 3.0],
+            }
+        )
+        with pytest.raises(ValueError, match="non-negative"):
+            WooldridgeDiD(method="poisson").fit(
+                df, outcome="y", unit="unit", time="time", cohort="cohort"
+            )

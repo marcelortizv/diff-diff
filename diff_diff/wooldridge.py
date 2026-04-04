@@ -640,6 +640,13 @@ class WooldridgeDiD:
         X_full = np.hstack([X_int, cohort_dummies, time_dummies])
 
         y = sample[outcome].values.astype(float)
+        if not np.all(np.isfinite(y)):
+            raise ValueError("Outcome contains non-finite values (NaN/Inf).")
+        if np.any(y < 0) or np.any(y > 1):
+            raise ValueError(
+                f"method='logit' requires outcomes in [0, 1]. "
+                f"Got range [{y.min():.4f}, {y.max():.4f}]."
+            )
         cluster_col = self.cluster if self.cluster else unit
         cluster_ids = sample[cluster_col].values
 
@@ -811,6 +818,13 @@ class WooldridgeDiD:
         # Treatment interaction coefficients start at column index 1.
 
         y = sample[outcome].values.astype(float)
+        if not np.all(np.isfinite(y)):
+            raise ValueError("Outcome contains non-finite values (NaN/Inf).")
+        if np.any(y < 0):
+            raise ValueError(
+                f"method='poisson' requires non-negative outcomes. "
+                f"Got minimum value {y.min():.4f}."
+            )
         cluster_col = self.cluster if self.cluster else unit
         cluster_ids = sample[cluster_col].values
 

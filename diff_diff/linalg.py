@@ -2397,6 +2397,14 @@ def solve_poisson(
     """
     n, k_orig = X.shape
 
+    # Validate rank_deficient_action (same as solve_logit/solve_ols)
+    valid_actions = ("warn", "error", "silent")
+    if rank_deficient_action not in valid_actions:
+        raise ValueError(
+            f"rank_deficient_action must be one of {valid_actions}, "
+            f"got {rank_deficient_action!r}"
+        )
+
     # Rank-deficiency detection (same pattern as solve_logit/solve_ols)
     kept_cols = np.arange(k_orig)
     rank, dropped_cols, _pivot = _detect_rank_deficiency(X)

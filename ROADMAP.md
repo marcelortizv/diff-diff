@@ -8,7 +8,7 @@ For past changes and release history, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Current Status
 
-diff-diff v2.8.4 is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` + `synthdid` ecosystem for core DiD analysis, plus **unique survey support** — design-based variance estimation (Taylor linearization, replicate weights) integrated across all estimators. No R or Python package offers this combination:
+diff-diff v2.8.4 is a **production-ready** DiD library with feature parity with R's `did` + `HonestDiD` + `synthdid` ecosystem for core DiD analysis, plus **unique survey support** — all estimators accept survey weights, with design-based variance estimation varying by estimator. No R or Python package offers this combination:
 
 - **Core estimators**: Basic DiD, TWFE, MultiPeriod, Callaway-Sant'Anna, Sun-Abraham, Borusyak-Jaravel-Spiess Imputation, Synthetic DiD, Triple Difference (DDD), Staggered Triple Difference (Ortiz-Villavicencio & Sant'Anna 2025), TROP, Two-Stage DiD (Gardner 2022), Stacked DiD (Wing et al. 2024), Continuous DiD (Callaway, Goodman-Bacon & Sant'Anna 2024)
 - **Valid inference**: Robust SEs, cluster SEs, wild bootstrap, multiplier bootstrap, placebo-based variance

@@ -325,7 +325,11 @@ Combining them raises `NotImplementedError` or `ValueError`:
 | ImputationDiD | `pretrend_test()` + replicate weights | Per-replicate Equation 9 refits not implemented |
 | DifferenceInDifferences, TwoWayFixedEffects, MultiPeriodDiD | `inference='wild_bootstrap'` + `survey_design` | Use analytical survey inference (the default) instead |
 
-### Documentation-Only (Phase 8g)
+---
+
+## Remaining Documentation Tasks (Phase 8g)
+
+These are documentation improvements, not runtime limitations:
 
 - **Multi-stage design**: Document that single-stage (strata + PSU) is sufficient for variance estimation per Lumley (2004) Section 2.2. No code changes needed.
 - **Post-stratification / calibration**: Document that `SurveyDesign` expects pre-calibrated weights. Point users to `samplics` or R's `survey::calibrate()` for weight calibration.

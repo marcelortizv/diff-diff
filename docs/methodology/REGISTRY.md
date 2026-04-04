@@ -704,7 +704,7 @@ where `q_{g,e} = pi_g / sum_{g' in G_{trt,e}} pi_{g'}`.
 - **Note:** Conditional covariance Omega*(X) scales each term by per-unit sieve-estimated inverse propensities s_hat_{g'}(X) = 1/p_{g'}(X) (algorithm step 4), matching Eq 3.12. The inverse propensity estimation uses the same polynomial sieve convex minimization as the ratio estimator. Estimated s_hat values are clipped to [1, n] with a UserWarning when clipping binds, mirroring the ratio path's overlap diagnostics.
 - **Note:** Outcome regressions m_hat_{g',t,tpre}(X) use linear OLS working models. The paper's Section 4 describes flexible nonparametric nuisance estimation (sieve regression, kernel smoothing, or ML methods). The DR property ensures consistency if either the OLS outcome model or the sieve propensity ratio is correctly specified, but the linear OLS specification does not generically guarantee attainment of the semiparametric efficiency bound unless the conditional mean is linear in the covariates.
 - **Note:** EfficientDiD bootstrap with survey weights supported (Phase 6) via PSU-level multiplier weights
-- **Note:** EfficientDiD covariates (DR path) with survey weights deferred — the doubly robust nuisance estimation does not yet thread survey weights through sieve/kernel steps
+- **Note:** EfficientDiD covariates (DR path) with survey weights supported — WLS outcome regression, weighted sieve normal equations for propensity ratios/inverse propensities, survey-weighted Nadaraya-Watson kernel for conditional Omega*(X), and survey-weighted ATT averaging. Silverman bandwidth uses unweighted statistics (survey-weighted bandwidth deferred as second-order refinement).
 - **Note:** Cluster-robust SEs use the standard Liang-Zeger clustered sandwich estimator applied to EIF values: aggregate EIF within clusters, center, and compute variance with G/(G-1) small-sample correction. Cluster bootstrap generates multiplier weights at the cluster level (all units in a cluster share the same weight). Analytical clustered SEs are the default when `cluster` is set; cluster bootstrap is opt-in via `n_bootstrap > 0`.
 - **Note:** Hausman pretest operates on the post-treatment event-study vector ES(e) per Theorem A.1. Both PT-All and PT-Post fits are aggregated to ES(e) using cohort-size weights before computing the test statistic H = delta' V^{-1} delta where delta = ES_post - ES_all and V = Cov(ES_post) - Cov(ES_all). Covariance is computed from aggregated ES(e)-level EIF values. The variance-difference matrix V is inverted via Moore-Penrose pseudoinverse to handle finite-sample non-positive-definiteness. Effective rank of V (number of positive eigenvalues) is used as degrees of freedom.
 - **Note:** Last-cohort-as-control (`control_group="last_cohort"`) reclassifies the latest treatment cohort as pseudo-never-treated and drops time periods at/after that cohort's treatment start. This is distinct from CallawaySantAnna's `not_yet_treated` option which dynamically selects not-yet-treated units per (g,t) pair.
@@ -2412,10 +2412,11 @@ variance from the distribution of replicate estimates.
   design structure is fixed and dropped replicates contribute zero to the
   sum without changing the scale. Survey df uses `n_valid - 1` for
   t-based inference.
-- **Note:** Replicate-weight support matrix:
-  - **Supported**: CallawaySantAnna (reg/ipw/dr without covariates, no
-    bootstrap), ContinuousDiD (no bootstrap), EfficientDiD (no bootstrap),
-    TripleDifference (all methods), LinearRegression (OLS path),
+- **Note:** Replicate-weight support matrix (12 of 15 public estimators):
+  - **Supported**: CallawaySantAnna (reg/ipw/dr with or without covariates,
+    no bootstrap; IF-based replicate variance is covariate-agnostic),
+    ContinuousDiD (no bootstrap), EfficientDiD (no bootstrap),
+    TripleDifference (all methods), StaggeredTripleDifference (IF-based),
     DifferenceInDifferences (no-absorb via LinearRegression dispatch,
     absorb via estimator-level refit), MultiPeriodDiD (no-absorb via
     `compute_replicate_vcov`, absorb via estimator-level refit),
@@ -2462,12 +2463,20 @@ Domain estimation preserving full design structure.
 - **Note:** Weight validation relaxed from "strictly positive" to
   "non-negative" to support zero-weight observations. Negative weights
   still rejected. All-zero weight vectors rejected at solver level.
-- **Note:** Survey design df (`n_PSU - n_strata`) uses total design
-  structure (including zero-weight rows), matching R's `survey::degf()`
-  convention after `subset()`. The generic HC1/classical inference paths
-  use positive-weight count for df adjustments, ensuring zero-weight
+- **Note:** Survey design df (`n_PSU - n_strata`) uses the full design
+  structure (including zero-weight rows), ensuring variance estimation
+  accounts for all strata and PSUs. The generic HC1/classical inference
+  paths use positive-weight count for df adjustments, ensuring zero-weight
   padding is inference-invariant outside the survey vcov path. DEFF
   effective-n also uses positive-weight count.
+- **Deviation from R:** `subpopulation()` preserves all strata in df
+  computation even when a stratum has no positive-weight observations,
+  while R's `subset()` drops empty strata from `survey::degf()`. For
+  example, subsetting a 3-stratum design to one stratum gives df=n-3
+  in diff-diff vs df=n-1 in R. Both ATT and SE match; only df (and
+  therefore t-based CI width) differs. The diff-diff approach is
+  conservative (more strata → lower df → wider CI) and preserves the
+  full design structure per Lumley (2004) Section 3.4.
 - **Note:** For replicate-weight designs, `subpopulation()` zeros out both
   full-sample and replicate weight columns for excluded observations,
   preserving all replicate metadata.

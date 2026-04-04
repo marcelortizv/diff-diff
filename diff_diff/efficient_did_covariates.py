@@ -37,6 +37,7 @@ def estimate_outcome_regression(
     group_mask: np.ndarray,
     t_col: int,
     tpre_col: int,
+    unit_weights: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Estimate conditional mean outcome change m_hat(X) for a comparison group.
 
@@ -56,6 +57,9 @@ def estimate_outcome_regression(
         Mask selecting units in the comparison group.
     t_col, tpre_col : int
         Column indices in ``outcome_wide`` for the two time periods.
+    unit_weights : ndarray, shape (n_units,), optional
+        Survey weights at the unit level.  When provided, uses WLS
+        instead of OLS for the within-group regression.
 
     Returns
     -------
@@ -68,9 +72,13 @@ def estimate_outcome_regression(
     X_group = covariate_matrix[group_mask]
     X_design = np.column_stack([np.ones(len(X_group)), X_group])
 
+    w_group = unit_weights[group_mask] if unit_weights is not None else None
+
     coef, _, _ = solve_ols(
         X_design,
         delta_y,
+        weights=w_group,
+        weight_type="pweight" if w_group is not None else None,
         return_vcov=False,
         rank_deficient_action="warn",
     )
@@ -121,7 +129,9 @@ def _polynomial_sieve_basis(X: np.ndarray, degree: int) -> np.ndarray:
     """
     n, d = X.shape
 
-    # Standardize for numerical stability
+    # Standardize for numerical stability (unweighted mean/std intentional —
+    # this is only for conditioning, not for the statistical estimand; with
+    # survey weights the sieve basis is the same, only the objective changes)
     X_mean = X.mean(axis=0)
     X_std = X.std(axis=0)
     X_std[X_std < 1e-10] = 1.0  # avoid division by zero for constant columns
@@ -146,6 +156,7 @@ def estimate_propensity_ratio_sieve(
     k_max: Optional[int] = None,
     criterion: str = "bic",
     ratio_clip: float = 20.0,
+    unit_weights: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     r"""Estimate propensity ratio via sieve convex minimization (Eq 4.1-4.2).
 
@@ -176,6 +187,9 @@ def estimate_propensity_ratio_sieve(
         ``"aic"`` or ``"bic"``.
     ratio_clip : float
         Clip ratios to ``[1/ratio_clip, ratio_clip]``.
+    unit_weights : ndarray, shape (n_units,), optional
+        Survey weights at the unit level.  When provided, uses weighted
+        normal equations for the sieve estimation.
 
     Returns
     -------
@@ -197,8 +211,19 @@ def estimate_propensity_ratio_sieve(
     k_max = max(k_max, 1)
 
     # Penalty multiplier for IC
+    # BIC penalty uses observation count (not weighted) — complexity vs distinct obs
     n_total = int(np.sum(mask_g)) + n_gp
     c_n = 2.0 if criterion == "aic" else np.log(max(n_total, 2))
+
+    # Weighted totals for loss normalization (raw probability weights)
+    if unit_weights is not None:
+        w_g = unit_weights[mask_g]
+        w_gp = unit_weights[mask_gp]
+        n_total_w = float(np.sum(w_g)) + float(np.sum(w_gp))
+    else:
+        w_g = None
+        w_gp = None
+        n_total_w = float(n_total)
 
     best_ic = np.inf
     best_ratio = np.ones(n_units)  # fallback: constant ratio 1
@@ -214,9 +239,15 @@ def estimate_propensity_ratio_sieve(
         Psi_gp = basis_all[mask_gp]  # (n_gp, n_basis)
         Psi_g = basis_all[mask_g]  # (n_g, n_basis)
 
-        # Normal equations: (Psi_gp' Psi_gp) beta = Psi_g.sum(axis=0)
-        A = Psi_gp.T @ Psi_gp
-        b = Psi_g.sum(axis=0)
+        # Normal equations (weighted when survey weights present):
+        # Unweighted: (Psi_gp' Psi_gp) beta = Psi_g.sum(axis=0)
+        # Weighted:   (Psi_gp' W_gp Psi_gp) beta = (w_g * Psi_g).sum(axis=0)
+        if w_gp is not None:
+            A = Psi_gp.T @ (w_gp[:, None] * Psi_gp)
+            b = (w_g[:, None] * Psi_g).sum(axis=0)
+        else:
+            A = Psi_gp.T @ Psi_gp
+            b = Psi_g.sum(axis=0)
 
         try:
             beta = np.linalg.solve(A, b)
@@ -230,11 +261,12 @@ def estimate_propensity_ratio_sieve(
         # Predicted ratio for all units
         r_hat = basis_all @ beta
 
-        # IC selection: loss at optimum = -(1/n) * b'beta
-        # Derivation: L(beta) = (1/n)(beta'A*beta - 2*b'beta).
+        # IC selection: loss at optimum = -(1/n_w) * b'beta
+        # Derivation: L(beta) = (1/n_w)(beta'A*beta - 2*b'beta).
         # At optimum A*beta = b, so beta'A*beta = b'beta.
-        # Therefore L = (1/n)(b'beta - 2*b'beta) = -(1/n)*b'beta.
-        loss = -float(b @ beta) / n_total
+        # Therefore L = (1/n_w)(b'beta - 2*b'beta) = -(1/n_w)*b'beta.
+        # Loss uses weighted totals; BIC penalty uses observation count.
+        loss = -float(b @ beta) / n_total_w
         ic_val = 2.0 * loss + c_n * n_basis / n_total
 
         if ic_val < best_ic:
@@ -280,6 +312,7 @@ def estimate_inverse_propensity_sieve(
     group_mask: np.ndarray,
     k_max: Optional[int] = None,
     criterion: str = "bic",
+    unit_weights: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     r"""Estimate s_{g'}(X) = 1/p_{g'}(X) via sieve convex minimization.
 
@@ -305,6 +338,9 @@ def estimate_inverse_propensity_sieve(
         Maximum polynomial degree. None = auto.
     criterion : str
         ``"aic"`` or ``"bic"``.
+    unit_weights : ndarray, shape (n_units,), optional
+        Survey weights at the unit level.  When provided, uses weighted
+        normal equations for the sieve estimation.
 
     Returns
     -------
@@ -322,10 +358,25 @@ def estimate_inverse_propensity_sieve(
         k_max = min(int(n_group**0.2), 5)
     k_max = max(k_max, 1)
 
+    # BIC penalty uses observation count (not weighted)
     c_n = 2.0 if criterion == "aic" else np.log(max(n_units, 2))
 
+    # Weighted loss normalization and fallback
+    if unit_weights is not None:
+        w_group = unit_weights[group_mask]
+        sum_w_group = float(np.sum(w_group))
+        if sum_w_group <= 0:
+            # Zero survey weight for this group — return unconditional fallback
+            return np.ones(n_units)
+        n_units_w = float(np.sum(unit_weights))
+        fallback_ratio = n_units_w / sum_w_group
+    else:
+        w_group = None
+        n_units_w = float(n_units)
+        fallback_ratio = n_units / n_group
+
     best_ic = np.inf
-    best_s = np.full(n_units, n_units / n_group)  # fallback: unconditional
+    best_s = np.full(n_units, fallback_ratio)  # fallback: unconditional
 
     for K in range(1, k_max + 1):
         n_basis = comb(K + d, d)
@@ -335,9 +386,16 @@ def estimate_inverse_propensity_sieve(
         basis_all = _polynomial_sieve_basis(covariate_matrix, K)
         Psi_gp = basis_all[group_mask]
 
-        A = Psi_gp.T @ Psi_gp
-        # RHS: sum of basis over ALL units (not just one group)
-        b = basis_all.sum(axis=0)
+        # Normal equations (weighted when survey weights present):
+        # Unweighted: (Psi_gp' Psi_gp) beta = Psi_all.sum(axis=0)
+        # Weighted:   (Psi_gp' W_group Psi_gp) beta = (w_all * Psi_all).sum(axis=0)
+        if w_group is not None:
+            A = Psi_gp.T @ (w_group[:, None] * Psi_gp)
+            b = (unit_weights[:, None] * basis_all).sum(axis=0)
+        else:
+            A = Psi_gp.T @ Psi_gp
+            # RHS: sum of basis over ALL units (not just one group)
+            b = basis_all.sum(axis=0)
 
         try:
             beta = np.linalg.solve(A, b)
@@ -348,8 +406,9 @@ def estimate_inverse_propensity_sieve(
 
         s_hat = basis_all @ beta
 
-        # IC: loss = -(1/n) * b'beta (same derivation as ratio estimator)
-        loss = -float(b @ beta) / n_units
+        # IC: loss = -(1/n_w) * b'beta (same derivation as ratio estimator)
+        # Loss uses weighted totals; BIC penalty uses observation count.
+        loss = -float(b @ beta) / n_units_w
         ic_val = 2.0 * loss + c_n * n_basis / n_units
 
         if ic_val < best_ic:
@@ -433,6 +492,10 @@ def compute_generated_outcomes_cov(
     g_mask = cohort_masks[target_g]
     pi_g = cohort_fractions[target_g]
 
+    # Guard: zero survey weight for the target cohort → no DR estimation possible
+    if pi_g <= 0:
+        return np.zeros((n_units, H))
+
     gen_out = np.zeros((n_units, H))
 
     for j, (gp, tpre) in enumerate(valid_pairs):
@@ -496,6 +559,7 @@ def _kernel_weights_matrix(
     X_all: np.ndarray,
     X_group: np.ndarray,
     bandwidth: float,
+    group_weights: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Gaussian kernel weight matrix.
 
@@ -503,11 +567,21 @@ def _kernel_weights_matrix(
     normalized kernel weight ``K_h(X_group[j], X_all[i])``.
 
     Each row sums to 1 (Nadaraya-Watson normalization).
+
+    Parameters
+    ----------
+    group_weights : ndarray, shape (n_group,), optional
+        Survey weights for the group units.  When provided, kernel
+        weights are multiplied by survey weights before row-normalization,
+        making the Nadaraya-Watson estimator survey-weighted.
     """
     # Squared distances: (n_all, n_group)
     dist_sq = cdist(X_all, X_group, metric="sqeuclidean")
     # Gaussian kernel
     raw = np.exp(-dist_sq / (2.0 * bandwidth**2))
+    # Survey-weight: each group unit j contributes ∝ w_j * K_h(X_i, X_j)
+    if group_weights is not None:
+        raw = raw * group_weights[np.newaxis, :]
     # Normalize each row
     row_sums = raw.sum(axis=1, keepdims=True)
     row_sums[row_sums < 1e-15] = 1.0  # avoid division by zero
@@ -559,6 +633,7 @@ def compute_omega_star_conditional(
     covariate_matrix: np.ndarray,
     s_hat_cache: Dict[float, np.ndarray],
     bandwidth: Optional[float] = None,
+    unit_weights: Optional[np.ndarray] = None,
     never_treated_val: float = np.inf,
 ) -> np.ndarray:
     r"""Kernel-smoothed conditional Omega\*(X_i) for each unit (Eq 3.12).
@@ -583,6 +658,9 @@ def compute_omega_star_conditional(
         value is shape ``(n_units,)``. Keyed by group identifier.
     bandwidth : float or None
         Kernel bandwidth. None = Silverman's rule.
+    unit_weights : ndarray, shape (n_units,), optional
+        Survey weights at the unit level.  When provided, kernel-smoothed
+        covariances use survey-weighted Nadaraya-Watson regression.
     never_treated_val : float
 
     Returns
@@ -622,13 +700,17 @@ def compute_omega_star_conditional(
             stacklevel=2,
         )
 
+    # Per-group survey weights for kernel smoothing
+    w_g = unit_weights[g_mask] if unit_weights is not None else None
+    w_inf = unit_weights[never_treated_mask] if unit_weights is not None else None
+
     # Pre-compute kernel weight matrices per group
     Y_g = outcome_wide[g_mask]
     X_g = covariate_matrix[g_mask]
     Yg_t_minus_1 = Y_g[:, t_col] - Y_g[:, y1_col]
 
-    W_g = _kernel_weights_matrix(covariate_matrix, X_g, bandwidth)
-    W_inf = _kernel_weights_matrix(covariate_matrix, X_inf, bandwidth)
+    W_g = _kernel_weights_matrix(covariate_matrix, X_g, bandwidth, group_weights=w_g)
+    W_inf = _kernel_weights_matrix(covariate_matrix, X_inf, bandwidth, group_weights=w_inf)
 
     inf_t_minus_tpre = {}
     for _, tpre in valid_pairs:
@@ -683,7 +765,10 @@ def compute_omega_star_conditional(
                     )
                     if gp_j not in W_gp_cache:
                         X_gp = covariate_matrix[cohort_masks[gp_j]]
-                        W_gp_cache[gp_j] = _kernel_weights_matrix(covariate_matrix, X_gp, bandwidth)
+                        w_gp_j = unit_weights[cohort_masks[gp_j]] if unit_weights is not None else None
+                        W_gp_cache[gp_j] = _kernel_weights_matrix(
+                            covariate_matrix, X_gp, bandwidth, group_weights=w_gp_j
+                        )
                         gp_outcomes_cache[gp_j] = outcome_wide[cohort_masks[gp_j]]
                     W_gp = W_gp_cache[gp_j]
                     Y_gp = gp_outcomes_cache[gp_j]

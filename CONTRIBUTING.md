@@ -29,6 +29,8 @@ When implementing new functionality, **always include accompanying documentation
    - Move implemented features from planned to current status
    - Update version numbers
 
+6. **docs/doc-deps.yaml** - Add source-to-doc mappings for the new module
+
 ### For Bug Fixes or Minor Enhancements
 
 - Update relevant docstrings

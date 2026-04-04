@@ -128,13 +128,15 @@ When the working tree is clean but commits are ahead, check for methodology issu
 
    If warnings are found, display them as warnings (non-blocking) since changes are already committed.
 
-3. **REGISTRY.md check**: Check whether `docs/methodology/REGISTRY.md` is also in the committed changes (`git diff --name-only <comparison-ref>..HEAD`).
-   If methodology files changed but REGISTRY.md was NOT modified, warn:
-   "Methodology files changed but `docs/methodology/REGISTRY.md` was not updated.
-   If your changes deviate from reference implementations, document them using a
-   reviewer-recognized label (`**Note:**`, `**Deviation from R:**`, or
-   `**Note (deviation from R):**`) — undocumented deviations are flagged as P1
-   by the AI reviewer."
+3. **Documentation impact check**: Check which source files in `diff_diff/` are in the committed changes.
+   If source files are present, read `docs/doc-deps.yaml` and check which dependent
+   documentation files are NOT also in the committed changes. For HIGH drift risk docs, warn:
+   ```
+   Documentation impact: source files changed but related docs were not updated:
+     [HIGH] docs/methodology/REGISTRY.md — <section hint>
+     [HIGH] docs/survey-roadmap.md
+   Run /docs-impact for full details.
+   ```
    This is a WARNING, not a blocker.
 
 Note: Section 3b checks are informational warnings only — no AskUserQuestion prompt, since changes are already committed and cannot be unstaged. This differs from the staged-changes path (Section 3) which offers a "fix vs continue" choice.
@@ -167,14 +169,14 @@ Note: Section 3b checks are informational warnings only — no AskUserQuestion p
    ```
    Use AskUserQuestion. If user chooses to fix, abort the commit flow.
 
-   **REGISTRY.md check** (if methodology files are staged):
-   Check whether `docs/methodology/REGISTRY.md` is also in the staged file set.
-   If methodology files changed but REGISTRY.md was NOT staged, warn:
-   "Methodology files changed but `docs/methodology/REGISTRY.md` was not updated.
-   If your changes deviate from reference implementations, document them using a
-   reviewer-recognized label (`**Note:**`, `**Deviation from R:**`, or
-   `**Note (deviation from R):**`) — undocumented deviations are flagged as P1
-   by the AI reviewer."
+   **Documentation impact check** (if source files are staged):
+   If source files in `diff_diff/` are present, read `docs/doc-deps.yaml` and check which
+   dependent documentation files are NOT also in the staged set. For HIGH drift risk docs, warn:
+   ```
+   Documentation impact: source files changed but related docs were not updated:
+     [HIGH] docs/methodology/REGISTRY.md — <section hint>
+   Run /docs-impact for full details.
+   ```
    This is a WARNING, not a blocker.
 
 3. **Capture file count for reporting**:
@@ -277,6 +279,7 @@ Commit: <hash> - <message>
 Files changed: <files-changed-count>
 
 AI code review triggered. Results will appear shortly.
+When AI review is green, add the `ready-for-ci` label to trigger CI tests (if not already added).
 
 PR URL: <url>
 ```
@@ -291,6 +294,7 @@ Files changed: <files-changed-count>
 PR URL: <url>
 
 Tip: Run /ai-review to request AI code review.
+Note: CI tests require the `ready-for-ci` label on the PR.
 ```
 
 ## Error Handling

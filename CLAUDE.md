@@ -135,6 +135,7 @@ category (`Methodology/Correctness`, `Performance`, or `Testing/Docs`):
 | File | Contains |
 |------|----------|
 | `docs/methodology/REGISTRY.md` | Academic foundations, equations, edge cases — **consult before methodology changes** |
+| `docs/doc-deps.yaml` | Source-to-documentation dependency map — **consult when any source file changes** |
 | `CONTRIBUTING.md` | Documentation requirements, test writing guidelines |
 | `.claude/commands/dev-checklists.md` | Checklists for params, methodology, warnings, reviews, bugs (run `/dev-checklists`) |
 | `.claude/memory.md` | Debugging patterns, tolerances, API conventions (git-tracked) |
@@ -145,6 +146,7 @@ category (`Methodology/Correctness`, `Performance`, or `Testing/Docs`):
 ## Workflow
 
 - For non-trivial tasks, use `EnterPlanMode`. Consult `docs/methodology/REGISTRY.md` for methodology changes.
+- When modifying source files in `diff_diff/`, consult `docs/doc-deps.yaml` to identify impacted documentation. Run `/docs-impact` to see the full list.
 - For bug fixes, grep for the pattern across all files before fixing.
 - Follow the relevant development checklists (run `/dev-checklists`).
 - Before submitting: run `/pre-merge-check`, then `/ai-review-local` for pre-PR AI review.

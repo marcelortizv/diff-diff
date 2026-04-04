@@ -1,6 +1,6 @@
 ---
 description: Verify documentation completeness including scholarly references
-argument-hint: "[all | readme | refs | api | tutorials]"
+argument-hint: "[all | readme | refs | api | tutorials | map]"
 ---
 
 # Documentation Completeness Check
@@ -11,11 +11,12 @@ Verify that documentation is complete and includes appropriate scholarly referen
 
 The user may provide an optional argument: `$ARGUMENTS`
 
-- If empty or "all": Run all checks
+- If empty or "all": Run all checks (including map validation)
 - If "readme": Check README.md sections only
 - If "refs" or "references": Check scholarly references only
 - If "api": Check API documentation (RST files) only
 - If "tutorials": Check tutorial coverage only
+- If "map": Validate docs/doc-deps.yaml integrity only
 
 ## Estimators and Required Documentation
 
@@ -197,9 +198,41 @@ Tutorial Coverage:
 Summary: 15/18 checks passed, 3 issues found
 ```
 
+### 8. Dependency Map Validation (if "map" or "all")
+
+Validate the integrity of `docs/doc-deps.yaml`:
+
+1. **Read and parse** `docs/doc-deps.yaml`. If missing or malformed YAML, report error.
+
+2. **Check all doc paths exist**: For every `path` in every `sources` entry, verify the file
+   exists on disk. Report missing files:
+   ```
+   [FAIL] docs/doc-deps.yaml references non-existent: docs/old_name.rst
+   ```
+
+3. **Check all source files have entries**: List all `diff_diff/*.py` and
+   `diff_diff/visualization/*.py` files. For each, verify it appears either as a key in
+   `sources:` or as a member of a `groups:` entry. Report missing:
+   ```
+   [WARN] diff_diff/new_module.py has no entry in docs/doc-deps.yaml
+   ```
+
+4. **Check for orphan doc paths**: Collect all unique doc paths from the map. Check if any
+   doc file referenced in the map no longer exists or has been renamed.
+
+5. **Report summary**:
+   ```
+   Dependency Map (docs/doc-deps.yaml):
+     Sources mapped: 28
+     Groups defined: 9
+     Doc paths referenced: 45
+     [PASS/FAIL] All doc paths exist
+     [PASS/WARN] All source files have entries
+   ```
+
 ## Notes
 
 - This check is especially important after adding new estimators
 - The CONTRIBUTING.md file documents what documentation is required for new features
 - Missing references should cite the original methodology paper, not textbooks
-- When adding new estimators, update this skill's tables accordingly
+- When adding new estimators, update this skill's tables and docs/doc-deps.yaml accordingly

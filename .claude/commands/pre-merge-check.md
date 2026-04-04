@@ -109,19 +109,26 @@ git diff HEAD -- <changed-py-files> | grep "^+.*def " | head -10
 
 For each changed function, flag: "Verify docstring Parameters section matches updated signature for: `<function_name>`"
 
-#### 2.5 Methodology Documentation Check
+#### 2.5 Documentation Impact Check
 
-If any methodology files changed, check whether `docs/methodology/REGISTRY.md` was also
-modified in the changed file set (from Section 1).
+If any source files in `diff_diff/` changed, read `docs/doc-deps.yaml` and identify which
+dependent documentation files are NOT also in the changed file set (from Section 1).
 
-If methodology files changed but REGISTRY.md was NOT modified, flag:
-"Methodology files changed but `docs/methodology/REGISTRY.md` was not updated. If your
-changes deviate from reference implementations, document them using a reviewer-recognized
-label (`**Note:**`, `**Deviation from R:**`, or `**Note (deviation from R):**`) —
-undocumented deviations are flagged as P1 by the AI reviewer and cannot be mitigated
-by TODO.md."
+For each changed source file:
+1. Look up its entry in `docs/doc-deps.yaml` (resolving group membership for multi-file modules)
+2. Check each dependent doc's `path` against the changed file set
+3. Report HIGH drift risk docs that were NOT changed as warnings
 
-This is a WARNING, not a blocker — not every methodology change involves a deviation.
+**Report format**:
+```
+Documentation impact: source files changed but related docs were not updated:
+  [HIGH] docs/methodology/REGISTRY.md -- <section hint>
+  [HIGH] docs/survey-roadmap.md
+  [MEDIUM] README.md -- <section hint> (3 more MEDIUM/LOW docs — run /docs-impact for details)
+```
+
+This is a WARNING, not a blocker — not every source change requires a doc update.
+For full details, run `/docs-impact`.
 
 #### 2.6 Secret Scanning Patterns (Canonical Definitions)
 

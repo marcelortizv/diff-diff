@@ -154,14 +154,18 @@ Determine if this is a fork-based workflow:
    ```
    Use AskUserQuestion. If user chooses to fix, abort the commit flow and let them address the issues.
 
-3. **REGISTRY.md check** (if methodology files are staged):
-   Check whether `docs/methodology/REGISTRY.md` is also in the staged file set (`git diff --cached --name-only`).
-   If methodology files changed but REGISTRY.md was NOT staged, warn:
-   "Methodology files changed but `docs/methodology/REGISTRY.md` was not updated.
-   If your changes deviate from reference implementations, document them using a
-   reviewer-recognized label (`**Note:**`, `**Deviation from R:**`, or
-   `**Note (deviation from R):**`) — undocumented deviations are flagged as P1
-   by the AI reviewer."
+3. **Documentation impact check** (if source files are staged):
+   ```bash
+   git diff --cached --name-only | grep "^diff_diff/.*\.py$"
+   ```
+   If source files are present, read `docs/doc-deps.yaml` and check which dependent
+   documentation files are NOT also in the staged set. For HIGH drift risk docs, warn:
+   ```
+   Documentation impact: source files changed but related docs were not updated:
+     [HIGH] docs/methodology/REGISTRY.md — <section hint>
+     [HIGH] docs/survey-roadmap.md
+   Run /docs-impact for full details.
+   ```
    This is a WARNING, not a blocker.
 
 ### 6. Commit Changes
@@ -352,7 +356,8 @@ Changes included:
 
 Next steps:
 - Review the PR at the URL above
-- Request reviewers if needed
+- AI code review runs automatically on PR open
+- When AI review is green, add the `ready-for-ci` label to trigger CI tests
 - Run /review-pr <number> to get AI review
 ```
 

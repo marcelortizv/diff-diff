@@ -450,6 +450,9 @@ sources:
   diff_diff/linalg.py:
     drift_risk: medium
     docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Variance Estimation, Cluster-Robust SE"
+        type: methodology
       - path: docs/performance-plan.md
         type: performance
       - path: docs/benchmarks.rst
@@ -460,6 +463,9 @@ sources:
   diff_diff/utils.py:
     drift_risk: medium
     docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Inference, safe_inference NaN gating"
+        type: methodology
       - path: CLAUDE.md
         section: "safe_inference pattern"
         type: internal
@@ -478,8 +484,11 @@ sources:
         type: user_guide
 
   diff_diff/bootstrap_utils.py:
-    drift_risk: low
+    drift_risk: medium
     docs:
+      - path: docs/methodology/REGISTRY.md
+        section: "Bootstrap, Survey Bootstrap"
+        type: methodology
       - path: docs/survey-roadmap.md
         type: roadmap
         note: "Phase 6 bootstrap+survey interaction"

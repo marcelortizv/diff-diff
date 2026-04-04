@@ -145,6 +145,9 @@ category (`Methodology/Correctness`, `Performance`, or `Testing/Docs`):
 
 ## Workflow
 
+- CI tests are gated behind the `ready-for-ci` label. The `CI Gate` required status check
+  enforces this — PRs cannot merge until the label is added. Tests run automatically once
+  the label is present.
 - For non-trivial tasks, use `EnterPlanMode`. Consult `docs/methodology/REGISTRY.md` for methodology changes.
 - When modifying source files in `diff_diff/`, consult `docs/doc-deps.yaml` to identify impacted documentation. Run `/docs-impact` to see the full list.
 - For bug fixes, grep for the pattern across all files before fixing.

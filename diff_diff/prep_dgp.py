@@ -1287,7 +1287,7 @@ def generate_survey_did_data(
     return_true_population_att : bool, default=False
         If True, attaches a diagnostic dict to ``df.attrs["dgp_truth"]``
         with keys: ``population_att`` (weight-weighted average of treated
-        true effects), ``deff_kish`` (1 + CV(w)^2), ``stratum_effects``
+        true effects), ``deff_kish`` (1 + CV(w)^2), ``base_stratum_effects``
         (base stratum TEs before dynamic/covariate modifiers),
         ``icc_realized`` (ANOVA-based
         ICC computed on period-1 data).

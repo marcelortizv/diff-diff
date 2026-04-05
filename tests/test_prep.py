@@ -1721,6 +1721,41 @@ class TestSurveyDGPResearchGrade:
         assert corr > 0.1
         assert "x1" in df.columns
 
+    def test_informative_sampling_covariate_ranking_direct(self):
+        """Verify covariates actually affect weight assignment in ranking.
+
+        Use large covariate effects with tiny unit_fe_sd/psu_re_sd so
+        covariates dominate Y(0). Weights with nonzero vs zero covariate
+        effects should differ.
+        """
+        from diff_diff.prep_dgp import generate_survey_did_data
+
+        # Covariates dominate: large beta, tiny structural variance
+        df_with = generate_survey_did_data(
+            n_units=200,
+            informative_sampling=True,
+            add_covariates=True,
+            covariate_effects=(5.0, 0.0),
+            unit_fe_sd=0.01,
+            psu_re_sd=0.01,
+            noise_sd=0.01,
+            seed=42,
+        )
+        df_without = generate_survey_did_data(
+            n_units=200,
+            informative_sampling=True,
+            add_covariates=True,
+            covariate_effects=(0.0, 0.0),
+            unit_fe_sd=0.01,
+            psu_re_sd=0.01,
+            noise_sd=0.01,
+            seed=42,
+        )
+        # Weight assignments should differ when covariates dominate ranking
+        w_with = df_with[df_with["period"] == 1]["weight"].values
+        w_without = df_without[df_without["period"] == 1]["weight"].values
+        assert not np.allclose(w_with, w_without, atol=0.01)
+
     def test_heterogeneous_te_by_strata(self):
         """Unweighted mean TE should differ from population ATT."""
         from diff_diff.prep_dgp import generate_survey_did_data

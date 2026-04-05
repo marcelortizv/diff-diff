@@ -7,13 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-04-04
+
 ### Added
 - **WooldridgeDiD (ETWFE)** estimator — Extended Two-Way Fixed Effects from Wooldridge (2025, 2023). Supports OLS, logit, and Poisson QMLE paths with ASF-based ATT and delta-method SEs. Four aggregation types (simple, group, calendar, event) matching Stata `jwdid_estat`. Alias: `ETWFE`. (PR #216, thanks @wenddymacro)
+- **EfficientDiD survey + covariates** — doubly robust covariate path now threads survey weights through all four nuisance estimation stages (outcome regression, propensity ratio sieve, inverse propensity sieve, kernel-smoothed conditional Omega*). Previously raised `NotImplementedError`.
 - **Survey real-data validation** (Phase 9) — 15 cross-validation tests against R's `survey` package using three real federal survey datasets:
   - **API** (R `survey` package): TSL variance with strata, FPC, subpopulations, covariates, and Fay's BRR replicates
   - **NHANES** (CDC/NCHS): TSL variance with strata + PSU + nest=TRUE, validating the ACA young adult coverage provision DiD
   - **RECS 2020** (U.S. EIA): JK1 replicate weight variance with 60 pre-computed replicate columns
   - ATT, SE, df, and CI match R to machine precision (< 1e-10) where directly comparable; known deviations documented in REGISTRY.md (TWFE SE differs due to unit FE absorption; subpopulation df differs due to strata preservation)
+- **Label-gated CI** — test workflows now require `ready-for-ci` label before running, reducing wasted CI during AI review rounds. AI review workflow always runs.
+- **Documentation dependency map** (`docs/doc-deps.yaml`) — maps source files to impacted documentation. New `/docs-impact` skill flags which docs need updating when source files change.
+
+### Changed
+- WooldridgeDiD: full interacted covariate basis (D_g × X, f_t × X) for OLS path
+- `/submit-pr`, `/push-pr-update`, `/pre-merge-check`, `/docs-check` skills updated for label-gated CI and doc-deps workflow
+
+### Fixed
+- Fix WooldridgeDiD OLS unbalanced demeaning and nonlinear never-treated identification
+- Fix WooldridgeDiD Poisson dropped-cell bug and anticipation propagation
+- Fix EfficientDiD IF-scale mismatch in survey aggregation and zero-weight never-treated guard
+- Fix bootstrap clustering and delta-method reduced space in WooldridgeDiD
 
 ## [2.8.4] - 2026-04-04
 
@@ -1137,6 +1152,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `to_dict()` and `to_dataframe()` export methods
   - `is_significant` and `significance_stars` properties
 
+[2.9.0]: https://github.com/igerber/diff-diff/compare/v2.8.4...v2.9.0
 [2.8.4]: https://github.com/igerber/diff-diff/compare/v2.8.3...v2.8.4
 [2.8.3]: https://github.com/igerber/diff-diff/compare/v2.8.2...v2.8.3
 [2.8.2]: https://github.com/igerber/diff-diff/compare/v2.8.1...v2.8.2

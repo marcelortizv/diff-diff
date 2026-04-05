@@ -1837,3 +1837,54 @@ class TestSurveyDGPResearchGrade:
         df1 = generate_survey_did_data(seed=123)
         df2 = generate_survey_did_data(seed=123)
         pd.testing.assert_frame_equal(df1, df2)
+
+    def test_covariate_effects_custom(self):
+        """Custom covariate coefficients should change outcome variance."""
+        from diff_diff.prep_dgp import generate_survey_did_data
+
+        df_default = generate_survey_did_data(
+            n_units=500, add_covariates=True, seed=42
+        )
+        df_large = generate_survey_did_data(
+            n_units=500, add_covariates=True,
+            covariate_effects=(2.0, 1.0), seed=42,
+        )
+        # Larger coefficients → larger outcome variance
+        assert df_large["outcome"].var() > df_default["outcome"].var()
+
+    def test_covariate_effects_zero(self):
+        """Zero covariate effects should produce same variance as no covariates."""
+        from diff_diff.prep_dgp import generate_survey_did_data
+
+        df_no_cov = generate_survey_did_data(
+            n_units=500, add_covariates=False, seed=42
+        )
+        df_zero = generate_survey_did_data(
+            n_units=500, add_covariates=True,
+            covariate_effects=(0.0, 0.0), seed=42,
+        )
+        # Outcome variance should be similar (covariates contribute nothing)
+        assert abs(df_zero["outcome"].var() - df_no_cov["outcome"].var()) < 0.5
+
+    def test_te_covariate_interaction(self):
+        """Covariate interaction should create unit-level TE heterogeneity."""
+        from diff_diff.prep_dgp import generate_survey_did_data
+
+        df = generate_survey_did_data(
+            n_units=500,
+            add_covariates=True,
+            te_covariate_interaction=1.0,
+            seed=42,
+        )
+        treated = df[df["treated"] == 1]
+        # true_effect should vary across treated units (not constant)
+        assert treated["true_effect"].std() > 0.1
+
+    def test_te_covariate_interaction_requires_covariates(self):
+        """te_covariate_interaction without add_covariates should raise."""
+        from diff_diff.prep_dgp import generate_survey_did_data
+
+        with pytest.raises(ValueError, match="te_covariate_interaction requires"):
+            generate_survey_did_data(
+                te_covariate_interaction=0.5, add_covariates=False, seed=42
+            )

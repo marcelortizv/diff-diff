@@ -1187,6 +1187,8 @@ def generate_survey_did_data(
     heterogeneous_te_by_strata: bool = False,
     strata_sizes: Optional[List[int]] = None,
     return_true_population_att: bool = False,
+    covariate_effects: Optional[tuple] = None,
+    te_covariate_interaction: float = 0.0,
 ) -> pd.DataFrame:
     """
     Generate synthetic staggered DiD data with survey structure.
@@ -1288,6 +1290,16 @@ def generate_survey_did_data(
         true effects), ``deff_kish`` (1 + CV(w)^2), ``stratum_effects``
         (dict mapping stratum index to TE), ``icc_realized`` (ANOVA-based
         ICC computed on period-1 data).
+    covariate_effects : tuple of (float, float), optional
+        Coefficients ``(beta1, beta2)`` for covariates x1 and x2 in the
+        outcome equation ``y += beta1 * x1 + beta2 * x2``. Default uses
+        ``(0.5, 0.3)``. Only used when ``add_covariates=True``. The ICC
+        calibration automatically adjusts for the implied covariate variance.
+    te_covariate_interaction : float, default=0.0
+        Coefficient for treatment-by-covariate interaction:
+        ``TE_i = base_TE + te_covariate_interaction * x1_i``. Creates
+        unit-level treatment effect heterogeneity driven by the continuous
+        covariate. Requires ``add_covariates=True``.
 
     Returns
     -------
@@ -1400,11 +1412,19 @@ def generate_survey_did_data(
                 f"got {sum(strata_sizes)}"
             )
 
+    # --- Resolve covariate coefficients ---
+    _beta1, _beta2 = covariate_effects if covariate_effects is not None else (0.5, 0.3)
+
+    if te_covariate_interaction != 0.0 and not add_covariates:
+        raise ValueError(
+            "te_covariate_interaction requires add_covariates=True"
+        )
+
     # --- ICC -> psu_re_sd resolution ---
     if icc is not None:
-        # Include covariate variance: Var(0.5*x1) + Var(0.3*x2)
+        # Covariate variance: Var(beta1*x1) + Var(beta2*x2)
         # where x1 ~ N(0,1), x2 ~ Bernoulli(0.5)
-        cov_var = (0.25 + 0.09 * 0.25) if add_covariates else 0.0
+        cov_var = (_beta1**2 * 1.0 + _beta2**2 * 0.25) if add_covariates else 0.0
         non_psu_var = unit_fe_sd**2 + noise_sd**2 + cov_var
         if non_psu_var < 1e-12:
             raise ValueError(
@@ -1499,7 +1519,7 @@ def generate_survey_did_data(
         if add_covariates:
             _panel_x1 = rng.normal(0, 1, size=n_units)
             _panel_x2 = rng.choice([0, 1], size=n_units)
-            y0_period1 = y0_period1 + 0.5 * _panel_x1 + 0.3 * _panel_x2
+            y0_period1 = y0_period1 + _beta1 * _panel_x1 + _beta2 * _panel_x2
         _rank_pair_weights(unit_weight, unit_stratum, y0_period1, n_strata)
 
     # Save base weights for cross-section informative sampling (reset each period)
@@ -1546,7 +1566,7 @@ def generate_survey_did_data(
                 + 0.5 * t
             )
             if add_covariates:
-                y0_t = y0_t + 0.5 * x1 + 0.3 * x2
+                y0_t = y0_t + _beta1 * x1 + _beta2 * x2
             _rank_pair_weights(unit_weight, unit_stratum, y0_t, n_strata)
 
         # Covariates — may already be drawn by informative sampling above
@@ -1574,7 +1594,7 @@ def generate_survey_did_data(
             y = unit_fe[i] + psu_re[unit_psu[i]] + psu_period_re[unit_psu[i], t - 1] + 0.5 * t
 
             if add_covariates:
-                y += 0.5 * x1[i] + 0.3 * x2[i]
+                y += _beta1 * x1[i] + _beta2 * x2[i]
 
             treated = int(g_i > 0 and t >= g_i)
             true_eff = 0.0
@@ -1583,6 +1603,8 @@ def generate_survey_did_data(
                     true_eff = float(te_by_stratum[unit_stratum[i]])
                 else:
                     true_eff = treatment_effect
+                if te_covariate_interaction != 0.0:
+                    true_eff += te_covariate_interaction * x1[i]
                 if dynamic_effects:
                     true_eff *= 1 + effect_growth * (t - g_i)
                 y += true_eff

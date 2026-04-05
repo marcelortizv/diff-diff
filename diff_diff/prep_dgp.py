@@ -1149,10 +1149,10 @@ def _rank_pair_weights(
         idx_s = np.where(mask)[0]
         w_vals = unit_weight[idx_s].copy()
         if w_vals.std() < 1e-10:
-            # No weight variation: create rank-based weights, mean=1
-            # Higher Y(0) → higher rank → heavier weight
+            # No within-stratum variation: create rank-based weights
+            # scaled to preserve stratum baseline weight level
             ranks = np.argsort(np.argsort(y0[idx_s])).astype(float) + 1.0
-            unit_weight[idx_s] = ranks / ranks.mean()
+            unit_weight[idx_s] = ranks / ranks.mean() * w_vals.mean()
         else:
             # Rank-pair: highest Y(0) gets heaviest weight
             y0_order = np.argsort(-y0[idx_s])
@@ -1265,11 +1265,12 @@ def generate_survey_did_data(
         Cannot be combined with a non-default ``weight_variation``.
     informative_sampling : bool, default=False
         If True, sampling weights correlate with Y(0) — high-outcome units
-        receive lower weights (under-coverage). Uses rank-pairing within
-        each stratum. For panel data, ranking is done once from period-1
-        outcomes. For repeated cross-sections, ranking is refreshed each
-        period. When ``weight_variation="none"`` and no ``weight_cv``,
-        creates inverse-rank weights normalized to mean 1.
+        receive higher weights (under-coverage → larger inverse-selection-
+        probability weights). Uses rank-pairing within each stratum. For
+        panel data, ranking is done once from period-1 outcomes. For
+        repeated cross-sections, ranking is refreshed each period. Within
+        each stratum, rank-based weights are scaled to preserve the
+        stratum's baseline weight level from ``weight_variation``.
     heterogeneous_te_by_strata : bool, default=False
         If True, treatment effect varies by stratum:
         ``TE_h = TE * (1 + 0.5 * (h - mean) / std)``. Creates a gap
@@ -1282,8 +1283,8 @@ def generate_survey_did_data(
         If True, attaches a diagnostic dict to ``df.attrs["dgp_truth"]``
         with keys: ``population_att`` (weight-weighted average of treated
         true effects), ``deff_kish`` (1 + CV(w)^2), ``stratum_effects``
-        (dict mapping stratum index to TE), ``icc_realized`` (between/total
-        variance ratio from generated data).
+        (dict mapping stratum index to TE), ``icc_realized`` (ANOVA-based
+        ICC computed on period-1 data).
 
     Returns
     -------
@@ -1378,6 +1379,11 @@ def generate_survey_did_data(
 
     if strata_sizes is not None:
         strata_sizes = list(strata_sizes)
+        for ss in strata_sizes:
+            if isinstance(ss, bool) or not isinstance(ss, (int, np.integer)):
+                raise ValueError(
+                    f"strata_sizes must contain integers, got {ss!r}"
+                )
         if len(strata_sizes) != n_strata:
             raise ValueError(
                 f"strata_sizes must have length n_strata={n_strata}, "

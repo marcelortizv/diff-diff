@@ -1592,6 +1592,32 @@ class TestSurveyDGPResearchGrade:
         unwt_mean = p1["outcome"].mean()
         wt_mean = np.average(p1["outcome"], weights=p1["weight"])
         assert abs(wt_mean - unwt_mean) > 0.1
+        # Positive correlation: higher outcome → heavier weight
+        corr = np.corrcoef(p1["weight"], p1["outcome"])[0, 1]
+        assert corr > 0.1
+
+    def test_informative_sampling_default_weights(self):
+        """Informative sampling preserves stratum-level weight structure."""
+        from diff_diff.prep_dgp import generate_survey_did_data
+
+        # Generate with informative_sampling but default weight_variation
+        df = generate_survey_did_data(
+            n_units=1000,
+            informative_sampling=True,
+            seed=42,
+        )
+        # Reference: expected stratum mean weights from weight_variation="moderate"
+        # Formula: 1.0 + 1.0 * (s / max(n_strata-1, 1)) for s=0..4
+        p1 = df[df["period"] == 1]
+        for s in range(5):
+            expected_mean = 1.0 + 1.0 * (s / 4)
+            stratum_weights = p1.loc[p1["stratum"] == s, "weight"]
+            assert abs(stratum_weights.mean() - expected_mean) < 0.15, (
+                f"Stratum {s}: expected mean ~{expected_mean}, "
+                f"got {stratum_weights.mean():.3f}"
+            )
+            # Within-stratum variation should exist (informative sampling)
+            assert stratum_weights.std() > 0.01
 
     def test_informative_sampling_cross_section(self):
         """Cross-section informative sampling: per-period positive correlation.
@@ -1685,6 +1711,15 @@ class TestSurveyDGPResearchGrade:
         with pytest.raises(ValueError, match="strata_sizes must sum"):
             generate_survey_did_data(
                 n_units=200, strata_sizes=[50, 50, 50, 50, 49], seed=42
+            )
+
+    def test_strata_sizes_float_rejected(self):
+        """strata_sizes must contain integers, not floats."""
+        from diff_diff.prep_dgp import generate_survey_did_data
+
+        with pytest.raises(ValueError, match="strata_sizes must contain integers"):
+            generate_survey_did_data(
+                n_units=200, strata_sizes=[40.0, 40.0, 40.0, 40.0, 40.0], seed=42
             )
 
     def test_backward_compatibility(self):

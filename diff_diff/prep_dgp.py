@@ -1256,8 +1256,9 @@ def generate_survey_did_data(
     icc : float, optional
         Target intra-class correlation coefficient (0 < icc < 1). Overrides
         ``psu_re_sd`` via the variance decomposition:
-        ``psu_re_sd = sqrt(icc * (unit_fe_sd^2 + noise_sd^2) /
-        ((1 - icc) * (1 + psu_period_factor^2)))``.
+        ``psu_re_sd = sqrt(icc * (sigma2_unit + sigma2_noise + sigma2_cov) /
+        ((1 - icc) * (1 + psu_period_factor^2)))`` where ``sigma2_cov``
+        includes covariate variance when ``add_covariates=True``.
         Cannot be combined with a non-default ``psu_re_sd``.
     weight_cv : float, optional
         Target coefficient of variation for sampling weights. Generates
@@ -1271,8 +1272,8 @@ def generate_survey_did_data(
         repeated cross-sections, ranking is refreshed each period. Within
         each stratum, rank-based weights are scaled to preserve the
         stratum's baseline weight level from ``weight_variation``.
-        Ranking is based on structural Y(0) (unit FE + PSU effects),
-        excluding covariates from ``add_covariates``.
+        When ``add_covariates=True``, covariate contributions are
+        included in the Y(0) ranking.
     heterogeneous_te_by_strata : bool, default=False
         If True, treatment effect varies by stratum:
         ``TE_h = TE * (1 + 0.5 * (h - mean) / std)``. Creates a gap
@@ -1489,6 +1490,10 @@ def generate_survey_did_data(
             + psu_period_re[unit_psu, 0]
             + 0.5
         )
+        if add_covariates:
+            _panel_x1 = rng.normal(0, 1, size=n_units)
+            _panel_x2 = rng.choice([0, 1], size=n_units)
+            y0_period1 = y0_period1 + 0.5 * _panel_x1 + 0.3 * _panel_x2
         _rank_pair_weights(unit_weight, unit_stratum, y0_period1, n_strata)
 
     # Save base weights for cross-section informative sampling (reset each period)
@@ -1523,6 +1528,10 @@ def generate_survey_did_data(
 
         # Cross-section informative sampling: re-rank weights each period
         if informative_sampling and not panel:
+            # Draw covariates early so they can be included in Y(0) ranking
+            if add_covariates:
+                x1 = rng.normal(0, 1, size=n_units)
+                x2 = rng.choice([0, 1], size=n_units)
             unit_weight = _base_weight.copy()  # type: ignore[possibly-undefined]
             y0_t = (
                 unit_fe
@@ -1530,18 +1539,27 @@ def generate_survey_did_data(
                 + psu_period_re[unit_psu, t - 1]
                 + 0.5 * t
             )
+            if add_covariates:
+                y0_t = y0_t + 0.5 * x1 + 0.3 * x2
             _rank_pair_weights(unit_weight, unit_stratum, y0_t, n_strata)
 
-        x1 = rng.normal(0, 1, size=n_units) if add_covariates else None
-        if panel and t > 1 and add_covariates:
+        # Covariates — may already be drawn by informative sampling above
+        if informative_sampling and panel and add_covariates:
+            x1 = _panel_x1  # pre-drawn before loop for ranking
+            x2 = _panel_x2
+        elif informative_sampling and not panel and add_covariates:
+            pass  # x1, x2 already drawn in cross-section ranking block
+        elif add_covariates:
+            x1 = rng.normal(0, 1, size=n_units)
+            x2 = rng.choice([0, 1], size=n_units)
+        else:
+            x1 = None
+            x2 = None
+        if not informative_sampling and panel and t > 1 and add_covariates:
             x1 = _panel_x1  # type: ignore[possibly-undefined]
-        elif panel and t == 1 and add_covariates:
-            _panel_x1 = x1
-
-        x2 = rng.choice([0, 1], size=n_units) if add_covariates else None
-        if panel and t > 1 and add_covariates:
             x2 = _panel_x2  # type: ignore[possibly-undefined]
-        elif panel and t == 1 and add_covariates:
+        elif not informative_sampling and panel and t == 1 and add_covariates:
+            _panel_x1 = x1
             _panel_x2 = x2
 
         for i in range(n_units):

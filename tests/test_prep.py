@@ -1678,6 +1678,40 @@ class TestSurveyDGPResearchGrade:
         realized_icc = (msb - msw) / (msb + (n_bar - 1) * msw)
         assert abs(realized_icc - target_icc) / target_icc < 0.50
 
+    def test_informative_sampling_with_covariates_panel(self):
+        """Informative sampling includes covariates in Y(0) ranking (panel)."""
+        from diff_diff.prep_dgp import generate_survey_did_data
+
+        df = generate_survey_did_data(
+            n_units=1000,
+            informative_sampling=True,
+            add_covariates=True,
+            seed=42,
+        )
+        p1 = df[df["period"] == 1]
+        # Positive weight-outcome correlation preserved with covariates
+        corr = np.corrcoef(p1["weight"], p1["outcome"])[0, 1]
+        assert corr > 0.1
+        # Covariates should be present
+        assert "x1" in df.columns
+        assert "x2" in df.columns
+
+    def test_informative_sampling_with_covariates_cross_section(self):
+        """Informative sampling includes covariates in Y(0) ranking (cross-section)."""
+        from diff_diff.prep_dgp import generate_survey_did_data
+
+        df = generate_survey_did_data(
+            n_units=1000,
+            informative_sampling=True,
+            add_covariates=True,
+            panel=False,
+            seed=42,
+        )
+        p1 = df[df["period"] == 1]
+        corr = np.corrcoef(p1["weight"], p1["outcome"])[0, 1]
+        assert corr > 0.1
+        assert "x1" in df.columns
+
     def test_heterogeneous_te_by_strata(self):
         """Unweighted mean TE should differ from population ATT."""
         from diff_diff.prep_dgp import generate_survey_did_data

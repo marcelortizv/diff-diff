@@ -326,8 +326,12 @@ Two estimators in diff-diff --- **SyntheticDiD** and **TROP** --- involve
 non-smooth optimization steps (synthetic control weight selection, optimal
 transport maps) that do not fit cleanly into the smooth-functional framework.
 Their survey support is limited to bootstrap-only variance estimation: the
-bootstrap resamples PSUs within strata (Rao-Wu rescaled) and re-runs the full
-estimator for each replicate, bypassing the need for an IF. The TSL/IF-based
+bootstrap resamples PSUs within strata (Rao-Wu rescaled), bypassing the need
+for an IF. For SyntheticDiD, each draw re-runs the full estimator on resampled
+data. For TROP, per-observation treatment effects (tau_it) are deterministic
+given the data and do not depend on survey weights, so the Rao-Wu path
+precomputes tau values once and only varies the ATT aggregation weights across
+draws (see REGISTRY.md for the documented optimization). The TSL/IF-based
 argument in this document does not extend to these estimators.
 
 ### 4.3. Under survey weighting, the same IF form applies
@@ -406,8 +410,8 @@ V_TSL = (X'WX)^{-1} [sum_h V_h] (X'WX)^{-1}
 ```
 
 This is the standard sandwich estimator with the "meat" computed at the PSU
-level within strata. The implementation is in `compute_survey_vcov()` at
-`diff_diff/survey.py` line 1398.
+level within strata. The implementation is `compute_survey_vcov()` in
+`diff_diff/survey.py`.
 
 ### Stratum-level meat
 
@@ -424,8 +428,8 @@ where:
 - (1 - f_h) is the finite population correction,
 - n_h / (n_h - 1) is the small-sample degrees-of-freedom adjustment.
 
-The total meat is sum_h V_h, computed in `_compute_stratified_psu_meat()` at
-`diff_diff/survey.py` line 1160.
+The total meat is sum_h V_h, computed by `_compute_stratified_psu_meat()` in
+`diff_diff/survey.py`.
 
 ### IF-based TSL variance
 
@@ -441,13 +445,22 @@ V_design = sum_h (1 - f_h) * (n_h / (n_h - 1)) * sum_{j=1}^{n_h} (psi_hj - psi_h
 where psi_hj = sum_{i in PSU j, stratum h} psi_i is the PSU-level total of
 IF values. This is the same formula as the meat in the regression sandwich, but
 applied directly to the scalar IF values rather than to score vectors. The
-implementation is in `compute_survey_if_variance()` at `diff_diff/survey.py`
-line 1463.
+implementation is `compute_survey_if_variance()` in `diff_diff/survey.py`.
 
-The connection between the two formulas: when `compute_survey_vcov()` is called
-with X = [1, 1, ..., 1]' (a column of ones) and residuals = psi (the IF
-values), the bread matrix is (sum w_i)^{-2} and the sandwich reduces to the
-scalar IF-based formula. EfficientDiD exploits this equivalence.
+**Residual-scale vs. score-scale.** These two functions accept inputs at
+different scales. `compute_survey_vcov()` takes residuals on the original
+scale (u_i = Y_i - X_i' beta) and multiplies by w_i internally to form
+scores. `compute_survey_if_variance()` takes score-scale psi_i values
+directly --- weights are already baked in. To see the connection: when
+`compute_survey_vcov()` is called with X = [1]' and residuals = eif (raw
+efficient influence function values), it internally forms scores = w_i * eif_i
+and produces sandwich = (sum w)^{-2} * meat(w * eif). The scalar IF function
+`compute_survey_if_variance(psi)` produces meat(psi) directly. These are
+equivalent when psi_i = w_i * eif_i / sum(w) --- i.e., when the IF values
+are on score-scale. EfficientDiD exploits this: the TSL path passes raw EIF
+values to `compute_survey_vcov()` (which handles scaling), while the replicate
+path explicitly converts to score-scale via psi = w * eif / sum(w) before
+calling `compute_replicate_if_variance()`.
 
 ### Degrees of freedom
 
@@ -509,8 +522,8 @@ where theta_r is the estimate from replicate r, theta_center is either the
 full-sample estimate (mse=True) or the mean of replicate estimates (mse=False),
 and c and s_r are method-specific factors.
 
-The method-specific formulas (matching `_replicate_variance_factor()` at
-`diff_diff/survey.py` line 1510):
+The method-specific formulas (matching `_replicate_variance_factor()` in
+`diff_diff/survey.py`):
 
 ```
 BRR:  V = (1/R)              * sum_r (theta_r - theta)^2
@@ -523,25 +536,37 @@ JKn:  V = sum_h [(n_h-1)/n_h] * sum_{r in h} (theta_r - theta)^2
 where R is the number of replicate columns, rho is the Fay perturbation
 factor, and n_h is the number of replicates in stratum h (for JKn).
 
-### Replicate IF reweighting
+### Replicate variance for IF-based estimators
 
 For regression-based estimators, `compute_replicate_vcov()` re-runs WLS for
 each replicate weight column to obtain theta_r. For IF-based estimators, this
 would require R complete re-fits of the estimator, which is computationally
 expensive.
 
-diff-diff avoids this using Rao-Wu reweighting (Rao & Wu 1988): the replicate
-estimate is computed by reweighting the per-unit IF values rather than
-re-running the estimator:
+diff-diff avoids this for most IF-based estimators (CallawaySantAnna,
+EfficientDiD, ContinuousDiD, TripleDifference, StaggeredTripleDifference)
+using weight-ratio rescaling: the replicate estimate is computed by
+reweighting the per-unit IF values rather than re-running the estimator.
+The `SurveyDesign` parameter `combined_weights` controls the interpretation:
 
 ```
-theta_r = sum_i (w_{r,i} / w_i) * psi_i
+combined_weights=True:   theta_r = sum_i (w_{r,i} / w_i) * psi_i
+combined_weights=False:  theta_r = sum_i  w_{r,i}         * psi_i
 ```
 
-where w_{r,i} is the replicate weight and w_i is the full-sample weight for
-observation i. This is numerically exact for smooth functionals (to first
-order) and avoids the cost of R re-fits. The implementation is in
-`compute_replicate_if_variance()` at `diff_diff/survey.py` line 1681.
+When `combined_weights=True`, the replicate columns w_{r,i} already
+incorporate the full-sample weight, so the ratio w_{r,i} / w_i extracts the
+perturbation factor. When `combined_weights=False`, the replicate columns are
+the perturbation factors directly. This rescaling is numerically exact for
+smooth functionals (to first order) and avoids the cost of R re-fits. The
+implementation is in `compute_replicate_if_variance()` in `diff_diff/survey.py`.
+
+**Exception: refit-based replicate variance.** For ImputationDiD and
+TwoStageDiD, the first-stage regression (on untreated observations) must be
+re-estimated with each replicate's weights to properly capture its
+contribution to variance. These estimators use
+`compute_replicate_refit_variance()`, which re-runs the full estimator for
+each replicate column.
 
 ---
 
@@ -637,17 +662,20 @@ For IF-based estimators, the variance computation proceeds as:
    adjustment to produce a single per-unit IF vector for the overall ATT.
 3. The aggregated IF vector is passed to `compute_survey_if_variance()`, which
    computes the design-based variance using `_compute_stratified_psu_meat()`.
-4. For replicate weights, `compute_replicate_if_variance()` uses Rao-Wu
-   reweighting of the IF vector instead.
+4. For replicate weights, most IF-based estimators use
+   `compute_replicate_if_variance()`, which reweights the IF vector via
+   weight-ratio rescaling. ImputationDiD and TwoStageDiD instead use
+   `compute_replicate_refit_variance()`, which re-runs the full estimator
+   for each replicate column (see Section 6).
 
 ### Bootstrap and survey interaction
 
 Two bootstrap strategies interact with survey designs:
 
 - **Multiplier bootstrap at PSU level** (CallawaySantAnna, ImputationDiD,
-  TwoStageDiD, ContinuousDiD, EfficientDiD, TripleDifference,
-  StaggeredTripleDifference): Generates multiplier weights at the PSU level
-  within strata, with FPC scaling. Each bootstrap draw reweights the IF values.
+  TwoStageDiD, ContinuousDiD, EfficientDiD, StaggeredTripleDifference):
+  Generates multiplier weights at the PSU level within strata, with FPC
+  scaling. Each bootstrap draw reweights the IF values.
 
 - **Rao-Wu rescaled bootstrap** (SunAbraham, SyntheticDiD, TROP): Draws PSUs
   with replacement within strata and rescales observation weights. Each draw

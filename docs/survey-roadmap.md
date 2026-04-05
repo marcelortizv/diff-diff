@@ -220,8 +220,8 @@ the limitation and suggested alternative.
 | Estimator | Limitation | Alternative |
 |-----------|-----------|-------------|
 | WooldridgeDiD | No `survey_design` support | Not yet implemented (see 10f) |
-| SyntheticDiD | Replicate weights | Use TSL (strata/PSU/FPC) with bootstrap |
-| TROP | Replicate weights | Use TSL (strata/PSU/FPC) with bootstrap |
+| SyntheticDiD | Replicate weights | Use strata/PSU/FPC design with Rao-Wu rescaled bootstrap |
+| TROP | Replicate weights | Use strata/PSU/FPC design with Rao-Wu rescaled bootstrap |
 | BaconDecomposition | Replicate weights | Diagnostic only, no inference |
 | SyntheticDiD | `variance_method='placebo'` + strata/PSU/FPC | Use `variance_method='bootstrap'` |
 | ImputationDiD | `pretrends=True` + replicate weights | Use analytical survey design instead |

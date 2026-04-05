@@ -678,6 +678,8 @@ StaggeredTripleDifference(
     pscore_trim: float = 0.01,
     cluster: str | None = None,
     rank_deficient_action: str = "warn",
+    epv_threshold: float = 10,              # Min events-per-variable for propensity score
+    pscore_fallback: str = "error",         # "error" or "unconditional"
 )
 ```
 
@@ -694,7 +696,8 @@ sddd.fit(
     first_treat: str,
     eligibility: str,               # Binary eligibility column (0/1)
     covariates: list[str] | None = None,
-    aggregate: str = "event_study",  # "simple", "group", "event_study"
+    aggregate: str | None = None,   # None, "simple", "group", "event_study", "all"
+    balance_e: int | None = None,   # Max event time for balanced event study
     survey_design=None,
 ) -> StaggeredTripleDiffResults
 ```
@@ -1522,7 +1525,7 @@ clear_cache()
 
 ## Survey Support
 
-All estimators accept an optional `survey_design` parameter in `fit()`. Pass a `SurveyDesign` object to get design-based variance estimation.
+All estimators except `WooldridgeDiD` accept an optional `survey_design` parameter in `fit()`. Pass a `SurveyDesign` object to get design-based variance estimation. (WooldridgeDiD survey support is planned for Phase 10f.)
 
 ```python
 from diff_diff import SurveyDesign, CallawaySantAnna
@@ -1544,7 +1547,7 @@ results = cs.fit(data, outcome='y', unit='id', time='t',
                  first_treat='ft', survey_design=sd)
 
 # Survey metadata on results
-print(results.survey_metadata.deff)         # Design effect
+print(results.survey_metadata.design_effect)  # Design effect
 print(results.survey_metadata.effective_n)  # Effective sample size
 print(results.survey_metadata.df_survey)    # Survey degrees of freedom
 ```
@@ -1562,7 +1565,7 @@ sd = SurveyDesign(
 **Subpopulation analysis:**
 
 ```python
-sd_female = sd.subpopulation(data, mask=lambda df: df['sex'] == 'F')
+sd_female, data_female = sd.subpopulation(data, mask=lambda df: df['sex'] == 'F')
 ```
 
 **Key features:**
@@ -1573,7 +1576,7 @@ sd_female = sd.subpopulation(data, mask=lambda df: df['sex'] == 'F')
 - Repeated cross-sections: `CallawaySantAnna(panel=False)`
 - Compatibility matrix: see `docs/choosing_estimator.rst` Survey Design Support section
 
-No R or Python package offers design-based variance estimation for modern heterogeneity-robust DiD estimators.
+No R or Python package offers design-based variance estimation for modern heterogeneity-robust DiD estimators. (`WooldridgeDiD` does not yet accept `survey_design` — planned for Phase 10f.)
 
 ## Linear Algebra Helpers
 

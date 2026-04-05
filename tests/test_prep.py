@@ -1774,6 +1774,32 @@ class TestSurveyDGPResearchGrade:
         # icc_realized should track the target ICC (ANOVA-based, same formula)
         assert abs(truth["icc_realized"] - 0.3) / 0.3 < 0.50
 
+    def test_population_att_nan_no_treated(self):
+        """population_att should be NaN when there are no treated units."""
+        from diff_diff.prep_dgp import generate_survey_did_data
+
+        df = generate_survey_did_data(
+            n_units=50,
+            never_treated_frac=1.0,
+            return_true_population_att=True,
+            seed=42,
+        )
+        assert np.isnan(df.attrs["dgp_truth"]["population_att"])
+
+    def test_icc_realized_nan_no_replication(self):
+        """icc_realized should be NaN when period-1 has no within-PSU replication."""
+        from diff_diff.prep_dgp import generate_survey_did_data
+
+        # 5 units across 5 strata with 8 PSUs each = 1 unit per PSU (no replication)
+        df = generate_survey_did_data(
+            n_units=5,
+            n_strata=5,
+            psu_per_stratum=8,
+            return_true_population_att=True,
+            seed=42,
+        )
+        assert np.isnan(df.attrs["dgp_truth"]["icc_realized"])
+
     def test_strata_sizes(self):
         """Custom strata_sizes should produce correct per-stratum counts."""
         from diff_diff.prep_dgp import generate_survey_did_data

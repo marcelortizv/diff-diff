@@ -1637,7 +1637,7 @@ def generate_survey_did_data(
             te_treated = df.loc[treated_mask, "true_effect"].values
             population_att = float(np.average(te_treated, weights=w_treated))
         else:
-            population_att = 0.0
+            population_att = float("nan")
 
         if te_by_stratum is not None:
             stratum_effects = {
@@ -1658,14 +1658,18 @@ def generate_survey_did_data(
         _groups = _p1.groupby("psu")["outcome"]
         _n_total = len(_p1)
         _n_groups = _groups.ngroups
-        _n_bar = _n_total / _n_groups
-        _grand_mean = _p1["outcome"].mean()
-        _ssb = (_groups.size() * (_groups.mean() - _grand_mean) ** 2).sum()
-        _msb = _ssb / max(_n_groups - 1, 1)
-        _ssw = _groups.apply(lambda x: ((x - x.mean()) ** 2).sum()).sum()
-        _msw = _ssw / max(_n_total - _n_groups, 1)
-        _denom = _msb + (_n_bar - 1) * _msw
-        icc_realized = float((_msb - _msw) / _denom) if _denom > 0 else 0.0
+        # ICC undefined with < 2 groups or no within-group replication
+        if _n_groups < 2 or _n_total <= _n_groups:
+            icc_realized = float("nan")
+        else:
+            _n_bar = _n_total / _n_groups
+            _grand_mean = _p1["outcome"].mean()
+            _ssb = (_groups.size() * (_groups.mean() - _grand_mean) ** 2).sum()
+            _msb = _ssb / (_n_groups - 1)
+            _ssw = _groups.apply(lambda x: ((x - x.mean()) ** 2).sum()).sum()
+            _msw = _ssw / (_n_total - _n_groups)
+            _denom = _msb + (_n_bar - 1) * _msw
+            icc_realized = float((_msb - _msw) / _denom) if _denom > 0 else float("nan")
 
         df.attrs["dgp_truth"] = {
             "population_att": population_att,

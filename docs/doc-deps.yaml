@@ -455,6 +455,9 @@ sources:
       - path: docs/methodology/REGISTRY.md
         section: "Survey"
         type: methodology
+      - path: docs/methodology/survey-theory.md
+        type: methodology
+        note: "Design-based variance theory for modern DiD"
       - path: docs/survey-roadmap.md
         type: roadmap
       - path: docs/tutorials/16_survey_did.ipynb

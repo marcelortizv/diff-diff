@@ -112,10 +112,10 @@ Before broadly announcing survey capability, these items establish the
 theoretical and empirical foundation needed for credibility with
 practitioners and methodologists.
 
-### 10a. Theory Document (HIGH priority)
+### 10a. Theory Document (HIGH priority) ✅
 
-Write `docs/methodology/survey-theory.md` laying out the formal argument
-for design-based variance estimation with modern DiD influence functions:
+`docs/methodology/survey-theory.md` lays out the formal argument for
+design-based variance estimation with modern DiD influence functions:
 
 1. Modern heterogeneity-robust DiD estimators (CS, SA, BJS) are smooth
    functionals of the weighted empirical distribution

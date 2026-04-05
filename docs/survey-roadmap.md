@@ -137,22 +137,18 @@ immediately.
   Survey Data." *JASA* 83(401).
 - Shao, J. (1996). "Resampling Methods in Sample Surveys." *Statistics* 27.
 
-### 10b. Survey Simulation DGP (HIGH priority)
+### 10b. Survey Simulation DGP (HIGH priority) ✅
 
-Build a research-grade DGP that generates realistic complex survey data
-over a staggered treatment adoption panel. The existing `generate_survey_did_data()`
-tests code correctness but lacks the properties needed for statistical
-coverage studies and compelling tutorials. The new DGP needs:
+Enhanced `generate_survey_did_data()` with 8 research-grade parameters:
+`icc`, `weight_cv`, `informative_sampling`, `heterogeneous_te_by_strata`,
+`te_covariate_interaction`, `covariate_effects`, `strata_sizes`, and
+`return_true_population_att`. All backward-compatible. Supports panel
+and repeated cross-section modes.
 
-- Known stratified cluster structure with varying PSU sizes
-- Controllable intra-cluster correlation (so true DEFF is known)
-- Known treatment effects (so coverage of 95% CIs can be measured)
-- Enough design complexity to show where flat weights fail (clustering
-  inflates variance, stratification reduces it, FPC matters for small
-  populations)
-
-This is a dependency for both 10c (tutorial) and 10d (paper simulation
-study). Add to `diff_diff.prep` alongside the existing DGP functions.
+**Remaining gap for 10e:** Conditional parallel trends — the DGP has
+unconditional PT by construction. A `conditional_pt` parameter is needed
+before the simulation study so that unconditional PT fails but conditional
+PT holds after covariate adjustment (DR/IPW recovers truth).
 
 ### 10c. Expand R Validation Coverage (HIGH priority)
 
@@ -191,10 +187,24 @@ arXiv. Theory (~5pp), simulation study using DGP from 10b (~8pp),
 empirical illustration with NHANES ACA data (~3pp), software section
 (~2pp).
 
-**Ideal co-author:** Pedro Sant'Anna — derived the IFs in CS/DRDID and
-can vouch they are valid under survey weighting. The survey statistics
-(Binder 1983, Rao & Wu 1988) are established and don't need a survey
-methodologist to co-sign.
+**Simulation study scenarios** (minimum):
+1. Unconditional PT with complex survey — coverage of TSL vs flat-weight SEs
+2. Informative sampling + heterogeneous TE — weighted ATT bias correction
+3. Panel vs repeated cross-section — both design types
+4. **Conditional PT** — unconditional PT fails (differential pre-trends
+   correlated with X), conditional PT holds after covariate adjustment.
+   DR/IPW with covariates recovers truth; no-covariate estimator is biased.
+   This is the most novel claim — survey-weighted nuisance estimation
+   (propensity scores, outcome regression) produces valid IFs under complex
+   sampling. **Requires DGP extension**: add a `conditional_pt` parameter
+   to `generate_survey_did_data()` that makes the time trend
+   X-dependent (e.g., `trend_i = 0.5*t + delta * x1_i * t`).
+
+**Co-authorship:** A co-author from the DiD methodology community would
+strengthen credibility — someone who can vouch that the IFs are valid
+under survey weighting. The survey statistics side (Binder 1983, Rao &
+Wu 1988) is established and doesn't need a survey methodologist to
+co-sign.
 
 ### 10f. WooldridgeDiD Survey Support (MEDIUM priority)
 

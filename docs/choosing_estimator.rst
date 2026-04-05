@@ -593,9 +593,10 @@ If you're unsure which estimator to use:
 Survey Design Support
 ---------------------
 
-All estimators accept an optional ``survey_design`` parameter in ``fit()``.
-Pass a :class:`~diff_diff.SurveyDesign` object to get design-based variance
-estimation. The depth of support varies by estimator:
+All estimators except :class:`~diff_diff.WooldridgeDiD` accept an optional
+``survey_design`` parameter in ``fit()``. Pass a :class:`~diff_diff.SurveyDesign`
+object to get design-based variance estimation. The depth of support varies by
+estimator (WooldridgeDiD survey support is planned for Phase 10f):
 
 .. list-table::
    :header-rows: 1
@@ -676,11 +677,21 @@ estimation. The depth of support varies by estimator:
      - Via bootstrap
      - --
      - Rao-Wu rescaled
+   * - ``WooldridgeDiD``
+     - --
+     - --
+     - --
+     - --
    * - ``BaconDecomposition``
      - Diagnostic
      - Diagnostic
      - --
      - --
+
+.. note::
+
+   ``WooldridgeDiD`` does not yet accept ``survey_design``. Survey support
+   is planned for Phase 10f. See :doc:`/survey-roadmap` for details.
 
 **Legend:**
 

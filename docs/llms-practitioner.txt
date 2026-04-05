@@ -164,8 +164,9 @@ Is treatment adoption staggered (multiple cohorts, different timing)?
 |-- Nonlinear outcome (binary, count)?
 |   \-- WooldridgeDiD (ETWFE)  -- logit or Poisson QMLE with ASF-based ATT
 |
-\-- Two eligibility criteria?
-    \-- TripleDifference (DDD)
+\-- Two eligibility criteria (DDD)?
+    |-- Simultaneous treatment (2x2x2):  TripleDifference (DDD)
+    \-- Staggered timing + eligibility:  StaggeredTripleDifference (SDDD)
 ```
 
 Always run BaconDecomposition first if using TWFE, to check for negative

@@ -1632,7 +1632,9 @@ DIFF_DIFF_BACKEND=rust pytest     # Force Rust (fail if unavailable)
 | Few treated units / synthetic control | `SyntheticDiD` |
 | Interactive fixed effects / factor confounding | `TROP` |
 | Continuous treatment intensity | `ContinuousDiD` |
-| Two-criterion treatment (group + eligibility) | `TripleDifference` |
+| Two-criterion treatment, simultaneous (2x2x2 DDD) | `TripleDifference` |
+| Two-criterion treatment, staggered timing + eligibility | `StaggeredTripleDifference` |
+| Nonlinear outcome (binary/count) with staggered timing | `WooldridgeDiD` |
 | Diagnosing TWFE bias | `BaconDecomposition` |
 | Efficiency-optimal estimation | `EfficientDiD` |
 | Corrective weighting for stacked regressions | `StackedDiD` |

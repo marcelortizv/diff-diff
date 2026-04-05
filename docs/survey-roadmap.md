@@ -51,7 +51,7 @@ Weighted `solve_logit()` in `linalg.py` — survey weights enter IRLS as
   multiplier at PSU (CS, Imputation, TwoStage, Continuous, Efficient)
   and Rao-Wu rescaled (SA, SyntheticDiD, TROP)
 - **Replicate weight variance**: BRR, Fay's BRR, JK1, JKn, SDR.
-  12 of 15 estimators supported (not SyntheticDiD, TROP, or BaconDecomposition)
+  12 of 16 estimators supported (not SyntheticDiD, TROP, BaconDecomposition, or WooldridgeDiD)
 - **DEFF diagnostics**: per-coefficient design effects vs SRS baseline
 - **Subpopulation analysis**: `SurveyDesign.subpopulation()` preserves
   full design structure for correct variance

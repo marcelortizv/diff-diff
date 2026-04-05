@@ -1405,8 +1405,14 @@ def generate_survey_did_data(
         # Include covariate variance: Var(0.5*x1) + Var(0.3*x2)
         # where x1 ~ N(0,1), x2 ~ Bernoulli(0.5)
         cov_var = (0.25 + 0.09 * 0.25) if add_covariates else 0.0
+        non_psu_var = unit_fe_sd**2 + noise_sd**2 + cov_var
+        if non_psu_var < 1e-12:
+            raise ValueError(
+                "icc requires non-zero non-PSU variance "
+                "(unit_fe_sd, noise_sd, or add_covariates must contribute variance)"
+            )
         psu_re_sd = np.sqrt(
-            icc * (unit_fe_sd**2 + noise_sd**2 + cov_var)
+            icc * non_psu_var
             / ((1 - icc) * (1 + psu_period_factor**2))
         )
 

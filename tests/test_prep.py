@@ -1531,6 +1531,15 @@ class TestSurveyDGPResearchGrade:
         realized_icc = (msb - msw) / (msb + (n_bar - 1) * msw)
         assert abs(realized_icc - target_icc) / target_icc < 0.50
 
+    def test_icc_zero_variance_rejected(self):
+        """icc with zero non-PSU variance should raise ValueError."""
+        from diff_diff.prep_dgp import generate_survey_did_data
+
+        with pytest.raises(ValueError, match="non-zero non-PSU variance"):
+            generate_survey_did_data(
+                icc=0.3, unit_fe_sd=0, noise_sd=0, add_covariates=False, seed=42
+            )
+
     def test_icc_and_psu_re_sd_conflict(self):
         """Cannot specify both icc and a non-default psu_re_sd."""
         from diff_diff.prep_dgp import generate_survey_did_data

@@ -16,7 +16,7 @@ diff-diff is a **production-ready** DiD library with feature parity with R's `di
 - **Heterogeneity-robust**: Callaway-Sant'Anna (2021), Sun-Abraham (2021), Borusyak-Jaravel-Spiess Imputation (2024), Two-Stage DiD (Gardner 2022), Stacked DiD (Wing et al. 2024)
 - **Specialized**: Synthetic DiD (Arkhangelsky et al. 2021), Triple Difference, Staggered Triple Difference (Ortiz-Villavicencio & Sant'Anna 2025), Continuous DiD (Callaway, Goodman-Bacon & Sant'Anna 2024), TROP
 - **Efficient**: EfficientDiD (Chen, Sant'Anna & Xie 2025) — semiparametrically efficient with doubly robust covariates
-- **Nonlinear**: WooldridgeDiD / ETWFE (Wooldridge 2023, 2025) — OLS, logit, and Poisson QMLE with ASF-based ATT and delta-method SEs
+- **Nonlinear**: WooldridgeDiD / ETWFE (Wooldridge 2023, 2025) — saturated OLS (direct cohort x time coefficients), logit, and Poisson QMLE (ASF-based ATT with delta-method SEs)
 
 ### Inference & Diagnostics
 

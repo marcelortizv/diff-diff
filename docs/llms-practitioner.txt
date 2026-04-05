@@ -139,6 +139,13 @@ large a violation would need to be to overturn your results.
 Use this decision tree to select the appropriate estimator:
 
 ```
+Is this a triple-difference (DDD) design? (Two criteria: e.g., policy + eligibility)
+|-- YES, simultaneous (2x2x2):   TripleDifference (DDD)
+|-- YES, staggered timing:       StaggeredTripleDifference (SDDD)
+|
+Is treatment continuous (doses/intensities)?
+|-- YES: ContinuousDiD (CDiD)
+|
 Is treatment adoption staggered (multiple cohorts, different timing)?
 |-- YES: Do NOT use plain TWFE. Use one of:
 |   |-- CallawaySantAnna (CS)  -- most general, doubly robust, recommended default
@@ -158,15 +165,8 @@ Is treatment adoption staggered (multiple cohorts, different timing)?
 |-- Suspected factor confounding / interactive fixed effects?
 |   \-- TROP                   -- triply robust with nuclear norm factor adjustment
 |
-|-- Continuous treatment (doses)?
-|   \-- ContinuousDiD (CDiD)
-|
-|-- Nonlinear outcome (binary, count)?
-|   \-- WooldridgeDiD (ETWFE)  -- logit or Poisson QMLE with ASF-based ATT
-|
-\-- Two eligibility criteria (DDD)?
-    |-- Simultaneous treatment (2x2x2):  TripleDifference (DDD)
-    \-- Staggered timing + eligibility:  StaggeredTripleDifference (SDDD)
+\-- Nonlinear outcome (binary, count)?
+    \-- WooldridgeDiD (ETWFE)  -- logit or Poisson QMLE with ASF-based ATT
 ```
 
 Always run BaconDecomposition first if using TWFE, to check for negative

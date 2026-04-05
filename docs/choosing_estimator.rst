@@ -115,7 +115,7 @@ Quick Reference
    * - ``WooldridgeDiD``
      - Nonlinear outcomes or saturated OLS
      - Conditional parallel trends
-     - ASF-based ATT (OLS, logit, Poisson)
+     - OLS: direct coefficients; logit/Poisson: ASF-based ATT
    * - ``BaconDecomposition``
      - TWFE diagnostic
      - (diagnostic tool)

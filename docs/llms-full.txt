@@ -716,7 +716,7 @@ results.print_summary()
 
 ### WooldridgeDiD
 
-Wooldridge (2023, 2025) Extended Two-Way Fixed Effects (ETWFE) estimator. Supports OLS, logit, and Poisson QMLE paths with Average Structural Function (ASF) based ATT and delta-method standard errors.
+Wooldridge (2023, 2025) Extended Two-Way Fixed Effects (ETWFE) estimator. OLS path uses direct saturated-regression coefficients for ATT(g,t). Logit and Poisson QMLE paths use Average Structural Function (ASF) based ATT with delta-method standard errors.
 
 ```python
 WooldridgeDiD(

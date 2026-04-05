@@ -268,7 +268,7 @@ class WooldridgeCarouselPDF(FPDF):
         teasers = [
             "Wooldridge (2023, 2025) ETWFE estimator",
             "OLS, Logit, and Poisson QMLE in one class",
-            "ASF-based ATT with delta-method SEs",
+            "Delta-method SEs, four aggregation types",
         ]
         y_start = 235
         for i, teaser in enumerate(teasers):
@@ -515,10 +515,11 @@ class WooldridgeCarouselPDF(FPDF):
         self.add_footer()
 
     def slide_05_technical(self):
-        """Slide 5: Under the Hood — ASF, delta-method, aggregations.
+        """Slide 5: Under the Hood — ATT extraction, delta-method, aggregations.
 
         Claims & sources:
-        - ASF-based ATT: wooldridge.py lines 794-819, Wooldridge (2023)
+        - OLS ATT: direct coefficient extraction, wooldridge.py lines 599-610
+        - Nonlinear ASF-based ATT: wooldridge.py lines 794-819
         - Delta-method SE: wooldridge_results.py line 93
           var = w' @ vcov @ w, SE = sqrt(var)
         - Four aggregation types: wooldridge_results.py lines 105-161
@@ -530,7 +531,16 @@ class WooldridgeCarouselPDF(FPDF):
 
         self.centered_text(25, "Under the Hood", size=36)
 
-        # ASF equation
+        # OLS path
+        self.centered_text(62,
+                           "OLS:  ATT(g,t) directly from coefficients",
+                           size=15, bold=False, color=GRAY)
+
+        # Nonlinear ASF equation
+        self.centered_text(80,
+                           "Logit / Poisson:  ASF-based ATT",
+                           size=15, bold=False, color=EMERALD)
+
         eq_path, epw, eph = self._render_equations(
             [r"$\mathrm{ATT}(g,t) = \frac{1}{N_{g,t}}"
              r" \sum_{i:\, G_i=g}"
@@ -538,17 +548,17 @@ class WooldridgeCarouselPDF(FPDF):
              r" - f(\hat{\eta}_{i,0}) \right]$"],
             fontsize=24,
         )
-        eq_h = self._place_equation_centered(eq_path, epw, eph, 65,
+        eq_h = self._place_equation_centered(eq_path, epw, eph, 96,
                                              max_w=220)
 
         # f annotation
-        f_y = 65 + eq_h + 6
+        f_y = 96 + eq_h + 4
         self.centered_text(f_y,
-                           "f = identity  |  logistic  |  exponential",
-                           size=15, bold=False, color=EMERALD)
+                           "f = logistic  |  exponential",
+                           size=14, bold=False, color=EMERALD)
 
         # Delta-method subtitle
-        self.centered_text(f_y + 25,
+        self.centered_text(f_y + 22,
                            "Delta-method SEs for all aggregations",
                            size=17, bold=True, color=NAVY)
 
@@ -557,7 +567,7 @@ class WooldridgeCarouselPDF(FPDF):
         grid_gap = 8
         card_w = (WIDTH - margin * 2 - grid_gap) / 2
         card_h = 52
-        grid_y = f_y + 55
+        grid_y = f_y + 48
 
         agg_types = [
             ("simple", "Overall weighted average ATT"),

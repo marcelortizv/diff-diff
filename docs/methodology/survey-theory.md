@@ -66,8 +66,8 @@ which units are sampled. Same term, different referent.
 - **Callaway & Sant'Anna (2021)** state iid as a numbered assumption
   (Assumption 2) and derive the multiplier bootstrap under it. The paper
   acknowledges design-based inference in the treatment-assignment sense ---
-  citing Athey & Imbens (2022) --- but does not pursue survey-design-based
-  inference.
+  citing Athey & Imbens (2018; published 2022) --- but does not pursue
+  survey-design-based inference.
 - **Sant'Anna & Zhao (2020)** assume iid (Assumption 1) and derive the doubly
   robust influence function and semiparametric efficiency bounds under it.
 - **Borusyak, Jaravel & Spiess (2024)** adopt a conditional/fixed-design
@@ -101,8 +101,9 @@ estimation and supports clustered wild bootstrap, but does not support the
 `svy:` prefix --- there is no mechanism for strata or FPC.
 `did_multiplegt_dyn` (de Chaisemartin & D'Haultfoeuille) clusters at the group
 level by default but likewise lacks strata and FPC support. Neither
-`eventstudyinteract` (Sun & Abraham) nor `didimputation` (Borusyak, Jaravel
-& Spiess) accepts probability weights at all.
+`eventstudyinteract` (Sun & Abraham) does not accept probability weights.
+`didimputation` (Borusyak, Jaravel & Spiess) accepts estimation weights via
+`wname` but does not provide survey-design variance.
 
 These implementations support weights for point estimation and allow
 cluster-robust inference, but none provides full survey-design variance
@@ -644,8 +645,8 @@ deff_w = n * sum(w_i^2) / (sum(w_i))^2, measures this: when deff_w >> 1,
 estimates are less precise than the nominal sample size suggests. (This
 captures only the weighting component of the full design effect discussed in
 Section 1.1, which also incorporates clustering and stratification effects.)
-diff-diff reports deff_w in `SurveyMetadata` to help users assess weight
-variability.
+diff-diff reports this quantity as `SurveyMetadata.design_effect` (the Kish
+deff_w) to help users assess weight variability.
 
 **Model misspecification.** For doubly-robust and IPW estimators
 (CallawaySantAnna with `estimation_method='dr'` or `'ipw'`), the IF
@@ -776,7 +777,7 @@ Two bootstrap strategies interact with survey designs:
   For?" *Journal of Human Resources* 50(2), 301--316.
 - Ye, K., Bilinski, A. & Lee, Y. (2025). "Difference-in-differences analysis
   with repeated cross-sectional survey data." *Health Services & Outcomes
-  Research Methodology*. DOI: 10.1007/s10742-025-00366-3.
+  Research Methodology*. DOI: 10.1007/s10742-025-00364-7.
 - Zeng, S., Li, F. & Tong, X. (2025). "Moving toward Best Practice when
   Using Propensity Score Weighting in Survey Observational Studies."
   arXiv:2501.16156.

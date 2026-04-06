@@ -100,7 +100,7 @@ does not account for stratification or finite population corrections. Stata's
 estimation and supports clustered wild bootstrap, but does not support the
 `svy:` prefix --- there is no mechanism for strata or FPC.
 `did_multiplegt_dyn` (de Chaisemartin & D'Haultfoeuille) clusters at the group
-level by default but likewise lacks strata and FPC support. Neither
+level by default but likewise lacks strata and FPC support.
 `eventstudyinteract` (Sun & Abraham) does not accept probability weights.
 `didimputation` (Borusyak, Jaravel & Spiess) accepts estimation weights via
 `wname` but does not provide survey-design variance.
@@ -380,8 +380,9 @@ T(F_hat_w) - T(F) = sum_i d_i * psi_i + o_p(n^{-1/2})
 
 where d_i = 1 if unit i is sampled (0 otherwise), and psi_i = w_i * IF(x_i;
 T, F) / N is the scaled influence function value. (In practice, the population
-size N is typically unknown and is estimated by N_hat = sum_i w_i, the sum of
-sampling weights; the implementation uses N_hat.) The key observation: this
+size N is typically unknown and is estimated by N_hat = sum_i w_i. After
+diff-diff normalizes pweights to mean 1, sum_i w_i = n; the scaling is
+variance-equivalent because only relative weights affect the sandwich meat.) The key observation: this
 linearized form is a weighted sum over the sampled observations, and its
 variance is determined by the sampling design --- not by T. The IF transforms
 the problem of estimating Var(theta_hat) into the simpler problem of estimating

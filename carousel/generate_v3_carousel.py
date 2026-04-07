@@ -603,10 +603,7 @@ class V3SurveyCarouselPDF(FPDF):
 
         # Asterisk fine print
         self.centered_text(callout_y + 26,
-                           "*TSL for 14 estimators; Rao-Wu bootstrap for SyntheticDiD/TROP.",
-                           size=10, bold=False, italic=True, color=STONE_300)
-        self.centered_text(callout_y + 38,
-                           "Bacon = diagnostic only. See docs for full support matrix.",
+                           "*Variance paths vary by estimator. See docs for support matrix.",
                            size=10, bold=False, italic=True, color=STONE_300)
 
         self.add_footer()

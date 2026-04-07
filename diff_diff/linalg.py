@@ -2372,6 +2372,7 @@ def solve_poisson(
     tol: float = 1e-8,
     init_beta: Optional[np.ndarray] = None,
     rank_deficient_action: str = "warn",
+    weights: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Poisson IRLS (Newton-Raphson with log link).
 
@@ -2389,6 +2390,9 @@ def solve_poisson(
         log(mean(y)) to improve convergence for large-scale outcomes.
     rank_deficient_action : {"warn", "error", "silent"}
         How to handle rank-deficient design matrices. Mirrors solve_ols/solve_logit.
+    weights : (n,) optional observation weights (e.g. survey sampling weights).
+        When provided, the weighted pseudo-log-likelihood is maximised:
+        score = X'(w*(y - mu)), Hessian = X'diag(w*mu)X.
 
     Returns
     -------
@@ -2438,8 +2442,12 @@ def solve_poisson(
     for _ in range(max_iter):
         eta = np.clip(X @ beta, -500, 500)
         mu = np.exp(eta)
-        score = X.T @ (y - mu)  # gradient of log-likelihood
-        hess = X.T @ (mu[:, None] * X)  # -Hessian = X'WX, W=diag(mu)
+        if weights is not None:
+            score = X.T @ (weights * (y - mu))
+            hess = X.T @ ((weights * mu)[:, None] * X)
+        else:
+            score = X.T @ (y - mu)
+            hess = X.T @ (mu[:, None] * X)
         try:
             delta = np.linalg.solve(hess + 1e-12 * np.eye(k), score)
         except np.linalg.LinAlgError:

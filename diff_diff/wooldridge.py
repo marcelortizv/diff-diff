@@ -42,6 +42,7 @@ def _compute_weighted_agg(
     gt_keys: List,
     gt_vcov: Optional[np.ndarray],
     alpha: float,
+    df: Optional[int] = None,
 ) -> Dict:
     """Compute simple (overall) weighted average ATT and SE via delta method."""
     post_keys = [(g, t) for (g, t) in gt_keys if t >= g]
@@ -63,7 +64,7 @@ def _compute_weighted_agg(
         else:
             se = float("nan")
 
-    t_stat, p_value, conf_int = safe_inference(att, se, alpha=alpha)
+    t_stat, p_value, conf_int = safe_inference(att, se, alpha=alpha, df=df)
     return {"att": att, "se": se, "t_stat": t_stat, "p_value": p_value, "conf_int": conf_int}
 
 
@@ -329,6 +330,7 @@ class WooldridgeDiD:
         exovar: Optional[List[str]] = None,
         xtvar: Optional[List[str]] = None,
         xgvar: Optional[List[str]] = None,
+        survey_design=None,
     ) -> WooldridgeDiDResults:
         """Fit the ETWFE model.  See class docstring for parameter details.
 
@@ -343,6 +345,11 @@ class WooldridgeDiD:
         xtvar : time-varying covariates (demeaned within cohort×period cells
                 when ``demean_covariates=True``)
         xgvar : covariates interacted with each cohort indicator
+        survey_design : SurveyDesign, optional
+            Survey design specification for complex survey data.  Supports
+            stratified, clustered, and weighted designs via Taylor Series
+            Linearization (TSL).  Replicate-weight designs raise
+            ``NotImplementedError``.
         """
         df = data.copy()
         df[cohort] = df[cohort].fillna(0)
@@ -364,6 +371,13 @@ class WooldridgeDiD:
                 f"Bootstrap inference is only supported for method='ols'. "
                 f"Got method={self.method!r} with n_bootstrap={self.n_bootstrap}. "
                 f"Set n_bootstrap=0 for analytic SEs."
+            )
+
+        # 0c. Reject bootstrap + survey (no survey-aware bootstrap variant)
+        if self.n_bootstrap > 0 and survey_design is not None:
+            raise ValueError(
+                "Bootstrap inference is not supported with survey_design. "
+                "Set n_bootstrap=0 for analytic survey SEs."
             )
 
         # 1. Filter to analysis sample
@@ -502,6 +516,7 @@ class WooldridgeDiD:
                 gt_keys,
                 int_col_names,
                 groups,
+                survey_design=survey_design,
             )
         elif self.method == "logit":
             n_cov_interact = X_cov.shape[1] if X_cov is not None else 0
@@ -517,6 +532,7 @@ class WooldridgeDiD:
                 int_col_names,
                 groups,
                 n_cov_interact=n_cov_interact,
+                survey_design=survey_design,
             )
         else:  # poisson
             n_cov_interact = X_cov.shape[1] if X_cov is not None else 0
@@ -532,6 +548,7 @@ class WooldridgeDiD:
                 int_col_names,
                 groups,
                 n_cov_interact=n_cov_interact,
+                survey_design=survey_design,
             )
 
         self._results = results
@@ -561,8 +578,21 @@ class WooldridgeDiD:
         gt_keys: List[Tuple],
         int_col_names: List[str],
         groups: List[Any],
+        survey_design=None,
     ) -> WooldridgeDiDResults:
         """OLS path: within-transform FE, solve_ols, cluster SE."""
+        # Resolve survey design against the filtered sample
+        from diff_diff.survey import _resolve_survey_for_fit, compute_survey_vcov
+        resolved, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, sample)
+        )
+        if resolved is not None and resolved.uses_replicate_variance:
+            raise NotImplementedError(
+                "WooldridgeDiD does not yet support replicate-weight variance. "
+                "Use TSL (strata/PSU/FPC) instead."
+            )
+        df_inf = resolved.df_survey if resolved is not None else None
+
         # 4. Within-transform: absorb unit + time FE
         all_vars = [outcome] + [f"_x{i}" for i in range(X_design.shape[1])]
         tmp = sample[[unit, time]].copy()
@@ -570,12 +600,14 @@ class WooldridgeDiD:
         for i in range(X_design.shape[1]):
             tmp[f"_x{i}"] = X_design[:, i]
 
-        # Use uniform weights to trigger iterative alternating projections,
-        # which is exact for both balanced and unbalanced panels.
-        # The one-pass formula (y - ȳ_i - ȳ_t + ȳ) is only exact for balanced panels.
+        # Use iterative alternating projections for demeaning (exact for
+        # both balanced and unbalanced panels).  Survey weights change the
+        # weighted FWL projection — all columns (treatment interactions +
+        # covariates) are demeaned together.
+        wt_weights = survey_weights if survey_weights is not None else np.ones(len(tmp))
         transformed = within_transform(
             tmp, all_vars, unit=unit, time=time, suffix="_demeaned",
-            weights=np.ones(len(tmp)),
+            weights=wt_weights,
         )
 
         y = transformed[f"{outcome}_demeaned"].values
@@ -586,15 +618,21 @@ class WooldridgeDiD:
         cluster_col = self.cluster if self.cluster else unit
         cluster_ids = sample[cluster_col].values
 
-        # 6. Solve OLS
+        # 6. Solve OLS (skip cluster-robust vcov when survey will provide TSL vcov)
         coefs, resids, vcov = solve_ols(
             X,
             y,
             cluster_ids=cluster_ids,
-            return_vcov=True,
+            return_vcov=(resolved is None),
             rank_deficient_action=self.rank_deficient_action,
             column_names=col_names,
+            weights=survey_weights,
+            weight_type=survey_weight_type,
         )
+
+        # Survey TSL vcov replaces cluster-robust vcov
+        if resolved is not None:
+            vcov = compute_survey_vcov(X, resids, resolved)
 
         # 7. Extract β_{g,t} and build gt_effects dict
         gt_effects: Dict[Tuple, Dict] = {}
@@ -607,7 +645,7 @@ class WooldridgeDiD:
                 continue
             att = float(coefs[idx])
             se = float(np.sqrt(max(vcov[idx, idx], 0.0))) if vcov is not None else float("nan")
-            t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha)
+            t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha, df=df_inf)
             gt_effects[(g, t)] = {
                 "att": att,
                 "se": se,
@@ -628,7 +666,7 @@ class WooldridgeDiD:
 
         # 8. Simple aggregation (always computed)
         overall = _compute_weighted_agg(
-            gt_effects, gt_weights, gt_keys_ordered, gt_vcov, self.alpha
+            gt_effects, gt_weights, gt_keys_ordered, gt_vcov, self.alpha, df=df_inf
         )
 
         # Metadata
@@ -652,9 +690,11 @@ class WooldridgeDiD:
             n_control_units=n_control,
             alpha=self.alpha,
             anticipation=self.anticipation,
+            survey_metadata=survey_metadata,
             _gt_weights=gt_weights,
             _gt_vcov=gt_vcov,
             _gt_keys=gt_keys_ordered,
+            _df_survey=df_inf,
         )
 
         # 9. Optional multiplier bootstrap (overrides analytic SE for overall ATT)
@@ -723,6 +763,7 @@ class WooldridgeDiD:
         int_col_names: List[str],
         groups: List[Any],
         n_cov_interact: int = 0,
+        survey_design=None,
     ) -> WooldridgeDiDResults:
         """Logit path: cohort + time additive FEs + solve_logit + ASF ATT.
 
@@ -730,6 +771,19 @@ class WooldridgeDiD:
         i.gvar i.tvar — cohort main effects + time main effects (additive),
         not cohort×time saturated group FEs.
         """
+        # Resolve survey design against the filtered sample
+        from diff_diff.survey import _resolve_survey_for_fit, compute_survey_vcov
+        resolved, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, sample)
+        )
+        if resolved is not None and resolved.uses_replicate_variance:
+            raise NotImplementedError(
+                "WooldridgeDiD does not yet support replicate-weight variance. "
+                "Use TSL (strata/PSU/FPC) instead."
+            )
+        df_inf = resolved.df_survey if resolved is not None else None
+        _has_survey = resolved is not None
+
         n_int = len(int_col_names)
 
         # Design matrix: treatment interactions + cohort FEs + time FEs
@@ -753,6 +807,7 @@ class WooldridgeDiD:
             X_full,
             y,
             rank_deficient_action=self.rank_deficient_action,
+            weights=survey_weights,
         )
         # solve_logit prepends intercept — beta[0] is intercept, beta[1:] are X_full cols
         beta_int_cols = beta[1 : n_int + 1]  # treatment interaction coefficients
@@ -763,33 +818,63 @@ class WooldridgeDiD:
         beta_clean = np.where(nan_mask, 0.0, beta)
         kept_beta = ~nan_mask
 
-        # QMLE sandwich vcov via shared linalg backend
+        # QMLE sandwich vcov
         resids = y - probs
         X_with_intercept = np.column_stack([np.ones(len(y)), X_full])
-        if np.any(nan_mask):
-            # Compute vcov on reduced design (only identified columns)
-            X_reduced = X_with_intercept[:, kept_beta]
-            vcov_reduced = compute_robust_vcov(
-                X_reduced,
-                resids,
-                cluster_ids=cluster_ids,
-                weights=probs * (1 - probs),
-                weight_type="aweight",
-            )
-            # Expand back to full size with NaN for dropped columns
-            k_full = len(beta)
-            vcov_full = np.full((k_full, k_full), np.nan)
-            kept_idx = np.where(kept_beta)[0]
-            vcov_full[np.ix_(kept_idx, kept_idx)] = vcov_reduced
+
+        if _has_survey:
+            # X_tilde trick: transform design matrix so compute_survey_vcov
+            # produces the correct QMLE sandwich for nonlinear models.
+            # Bread: (X_tilde'WX_tilde)^{-1} = (X'diag(w*V)X)^{-1}
+            # Scores: w*X_tilde*r_tilde = w*X*(y-mu)
+            V = probs * (1 - probs)
+            sqrt_V = np.sqrt(np.clip(V, 1e-20, None))
+            X_tilde = X_with_intercept * sqrt_V[:, None]
+            r_tilde = resids / sqrt_V
+            if np.any(nan_mask):
+                X_tilde_r = X_tilde[:, kept_beta]
+                vcov_reduced = compute_survey_vcov(X_tilde_r, r_tilde, resolved)
+                k_full = len(beta)
+                vcov_full = np.full((k_full, k_full), np.nan)
+                kept_idx = np.where(kept_beta)[0]
+                vcov_full[np.ix_(kept_idx, kept_idx)] = vcov_reduced
+            else:
+                vcov_full = compute_survey_vcov(X_tilde, r_tilde, resolved)
         else:
-            vcov_full = compute_robust_vcov(
-                X_with_intercept,
-                resids,
-                cluster_ids=cluster_ids,
-                weights=probs * (1 - probs),
-                weight_type="aweight",
-            )
+            # Cluster-robust QMLE sandwich (non-survey path)
+            if np.any(nan_mask):
+                X_reduced = X_with_intercept[:, kept_beta]
+                vcov_reduced = compute_robust_vcov(
+                    X_reduced,
+                    resids,
+                    cluster_ids=cluster_ids,
+                    weights=probs * (1 - probs),
+                    weight_type="aweight",
+                )
+                k_full = len(beta)
+                vcov_full = np.full((k_full, k_full), np.nan)
+                kept_idx = np.where(kept_beta)[0]
+                vcov_full[np.ix_(kept_idx, kept_idx)] = vcov_reduced
+            else:
+                vcov_full = compute_robust_vcov(
+                    X_with_intercept,
+                    resids,
+                    cluster_ids=cluster_ids,
+                    weights=probs * (1 - probs),
+                    weight_type="aweight",
+                )
         beta = beta_clean
+
+        # Survey-weighted averaging helpers for ASF computation
+        def _avg(a, cell_mask):
+            if survey_weights is not None:
+                return float(np.average(a, weights=survey_weights[cell_mask]))
+            return float(np.mean(a))
+
+        def _avg_ax0(a, cell_mask):
+            if survey_weights is not None:
+                return np.average(a, weights=survey_weights[cell_mask], axis=0)
+            return np.mean(a, axis=0)
 
         # ASF ATT(g,t) for treated units in each cell
         gt_effects: Dict[Tuple, Dict] = {}
@@ -816,26 +901,26 @@ class WooldridgeDiD:
                     x_hat_j = X_with_intercept[cell_mask, coef_pos]
                     delta_total = delta_total + beta[coef_pos] * x_hat_j
             eta_0 = eta_base - delta_total
-            att = float(np.mean(_logistic(eta_base) - _logistic(eta_0)))
+            att = _avg(_logistic(eta_base) - _logistic(eta_0), cell_mask)
             # Delta method gradient: d(ATT)/d(β)
             #   for nuisance p: mean_i[(Λ'(η_1) - Λ'(η_0)) * X_p]
             #   for cell intercept: mean_i[Λ'(η_1)]
             #   for cell × cov j: mean_i[Λ'(η_1) * x_hat_j]
             d_diff = _logistic_deriv(eta_base) - _logistic_deriv(eta_0)
-            grad = np.mean(X_with_intercept[cell_mask] * d_diff[:, None], axis=0)
-            grad[1 + idx] = float(np.mean(_logistic_deriv(eta_base)))
+            grad = _avg_ax0(X_with_intercept[cell_mask] * d_diff[:, None], cell_mask)
+            grad[1 + idx] = _avg(_logistic_deriv(eta_base), cell_mask)
             for j in range(n_cov_interact):
                 coef_pos = 1 + n_int + idx * n_cov_interact + j
                 if coef_pos < len(beta):
                     x_hat_j = X_with_intercept[cell_mask, coef_pos]
-                    grad[coef_pos] = float(np.mean(_logistic_deriv(eta_base) * x_hat_j))
+                    grad[coef_pos] = _avg(_logistic_deriv(eta_base) * x_hat_j, cell_mask)
             # Compute SE in reduced parameter space if rank-deficient
             if np.any(nan_mask):
                 grad_r = grad[kept_beta]
                 se = float(np.sqrt(max(grad_r @ vcov_reduced @ grad_r, 0.0)))
             else:
                 se = float(np.sqrt(max(grad @ vcov_full @ grad, 0.0)))
-            t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha)
+            t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha, df=df_inf)
             gt_effects[(g, t)] = {
                 "att": att,
                 "se": se,
@@ -843,7 +928,10 @@ class WooldridgeDiD:
                 "p_value": p_value,
                 "conf_int": conf_int,
             }
-            gt_weights[(g, t)] = int(cell_mask.sum())
+            if survey_weights is not None:
+                gt_weights[(g, t)] = float(np.sum(survey_weights[cell_mask]))
+            else:
+                gt_weights[(g, t)] = int(cell_mask.sum())
             # Store gradient in reduced space for aggregate SE
             gt_grads[(g, t)] = grad[kept_beta] if np.any(nan_mask) else grad
 
@@ -864,7 +952,7 @@ class WooldridgeDiD:
             overall_att = sum(gt_weights[k] * gt_effects[k]["att"] for k in post_keys) / w_total
             agg_grad = sum((gt_weights[k] / w_total) * gt_grads[k] for k in post_keys)
             overall_se = float(np.sqrt(max(agg_grad @ _vcov_se @ agg_grad, 0.0)))
-            t_stat, p_value, conf_int = safe_inference(overall_att, overall_se, alpha=self.alpha)
+            t_stat, p_value, conf_int = safe_inference(overall_att, overall_se, alpha=self.alpha, df=df_inf)
             overall = {
                 "att": overall_att,
                 "se": overall_se,
@@ -874,7 +962,7 @@ class WooldridgeDiD:
             }
         else:
             overall = _compute_weighted_agg(
-                gt_effects, gt_weights, gt_keys_ordered, None, self.alpha
+                gt_effects, gt_weights, gt_keys_ordered, None, self.alpha, df=df_inf
             )
 
         return WooldridgeDiDResults(
@@ -893,9 +981,11 @@ class WooldridgeDiD:
             n_control_units=self._count_control_units(sample, unit, cohort, time),
             alpha=self.alpha,
             anticipation=self.anticipation,
+            survey_metadata=survey_metadata,
             _gt_weights=gt_weights,
             _gt_vcov=gt_vcov,
             _gt_keys=gt_keys_ordered,
+            _df_survey=df_inf,
         )
 
     def _fit_poisson(
@@ -911,6 +1001,7 @@ class WooldridgeDiD:
         int_col_names: List[str],
         groups: List[Any],
         n_cov_interact: int = 0,
+        survey_design=None,
     ) -> WooldridgeDiDResults:
         """Poisson path: cohort + time additive FEs + solve_poisson + ASF ATT.
 
@@ -918,6 +1009,19 @@ class WooldridgeDiD:
         i.gvar i.tvar — cohort main effects + time main effects (additive),
         not cohort×time saturated group FEs.
         """
+        # Resolve survey design against the filtered sample
+        from diff_diff.survey import _resolve_survey_for_fit, compute_survey_vcov
+        resolved, survey_weights, survey_weight_type, survey_metadata = (
+            _resolve_survey_for_fit(survey_design, sample)
+        )
+        if resolved is not None and resolved.uses_replicate_variance:
+            raise NotImplementedError(
+                "WooldridgeDiD does not yet support replicate-weight variance. "
+                "Use TSL (strata/PSU/FPC) instead."
+            )
+        df_inf = resolved.df_survey if resolved is not None else None
+        _has_survey = resolved is not None
+
         n_int = len(int_col_names)
 
         # Design matrix: intercept + treatment interactions + cohort FEs + time FEs.
@@ -940,7 +1044,11 @@ class WooldridgeDiD:
         cluster_col = self.cluster if self.cluster else unit
         cluster_ids = sample[cluster_col].values
 
-        beta, mu_hat = solve_poisson(X_full, y, rank_deficient_action=self.rank_deficient_action)
+        beta, mu_hat = solve_poisson(
+            X_full, y,
+            rank_deficient_action=self.rank_deficient_action,
+            weights=survey_weights,
+        )
 
         # Handle rank-deficient designs: compute vcov on reduced design.
         # Preserve raw interaction coefficients BEFORE zeroing NaN so the
@@ -950,33 +1058,61 @@ class WooldridgeDiD:
         beta_clean = np.where(nan_mask, 0.0, beta)
         kept_beta = ~nan_mask
 
-        # QMLE sandwich vcov via shared linalg backend
+        # QMLE sandwich vcov
         resids = y - mu_hat
-        if np.any(nan_mask):
-            X_reduced = X_full[:, kept_beta]
-            vcov_reduced = compute_robust_vcov(
-                X_reduced,
-                resids,
-                cluster_ids=cluster_ids,
-                weights=mu_hat,
-                weight_type="aweight",
-            )
-            k_full = len(beta)
-            vcov_full = np.full((k_full, k_full), np.nan)
-            kept_idx = np.where(kept_beta)[0]
-            vcov_full[np.ix_(kept_idx, kept_idx)] = vcov_reduced
+
+        if _has_survey:
+            # X_tilde trick for nonlinear survey vcov (V = mu for Poisson)
+            sqrt_V = np.sqrt(np.clip(mu_hat, 1e-20, None))
+            X_tilde = X_full * sqrt_V[:, None]
+            r_tilde = resids / sqrt_V
+            if np.any(nan_mask):
+                X_tilde_r = X_tilde[:, kept_beta]
+                vcov_reduced = compute_survey_vcov(X_tilde_r, r_tilde, resolved)
+                k_full = len(beta)
+                vcov_full = np.full((k_full, k_full), np.nan)
+                kept_idx = np.where(kept_beta)[0]
+                vcov_full[np.ix_(kept_idx, kept_idx)] = vcov_reduced
+            else:
+                vcov_full = compute_survey_vcov(X_tilde, r_tilde, resolved)
         else:
-            vcov_full = compute_robust_vcov(
-                X_full,
-                resids,
-                cluster_ids=cluster_ids,
-                weights=mu_hat,
-                weight_type="aweight",
-            )
+            # Cluster-robust QMLE sandwich (non-survey path)
+            if np.any(nan_mask):
+                X_reduced = X_full[:, kept_beta]
+                vcov_reduced = compute_robust_vcov(
+                    X_reduced,
+                    resids,
+                    cluster_ids=cluster_ids,
+                    weights=mu_hat,
+                    weight_type="aweight",
+                )
+                k_full = len(beta)
+                vcov_full = np.full((k_full, k_full), np.nan)
+                kept_idx = np.where(kept_beta)[0]
+                vcov_full[np.ix_(kept_idx, kept_idx)] = vcov_reduced
+            else:
+                vcov_full = compute_robust_vcov(
+                    X_full,
+                    resids,
+                    cluster_ids=cluster_ids,
+                    weights=mu_hat,
+                    weight_type="aweight",
+                )
         beta = beta_clean
 
         # Treatment interaction coefficients (from cleaned beta for computation)
         beta_int = beta[1 : 1 + n_int]
+
+        # Survey-weighted averaging helpers for ASF computation
+        def _avg(a, cell_mask):
+            if survey_weights is not None:
+                return float(np.average(a, weights=survey_weights[cell_mask]))
+            return float(np.mean(a))
+
+        def _avg_ax0(a, cell_mask):
+            if survey_weights is not None:
+                return np.average(a, weights=survey_weights[cell_mask], axis=0)
+            return np.mean(a, axis=0)
 
         # ASF ATT(g,t) for treated units in each cell.
         # eta_base = X_full @ beta already includes the treatment effect (D_{g,t}=1).
@@ -1009,26 +1145,26 @@ class WooldridgeDiD:
             eta_0 = eta_base - delta_total
             mu_1 = np.exp(eta_base)
             mu_0 = np.exp(eta_0)
-            att = float(np.mean(mu_1 - mu_0))
+            att = _avg(mu_1 - mu_0, cell_mask)
             # Delta method gradient:
             #   for nuisance p: mean_i[(μ_1 - μ_0) * X_p]
             #   for cell intercept: mean_i[μ_1]
             #   for cell × cov j: mean_i[μ_1 * x_hat_j]
             diff_mu = mu_1 - mu_0
-            grad = np.mean(X_full[cell_mask] * diff_mu[:, None], axis=0)
-            grad[1 + idx] = float(np.mean(mu_1))
+            grad = _avg_ax0(X_full[cell_mask] * diff_mu[:, None], cell_mask)
+            grad[1 + idx] = _avg(mu_1, cell_mask)
             for j in range(n_cov_interact):
                 coef_pos = 1 + n_int + idx * n_cov_interact + j
                 if coef_pos < len(beta):
                     x_hat_j = X_full[cell_mask, coef_pos]
-                    grad[coef_pos] = float(np.mean(mu_1 * x_hat_j))
+                    grad[coef_pos] = _avg(mu_1 * x_hat_j, cell_mask)
             # Compute SE in reduced parameter space if rank-deficient
             if np.any(nan_mask):
                 grad_r = grad[kept_beta]
                 se = float(np.sqrt(max(grad_r @ vcov_reduced @ grad_r, 0.0)))
             else:
                 se = float(np.sqrt(max(grad @ vcov_full @ grad, 0.0)))
-            t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha)
+            t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha, df=df_inf)
             gt_effects[(g, t)] = {
                 "att": att,
                 "se": se,
@@ -1036,7 +1172,10 @@ class WooldridgeDiD:
                 "p_value": p_value,
                 "conf_int": conf_int,
             }
-            gt_weights[(g, t)] = int(cell_mask.sum())
+            if survey_weights is not None:
+                gt_weights[(g, t)] = float(np.sum(survey_weights[cell_mask]))
+            else:
+                gt_weights[(g, t)] = int(cell_mask.sum())
             gt_grads[(g, t)] = grad[kept_beta] if np.any(nan_mask) else grad
 
         gt_keys_ordered = [k for k in gt_keys if k in gt_effects]
@@ -1055,7 +1194,7 @@ class WooldridgeDiD:
             overall_att = sum(gt_weights[k] * gt_effects[k]["att"] for k in post_keys) / w_total
             agg_grad = sum((gt_weights[k] / w_total) * gt_grads[k] for k in post_keys)
             overall_se = float(np.sqrt(max(agg_grad @ _vcov_se @ agg_grad, 0.0)))
-            t_stat, p_value, conf_int = safe_inference(overall_att, overall_se, alpha=self.alpha)
+            t_stat, p_value, conf_int = safe_inference(overall_att, overall_se, alpha=self.alpha, df=df_inf)
             overall = {
                 "att": overall_att,
                 "se": overall_se,
@@ -1065,7 +1204,7 @@ class WooldridgeDiD:
             }
         else:
             overall = _compute_weighted_agg(
-                gt_effects, gt_weights, gt_keys_ordered, None, self.alpha
+                gt_effects, gt_weights, gt_keys_ordered, None, self.alpha, df=df_inf
             )
 
         return WooldridgeDiDResults(
@@ -1084,7 +1223,9 @@ class WooldridgeDiD:
             n_control_units=self._count_control_units(sample, unit, cohort, time),
             alpha=self.alpha,
             anticipation=self.anticipation,
+            survey_metadata=survey_metadata,
             _gt_weights=gt_weights,
             _gt_vcov=gt_vcov,
             _gt_keys=gt_keys_ordered,
+            _df_survey=df_inf,
         )

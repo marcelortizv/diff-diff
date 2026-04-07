@@ -206,12 +206,13 @@ under survey weighting. The survey statistics side (Binder 1983, Rao &
 Wu 1988) is established and doesn't need a survey methodologist to
 co-sign.
 
-### 10f. WooldridgeDiD Survey Support (MEDIUM priority)
+### 10f. WooldridgeDiD Survey Support — SHIPPED
 
-WooldridgeDiD (ETWFE) is the only estimator without `survey_design`
-support. The OLS path is straightforward (same as TWFE); the logit/Poisson
-paths require survey-weighted IRLS. Should be added to the compatibility
-matrix regardless of whether support is implemented before announcement.
+WooldridgeDiD (ETWFE) now supports `survey_design` for all three methods
+(OLS, logit, Poisson). OLS uses survey-weighted within-transformation +
+WLS + TSL vcov. Logit/Poisson use survey-weighted IRLS + X_tilde
+linearization for TSL vcov. Replicate-weight designs raise
+`NotImplementedError`; bootstrap + survey is rejected.
 
 ### 10g. Practitioner Guidance (LOW priority)
 
@@ -229,7 +230,8 @@ the limitation and suggested alternative.
 
 | Estimator | Limitation | Alternative |
 |-----------|-----------|-------------|
-| WooldridgeDiD | No `survey_design` support | Not yet implemented (see 10f) |
+| WooldridgeDiD | Replicate weights | Use strata/PSU/FPC design with TSL variance |
+| WooldridgeDiD | Bootstrap + survey | Use analytical survey SEs (set `n_bootstrap=0`) |
 | SyntheticDiD | Replicate weights | Use strata/PSU/FPC design with Rao-Wu rescaled bootstrap |
 | TROP | Replicate weights | Use strata/PSU/FPC design with Rao-Wu rescaled bootstrap |
 | BaconDecomposition | Replicate weights | Diagnostic only, no inference |

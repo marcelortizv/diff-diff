@@ -1307,3 +1307,138 @@ class TestFullCovariateBasis:
         assert r_cov.overall_att != r_nocov.overall_att, (
             "Covariate-adjusted ATT should differ from unadjusted"
         )
+
+
+class TestWooldridgeSurvey:
+    """Survey design support for WooldridgeDiD."""
+
+    @pytest.fixture
+    def survey_panel(self):
+        """Panel data with survey design columns."""
+        rng = np.random.default_rng(99)
+        n_units, n_periods = 80, 5
+        rows = []
+        for u in range(n_units):
+            cohort = 3 if u < 30 else (4 if u < 50 else 0)
+            stratum = u % 4
+            psu = u  # globally unique PSU per unit
+            weight = 1.0 + rng.exponential(0.5)
+            for t in range(1, n_periods + 1):
+                treated = int(cohort > 0 and t >= cohort)
+                y_cont = 1.0 + 2.0 * treated + 0.3 * rng.standard_normal()
+                eta = -0.5 + 1.0 * treated + 0.1 * rng.standard_normal()
+                y_bin = int(rng.random() < 1 / (1 + np.exp(-eta)))
+                mu = np.exp(0.5 + 0.5 * treated + 0.1 * rng.standard_normal())
+                y_count = float(rng.poisson(mu))
+                rows.append({
+                    "unit": u, "time": t, "cohort": cohort,
+                    "y": y_cont, "y_bin": y_bin, "y_count": y_count,
+                    "stratum": stratum, "psu": psu, "weight": weight,
+                })
+        return pd.DataFrame(rows)
+
+    def test_ols_survey_runs(self, survey_panel):
+        """OLS with full survey design completes."""
+        from diff_diff.survey import SurveyDesign
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+        r = WooldridgeDiD().fit(
+            survey_panel, outcome="y", unit="unit", time="time",
+            cohort="cohort", survey_design=sd,
+        )
+        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.overall_se)
+        assert r.overall_se > 0
+
+    def test_ols_survey_se_differs_from_naive(self, survey_panel):
+        """Survey SE should differ from naive (unweighted) SE."""
+        from diff_diff.survey import SurveyDesign
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+        r_survey = WooldridgeDiD().fit(
+            survey_panel, outcome="y", unit="unit", time="time",
+            cohort="cohort", survey_design=sd,
+        )
+        r_naive = WooldridgeDiD().fit(
+            survey_panel, outcome="y", unit="unit", time="time",
+            cohort="cohort",
+        )
+        assert r_survey.overall_se != r_naive.overall_se
+
+    def test_logit_survey_runs(self, survey_panel):
+        """Logit with survey design completes."""
+        from diff_diff.survey import SurveyDesign
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+        r = WooldridgeDiD(method="logit").fit(
+            survey_panel, outcome="y_bin", unit="unit", time="time",
+            cohort="cohort", survey_design=sd,
+        )
+        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.overall_se)
+        assert r.overall_se > 0
+
+    def test_poisson_survey_runs(self, survey_panel):
+        """Poisson with survey design completes."""
+        from diff_diff.survey import SurveyDesign
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+        r = WooldridgeDiD(method="poisson").fit(
+            survey_panel, outcome="y_count", unit="unit", time="time",
+            cohort="cohort", survey_design=sd,
+        )
+        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.overall_se)
+        assert r.overall_se > 0
+
+    def test_bootstrap_survey_rejected(self, survey_panel):
+        """n_bootstrap > 0 with survey_design raises ValueError."""
+        from diff_diff.survey import SurveyDesign
+        sd = SurveyDesign(weights="weight")
+        with pytest.raises(ValueError, match="Bootstrap inference is not supported with survey_design"):
+            WooldridgeDiD(n_bootstrap=100).fit(
+                survey_panel, outcome="y", unit="unit", time="time",
+                cohort="cohort", survey_design=sd,
+            )
+
+    def test_weights_only_survey(self, survey_panel):
+        """Weights-only survey (no strata/PSU) works."""
+        from diff_diff.survey import SurveyDesign
+        sd = SurveyDesign(weights="weight")
+        r = WooldridgeDiD().fit(
+            survey_panel, outcome="y", unit="unit", time="time",
+            cohort="cohort", survey_design=sd,
+        )
+        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.overall_se)
+        assert r.survey_metadata is not None
+
+    def test_survey_metadata_present(self, survey_panel):
+        """survey_metadata is populated with correct fields."""
+        from diff_diff.survey import SurveyDesign
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="psu")
+        r = WooldridgeDiD().fit(
+            survey_panel, outcome="y", unit="unit", time="time",
+            cohort="cohort", survey_design=sd,
+        )
+        sm = r.survey_metadata
+        assert sm is not None
+        assert sm.weight_type == "pweight"
+        assert sm.effective_n > 0
+        assert sm.design_effect > 0
+        assert sm.n_strata is not None
+        assert sm.n_psu is not None
+        assert sm.df_survey is not None
+
+    def test_replicate_weights_rejected(self, survey_panel):
+        """Replicate-weight designs raise NotImplementedError."""
+        from diff_diff.survey import SurveyDesign
+        # Add replicate weight columns
+        survey_panel["rep_w1"] = 1.0
+        survey_panel["rep_w2"] = 1.0
+        sd = SurveyDesign(
+            weights="weight",
+            replicate_weights=["rep_w1", "rep_w2"],
+            replicate_method="BRR",
+        )
+        with pytest.raises(NotImplementedError, match="replicate-weight variance"):
+            WooldridgeDiD().fit(
+                survey_panel, outcome="y", unit="unit", time="time",
+                cohort="cohort", survey_design=sd,
+            )

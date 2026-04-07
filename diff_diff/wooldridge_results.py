@@ -54,6 +54,7 @@ class WooldridgeDiDResults:
     n_control_units: int = 0
     alpha: float = 0.05
     anticipation: int = 0
+    survey_metadata: Optional[Any] = field(default=None, repr=False)
 
     # ------------------------------------------------------------------ #
     # Internal — used by aggregate() for delta-method SEs                 #
@@ -63,6 +64,8 @@ class WooldridgeDiDResults:
     """Full vcov of all β_{g,t} coefficients (ordered same as sorted group_time_effects keys)."""
     _gt_keys: List[Tuple[Any, Any]] = field(default_factory=list, repr=False)
     """Ordered list of (g,t) keys corresponding to _gt_vcov columns."""
+    _df_survey: Optional[int] = field(default=None, repr=False)
+    """Survey degrees of freedom for t-distribution inference."""
 
     # ------------------------------------------------------------------ #
     # Public methods                                                      #
@@ -93,7 +96,7 @@ class WooldridgeDiDResults:
             return float(np.sqrt(max(w_vec @ vcov @ w_vec, 0.0)))
 
         def _build_effect(att: float, se: float) -> Dict[str, Any]:
-            t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha)
+            t_stat, p_value, conf_int = safe_inference(att, se, alpha=self.alpha, df=self._df_survey)
             return {
                 "att": att,
                 "se": se,
@@ -180,6 +183,11 @@ class WooldridgeDiDResults:
             f"Control units:   {self.n_control_units}",
             "-" * 70,
         ]
+
+        if self.survey_metadata is not None:
+            from diff_diff.results import _format_survey_block
+            lines.extend(_format_survey_block(self.survey_metadata, 70))
+            lines.append("-" * 70)
 
         def _fmt_row(label: str, att: float, se: float, t: float, p: float, ci: Tuple) -> str:
             from diff_diff.results import _get_significance_stars  # type: ignore

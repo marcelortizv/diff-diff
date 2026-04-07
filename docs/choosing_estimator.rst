@@ -684,20 +684,15 @@ estimator (WooldridgeDiD survey support is planned for Phase 10f):
      - --
      - Rao-Wu rescaled
    * - ``WooldridgeDiD``
+     - Full (pweight only)
+     - Full (analytical)
      - --
-     - --
-     - --
-     - --
+     - Multiplier at PSU
    * - ``BaconDecomposition``
      - Diagnostic
      - Diagnostic
      - --
      - --
-
-.. note::
-
-   ``WooldridgeDiD`` does not yet accept ``survey_design``. Survey support
-   is planned for Phase 10f. See :doc:`/survey-roadmap` for details.
 
 **Legend:**
 

@@ -9,25 +9,30 @@ Data generation functions (generate_*) are defined in prep_dgp.py and
 re-exported here for backward compatibility.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 
-from diff_diff.utils import compute_synthetic_weights
-
 # Re-export data generation functions from prep_dgp for backward compatibility
-from diff_diff.prep_dgp import (
+from diff_diff.prep_dgp import (  # noqa: F401
     generate_continuous_did_data,
-    generate_did_data,
-    generate_staggered_data,
-    generate_factor_data,
     generate_ddd_data,
-    generate_panel_data,
+    generate_did_data,
     generate_event_study_data,
+    generate_factor_data,
+    generate_panel_data,
+    generate_staggered_data,
     generate_staggered_ddd_data,
     generate_survey_did_data,
 )
+from diff_diff.survey import (
+    ResolvedSurveyDesign,
+    SurveyDesign,
+    compute_replicate_if_variance,
+    compute_survey_if_variance,
+)
+from diff_diff.utils import compute_synthetic_weights
 
 # Constants for rank_control_units
 _SIMILARITY_THRESHOLD_SD = 0.5  # Controls within this many SDs are "similar"
@@ -1300,3 +1305,310 @@ def trim_weights(
 
     result[weight_col] = w
     return result
+
+
+# ---------------------------------------------------------------------------
+# Survey aggregation helpers
+# ---------------------------------------------------------------------------
+
+
+def _cell_mean_variance(
+    y: np.ndarray,
+    weights: np.ndarray,
+    cell_resolved: ResolvedSurveyDesign,
+) -> Tuple[float, float, int, bool]:
+    """Compute design-based mean and variance of the weighted mean for one cell.
+
+    Parameters
+    ----------
+    y : np.ndarray
+        Outcome values for the cell (may contain NaN).
+    weights : np.ndarray
+        Resolved weights for the cell (already extracted from ResolvedSurveyDesign).
+    cell_resolved : ResolvedSurveyDesign
+        Resolved survey design subsetted to this cell.
+
+    Returns
+    -------
+    mean : float
+        Design-weighted cell mean.
+    variance : float
+        Design-based variance of the cell mean (>= 0). Uses SRS fallback
+        when the design-based estimate is unidentifiable.
+    n_valid : int
+        Number of non-missing observations.
+    used_srs_fallback : bool
+        True if SRS variance was used instead of design-based.
+    """
+    valid = ~np.isnan(y)
+    n_valid = int(np.sum(valid))
+
+    if n_valid == 0:
+        return np.nan, np.nan, 0, False
+
+    if n_valid == 1:
+        y_bar = float(y[valid][0])
+        return y_bar, np.nan, 1, False
+
+    # Zero out weights for NaN observations (subpopulation approach)
+    w = weights.copy()
+    y_clean = np.where(valid, y, 0.0)
+    w_valid = w * valid.astype(np.float64)
+    sum_w = np.sum(w_valid)
+
+    if sum_w <= 0:
+        return np.nan, np.nan, n_valid, False
+
+    # Design-weighted mean
+    y_bar = float(np.sum(w_valid * y_clean) / sum_w)
+
+    # Influence function: psi_i = w_i * (y_i - y_bar) / sum(w)
+    psi = w_valid * (y_clean - y_bar) / sum_w
+
+    # Route to TSL or replicate variance
+    used_srs = False
+    if cell_resolved.uses_replicate_variance:
+        variance, _ = compute_replicate_if_variance(psi, cell_resolved)
+    else:
+        variance = compute_survey_if_variance(psi, cell_resolved)
+
+    # SRS fallback when design-based variance is unidentifiable
+    if np.isnan(variance):
+        resid_sq = w_valid * (y_clean - y_bar) ** 2
+        variance = float(np.sum(resid_sq) / (sum_w**2) * n_valid / (n_valid - 1))
+        used_srs = True
+
+    return y_bar, max(float(variance), 0.0), n_valid, used_srs
+
+
+def aggregate_survey(
+    data: pd.DataFrame,
+    by: Union[str, List[str]],
+    outcomes: Union[str, List[str]],
+    survey_design: SurveyDesign,
+    covariates: Optional[Union[str, List[str]]] = None,
+    min_n: int = 2,
+    lonely_psu: Optional[str] = None,
+) -> Tuple[pd.DataFrame, SurveyDesign]:
+    """Aggregate survey microdata to geographic-period cells with design-based precision.
+
+    Computes design-weighted cell means and their Taylor-linearized (or
+    replicate-based) standard errors for each cell defined by the ``by``
+    columns. Returns a panel-ready DataFrame with precision weights and a
+    pre-configured :class:`SurveyDesign` for second-stage DiD estimation.
+
+    This follows R's ``survey::svyby()`` pattern: the survey design is
+    subsetted to each cell and domain-level statistics are computed using
+    the within-cell strata/PSU structure.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Individual-level microdata.
+    by : str or list of str
+        Columns defining cells (e.g., ``["state", "year"]``). The first
+        element is used as the clustering variable in the returned
+        SurveyDesign (geographic unit for second-stage inference).
+    outcomes : str or list of str
+        Outcome variable(s) to aggregate with full precision tracking.
+        Each outcome produces ``{name}_mean``, ``{name}_se``,
+        ``{name}_n``, and ``{name}_precision`` columns.
+    survey_design : SurveyDesign
+        Survey design specification for the microdata.
+    covariates : str or list of str, optional
+        Additional variables to aggregate as design-weighted means only
+        (no SE/precision columns).
+    min_n : int, default 2
+        Minimum respondents per cell. Cells below this threshold use
+        simple random sampling variance as a fallback.
+    lonely_psu : str, optional
+        Override the survey design's ``lonely_psu`` setting for within-cell
+        computation. One of ``"remove"``, ``"certainty"``, ``"adjust"``.
+
+    Returns
+    -------
+    panel_df : pd.DataFrame
+        Aggregated panel with columns: grouping variables,
+        ``{outcome}_mean``, ``{outcome}_se``, ``{outcome}_n``,
+        ``{outcome}_precision``, ``{covariate}_mean``, ``cell_n``,
+        ``cell_n_eff``, ``srs_fallback``.
+    second_stage_design : SurveyDesign
+        Pre-configured for second-stage estimation with
+        ``weight_type="aweight"``, precision weights from the first
+        outcome, and geographic clustering via ``psu``.
+
+    Examples
+    --------
+    >>> design = SurveyDesign(weights="finalwt", strata="strat", psu="psu")
+    >>> panel, stage2 = aggregate_survey(
+    ...     microdata, by=["state", "year"],
+    ...     outcomes="smoking_rate", survey_design=design,
+    ... )
+    >>> result = DifferenceInDifferences().fit(
+    ...     panel, outcome="smoking_rate_mean",
+    ...     treatment="treated", time="post", survey_design=stage2,
+    ... )
+    """
+    import warnings
+    from dataclasses import replace
+
+    # --- Normalize inputs ---
+    by_cols = [by] if isinstance(by, str) else list(by)
+    outcome_cols = [outcomes] if isinstance(outcomes, str) else list(outcomes)
+    cov_cols = (
+        [covariates] if isinstance(covariates, str) else list(covariates) if covariates else []
+    )
+
+    # --- Validate ---
+    all_cols = by_cols + outcome_cols + cov_cols
+    missing = [c for c in all_cols if c not in data.columns]
+    if missing:
+        raise ValueError(f"Columns not found in DataFrame: {missing}")
+
+    overlap = set(by_cols) & (set(outcome_cols) | set(cov_cols))
+    if overlap:
+        raise ValueError(f"Columns appear in both 'by' and outcomes/covariates: {overlap}")
+
+    if not isinstance(survey_design, SurveyDesign):
+        raise TypeError(
+            f"survey_design must be a SurveyDesign instance, got {type(survey_design).__name__}"
+        )
+
+    if min_n < 1:
+        raise ValueError(f"min_n must be >= 1, got {min_n}")
+
+    if lonely_psu is not None and lonely_psu not in ("remove", "certainty", "adjust"):
+        raise ValueError(
+            f"lonely_psu must be 'remove', 'certainty', or 'adjust', got '{lonely_psu}'"
+        )
+
+    # --- Resolve design once on full data ---
+    effective_design = (
+        replace(survey_design, lonely_psu=lonely_psu) if lonely_psu else survey_design
+    )
+    full_resolved = effective_design.resolve(data)
+
+    # --- Per-cell computation ---
+    grouped = data.groupby(by_cols, sort=True)
+    rows: List[Dict[str, Any]] = []
+    srs_cells: List[str] = []
+    zero_var_cells: List[str] = []
+
+    for cell_key, cell_df in grouped:
+        cell_idx = np.array(cell_df.index)
+        # Convert to positional indices for array subsetting
+        pos_idx = data.index.get_indexer(cell_idx)
+
+        cell_n = len(pos_idx)
+        cell_key_str = str(cell_key)
+
+        # Subset arrays from full resolved design
+        cell_w = full_resolved.weights[pos_idx]
+        cell_strata = full_resolved.strata[pos_idx] if full_resolved.strata is not None else None
+        cell_psu = full_resolved.psu[pos_idx] if full_resolved.psu is not None else None
+        cell_fpc = full_resolved.fpc[pos_idx] if full_resolved.fpc is not None else None
+
+        cell_n_strata = int(len(np.unique(cell_strata))) if cell_strata is not None else 0
+        cell_n_psu = int(len(np.unique(cell_psu))) if cell_psu is not None else 0
+
+        cell_resolved = full_resolved.subset_to_units(
+            row_idx=pos_idx,
+            weights=cell_w,
+            strata=cell_strata,
+            psu=cell_psu,
+            fpc=cell_fpc,
+            n_strata=cell_n_strata,
+            n_psu=cell_n_psu,
+        )
+
+        # Cell-level statistics
+        sum_w = float(np.sum(cell_w))
+        sum_w2 = float(np.sum(cell_w**2))
+        cell_n_eff = (sum_w**2 / sum_w2) if sum_w2 > 0 else 0.0
+
+        # Build row dict with grouping columns
+        row: Dict[str, Any] = {}
+        if len(by_cols) == 1:
+            row[by_cols[0]] = cell_key
+        else:
+            for i, col in enumerate(by_cols):
+                row[col] = cell_key[i]
+
+        row["cell_n"] = cell_n
+        row["cell_n_eff"] = cell_n_eff
+
+        cell_srs_fallback = False
+
+        # Outcomes: mean + SE + n + precision
+        for var in outcome_cols:
+            y = cell_df[var].values.astype(np.float64)
+            y_bar, variance, n_valid, used_srs = _cell_mean_variance(y, cell_w, cell_resolved)
+            se = float(np.sqrt(variance)) if not np.isnan(variance) else np.nan
+
+            if used_srs:
+                cell_srs_fallback = True
+
+            # Zero variance → precision NaN
+            if se == 0.0:
+                precision = np.nan
+                zero_var_cells.append(cell_key_str)
+            elif np.isnan(se):
+                precision = np.nan
+            else:
+                precision = 1.0 / variance
+
+            row[f"{var}_mean"] = y_bar
+            row[f"{var}_se"] = se
+            row[f"{var}_n"] = n_valid
+            row[f"{var}_precision"] = precision
+
+        # Covariates: mean only
+        for var in cov_cols:
+            y = cell_df[var].values.astype(np.float64)
+            valid = ~np.isnan(y)
+            w_valid = cell_w * valid.astype(np.float64)
+            sw = float(np.sum(w_valid))
+            if sw > 0:
+                row[f"{var}_mean"] = float(np.sum(w_valid * np.where(valid, y, 0.0)) / sw)
+            else:
+                row[f"{var}_mean"] = np.nan
+
+        row["srs_fallback"] = cell_srs_fallback
+        if cell_srs_fallback:
+            srs_cells.append(cell_key_str)
+
+        rows.append(row)
+
+    # --- Warnings ---
+    if srs_cells:
+        warnings.warn(
+            f"Design-based variance not estimable for {len(srs_cells)} cell(s); "
+            f"using SRS fallback: {srs_cells[:5]}"
+            + (f" ... and {len(srs_cells) - 5} more" if len(srs_cells) > 5 else ""),
+            UserWarning,
+            stacklevel=2,
+        )
+    if zero_var_cells:
+        warnings.warn(
+            f"Zero variance in {len(zero_var_cells)} cell(s) (precision set to NaN): "
+            f"{zero_var_cells[:5]}"
+            + (f" ... and {len(zero_var_cells) - 5} more" if len(zero_var_cells) > 5 else ""),
+            UserWarning,
+            stacklevel=2,
+        )
+
+    # --- Assemble output ---
+    panel_df = pd.DataFrame(rows)
+
+    # Sort by grouping columns
+    panel_df = panel_df.sort_values(by_cols).reset_index(drop=True)
+
+    # --- Construct second-stage SurveyDesign ---
+    first_outcome = outcome_cols[0]
+    second_stage_design = SurveyDesign(
+        weights=f"{first_outcome}_precision",
+        weight_type="aweight",
+        psu=by_cols[0],
+    )
+
+    return panel_df, second_stage_design

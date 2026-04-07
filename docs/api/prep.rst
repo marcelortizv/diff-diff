@@ -250,6 +250,48 @@ Example
        outcome='outcome'
    )
 
+Survey Aggregation
+------------------
+
+aggregate_survey
+~~~~~~~~~~~~~~~~
+
+Aggregate survey microdata to geographic-period cells with design-based precision.
+
+.. autofunction:: diff_diff.aggregate_survey
+
+Example
+^^^^^^^
+
+.. code-block:: python
+
+   from diff_diff import aggregate_survey, SurveyDesign, DifferenceInDifferences
+
+   # Define the survey design for the microdata
+   design = SurveyDesign(weights="finalwt", strata="strat", psu="psu")
+
+   # Aggregate to state-year panel with design-based SEs
+   panel, stage2 = aggregate_survey(
+       microdata,
+       by=["state", "year"],
+       outcomes="smoking_rate",
+       covariates=["age", "income"],
+       survey_design=design,
+   )
+
+   # panel has: state, year, smoking_rate_mean, smoking_rate_se,
+   #   smoking_rate_n, smoking_rate_precision, age_mean, income_mean,
+   #   cell_n, cell_n_eff, srs_fallback
+
+   # stage2 is pre-configured: aweights + state-level clustering
+   result = DifferenceInDifferences().fit(
+       panel,
+       outcome="smoking_rate_mean",
+       treatment="treated",
+       time="post",
+       survey_design=stage2,
+   )
+
 Data Validation
 ---------------
 

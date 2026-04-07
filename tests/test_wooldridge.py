@@ -1476,3 +1476,48 @@ class TestWooldridgeSurvey:
                 f"gt_weights[{k}] = {w} (type {type(w).__name__}); "
                 f"expected int (cell count)"
             )
+
+    def test_weights_only_no_cluster_implicit_psu(self, survey_panel):
+        """Weights-only survey without cluster= keeps implicit per-obs PSUs."""
+        from diff_diff.survey import SurveyDesign
+        from diff_diff.wooldridge import _filter_sample
+        sd = SurveyDesign(weights="weight")
+        r = WooldridgeDiD().fit(
+            survey_panel, outcome="y", unit="unit", time="time",
+            cohort="cohort", survey_design=sd,
+        )
+        # n_psu should equal n_obs in the filtered sample (not n_units)
+        sample = _filter_sample(
+            survey_panel.copy().assign(cohort=lambda d: d["cohort"].fillna(0)),
+            "unit", "time", "cohort", "not_yet_treated", 0,
+        )
+        assert r.survey_metadata is not None
+        assert r.survey_metadata.n_psu == len(sample)
+
+    def test_fweight_rejected(self, survey_panel):
+        """fweight raises ValueError (pweight only)."""
+        from diff_diff.survey import SurveyDesign
+        # Use integer weights so fweight validation passes in resolve(),
+        # and the pweight guard in _resolve_survey_for_wooldridge fires.
+        df = survey_panel.copy()
+        df["int_weight"] = 1
+        sd = SurveyDesign(weights="int_weight", weight_type="fweight")
+        with pytest.raises(ValueError, match="weight_type='pweight'"):
+            WooldridgeDiD().fit(
+                df, outcome="y", unit="unit", time="time",
+                cohort="cohort", survey_design=sd,
+            )
+
+    def test_poisson_zero_weight_cell(self, survey_panel):
+        """Poisson survey fit handles zero-weight treated cells cleanly."""
+        from diff_diff.survey import SurveyDesign
+        df = survey_panel.copy()
+        # Zero out weights for one treated cohort so some cells have zero weight
+        df.loc[df["cohort"] == 3, "weight"] = 0.0
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="unit")
+        r = WooldridgeDiD(method="poisson").fit(
+            df, outcome="y_count", unit="unit", time="time",
+            cohort="cohort", survey_design=sd,
+        )
+        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.overall_se)

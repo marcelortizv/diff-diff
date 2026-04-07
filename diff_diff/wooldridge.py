@@ -89,6 +89,12 @@ def _resolve_survey_for_wooldridge(survey_design, sample, cluster_ids, cluster_n
             "WooldridgeDiD does not yet support replicate-weight variance. "
             "Use TSL (strata/PSU/FPC) instead."
         )
+    if resolved is not None and resolved.weight_type != "pweight":
+        raise ValueError(
+            f"WooldridgeDiD survey support requires weight_type='pweight', "
+            f"got '{resolved.weight_type}'. The survey variance math "
+            f"assumes probability weights (pweight)."
+        )
     if resolved is not None:
         effective_cluster = _resolve_effective_cluster(
             resolved, cluster_ids, cluster_name
@@ -623,9 +629,10 @@ class WooldridgeDiD:
         cluster_col = self.cluster if self.cluster else unit
         cluster_ids = sample[cluster_col].values
 
-        # Resolve survey design, inject cluster as PSU when needed
+        # Resolve survey design, inject cluster as PSU only when user explicitly set cluster=
+        survey_cluster_ids = cluster_ids if self.cluster else None
         resolved, survey_weights, survey_weight_type, survey_metadata, df_inf = (
-            _resolve_survey_for_wooldridge(survey_design, sample, cluster_ids, self.cluster)
+            _resolve_survey_for_wooldridge(survey_design, sample, survey_cluster_ids, self.cluster)
         )
 
         # 4. Within-transform: absorb unit + time FE
@@ -822,9 +829,10 @@ class WooldridgeDiD:
         cluster_col = self.cluster if self.cluster else unit
         cluster_ids = sample[cluster_col].values
 
-        # Resolve survey design, inject cluster as PSU when needed
+        # Resolve survey design, inject cluster as PSU only when user explicitly set cluster=
+        survey_cluster_ids = cluster_ids if self.cluster else None
         resolved, survey_weights, survey_weight_type, survey_metadata, df_inf = (
-            _resolve_survey_for_wooldridge(survey_design, sample, cluster_ids, self.cluster)
+            _resolve_survey_for_wooldridge(survey_design, sample, survey_cluster_ids, self.cluster)
         )
         _has_survey = resolved is not None
 
@@ -1054,9 +1062,10 @@ class WooldridgeDiD:
         cluster_col = self.cluster if self.cluster else unit
         cluster_ids = sample[cluster_col].values
 
-        # Resolve survey design, inject cluster as PSU when needed
+        # Resolve survey design, inject cluster as PSU only when user explicitly set cluster=
+        survey_cluster_ids = cluster_ids if self.cluster else None
         resolved, survey_weights, survey_weight_type, survey_metadata, df_inf = (
-            _resolve_survey_for_wooldridge(survey_design, sample, cluster_ids, self.cluster)
+            _resolve_survey_for_wooldridge(survey_design, sample, survey_cluster_ids, self.cluster)
         )
         _has_survey = resolved is not None
 
@@ -1147,6 +1156,9 @@ class WooldridgeDiD:
             # Skip cells whose interaction coefficient was dropped (rank deficiency).
             # Use raw coefficients (before NaN->0 zeroing) to detect dropped cells.
             if np.isnan(beta_int_raw[idx]):
+                continue
+            # Skip cells where all survey weights are zero (non-estimable)
+            if survey_weights is not None and np.sum(survey_weights[cell_mask]) == 0:
                 continue
             delta = beta_int[idx]
             if np.isnan(delta):

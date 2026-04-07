@@ -2429,6 +2429,46 @@ def solve_poisson(
         X = X[:, kept_cols]
 
     n, k = X.shape
+
+    # Validate effective weighted sample when weights have zeros
+    # (mirrors solve_logit's positive-weight safeguards)
+    if weights is not None and np.any(weights == 0):
+        pos_mask = weights > 0
+        n_pos = int(np.sum(pos_mask))
+        X_eff = X[pos_mask]
+        eff_rank_info = _detect_rank_deficiency(X_eff)
+        if len(eff_rank_info[1]) > 0:
+            n_dropped_eff = len(eff_rank_info[1])
+            if rank_deficient_action == "error":
+                raise ValueError(
+                    f"Effective (positive-weight) sample is rank-deficient: "
+                    f"{n_dropped_eff} linearly dependent column(s). "
+                    f"Cannot identify Poisson model on this subpopulation."
+                )
+            elif rank_deficient_action == "warn":
+                warnings.warn(
+                    f"Effective (positive-weight) sample is rank-deficient: "
+                    f"dropping {n_dropped_eff} column(s). Poisson estimates "
+                    f"may be unreliable on this subpopulation.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            eff_dropped = set(int(d) for d in eff_rank_info[1])
+            eff_kept = np.array([i for i in range(k) if i not in eff_dropped])
+            X = X[:, eff_kept]
+            if len(dropped_cols) > 0:
+                kept_cols = kept_cols[eff_kept]
+            else:
+                kept_cols = eff_kept
+                dropped_cols = list(eff_dropped)
+            n, k = X.shape
+        if n_pos <= k:
+            raise ValueError(
+                f"Only {n_pos} positive-weight observation(s) for "
+                f"{k} parameters (after rank reduction). "
+                f"Cannot identify Poisson model."
+            )
+
     if init_beta is not None:
         beta = init_beta[kept_cols].copy() if len(dropped_cols) > 0 else init_beta.copy()
     else:

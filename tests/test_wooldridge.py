@@ -1547,3 +1547,29 @@ class TestWooldridgeSurvey:
                 df, outcome="y", unit="unit", time="time",
                 cohort="cohort", survey_design=sd,
             )
+
+    def test_logit_survey_zero_weight_cell(self, survey_panel):
+        """Logit survey fit skips zero-weight treated cells cleanly."""
+        from diff_diff.survey import SurveyDesign
+        df = survey_panel.copy()
+        df.loc[df["cohort"] == 3, "weight"] = 0.0
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="unit")
+        r = WooldridgeDiD(method="logit").fit(
+            df, outcome="y_bin", unit="unit", time="time",
+            cohort="cohort", survey_design=sd,
+        )
+        assert np.isfinite(r.overall_att)
+        assert np.isfinite(r.overall_se)
+
+    def test_ols_survey_non_range_index(self, survey_panel):
+        """OLS survey zero-weight guard works with non-RangeIndex DataFrames."""
+        from diff_diff.survey import SurveyDesign
+        df = survey_panel.copy()
+        df.index = df.index + 1000  # shift to non-zero-based index
+        df.loc[df["unit"] == 0, "weight"] = 0.0
+        sd = SurveyDesign(weights="weight", strata="stratum", psu="unit")
+        with pytest.raises(ValueError, match="Survey weights sum to zero for unit"):
+            WooldridgeDiD().fit(
+                df, outcome="y", unit="unit", time="time",
+                cohort="cohort", survey_design=sd,
+            )

@@ -625,6 +625,8 @@ class WooldridgeDiD:
         survey_design=None,
     ) -> WooldridgeDiDResults:
         """OLS path: within-transform FE, solve_ols, cluster SE."""
+        # Reset index so numpy positional indexing matches pandas groupby
+        sample = sample.reset_index(drop=True)
         # Cluster IDs (default: unit level) — needed before survey resolution
         cluster_col = self.cluster if self.cluster else unit
         cluster_ids = sample[cluster_col].values
@@ -946,6 +948,9 @@ class WooldridgeDiD:
             if cell_mask.sum() == 0:
                 continue
             # Skip cells whose interaction coefficient was dropped (rank deficiency)
+            # Skip cells where all survey weights are zero (non-estimable)
+            if survey_weights is not None and np.sum(survey_weights[cell_mask]) == 0:
+                continue
             delta = beta_int_cols[idx]
             if np.isnan(delta):
                 continue

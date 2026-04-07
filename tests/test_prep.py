@@ -2509,18 +2509,70 @@ class TestAggregateSurvey:
         assert np.isfinite(result.att)
         assert np.isfinite(result.se)
 
+    def test_zero_weight_psu_dropped(self):
+        """Geographic units with zero total weight are dropped from panel."""
+        rng = np.random.RandomState(88)
+        # State 0: all cells have only 1 valid obs → NaN precision → weight=0
+        # State 1-3: normal cells
+        rows = []
+        for state in range(4):
+            for period in [0, 1]:
+                if state == 0:
+                    # 1 obs per cell → NaN SE → weight=0
+                    rows.append(
+                        {
+                            "state": state,
+                            "period": period,
+                            "wt": 1.0,
+                            "y": rng.normal(10, 2),
+                        }
+                    )
+                else:
+                    for _ in range(20):
+                        rows.append(
+                            {
+                                "state": state,
+                                "period": period,
+                                "wt": 1.0,
+                                "y": rng.normal(10, 2),
+                            }
+                        )
+        data = pd.DataFrame(rows)
+        design = SurveyDesign(weights="wt")
+        with pytest.warns(UserWarning, match="zero total weight"):
+            panel, _ = aggregate_survey(
+                data, by=["state", "period"], outcomes="y", survey_design=design
+            )
+        # State 0 should be entirely gone
+        assert 0 not in panel["state"].values
+        assert len(panel) == 6  # 3 states × 2 periods
+
+    def test_error_all_cells_dropped(self):
+        """All cells non-estimable raises ValueError."""
+        data = pd.DataFrame(
+            {
+                "state": ["A"] * 5,
+                "period": np.ones(5, dtype=int),
+                "wt": np.ones(5),
+                "y": [np.nan] * 5,
+            }
+        )
+        design = SurveyDesign(weights="wt")
+        with pytest.raises(ValueError, match="No estimable cells remain"):
+            aggregate_survey(data, by=["state", "period"], outcomes="y", survey_design=design)
+
     def test_zero_weight_rows_excluded_from_n_valid(self):
         """Zero-weight rows should not count as valid observations."""
         rng = np.random.RandomState(66)
-        # Cell A: 1 positive-weight obs + 9 zero-weight padding
-        # With only 1 effective observation, SE should be NaN
+        # Cell A: 3 positive-weight obs + 7 zero-weight padding
+        # n_valid should be 3, not 10
         data = pd.DataFrame(
             {
                 "geo": ["A"] * 10 + ["B"] * 10,
                 "time": np.ones(20, dtype=int),
                 "wt": np.concatenate(
                     [
-                        np.array([1.0] + [0.0] * 9),  # A: 1 real, 9 padding
+                        np.array([1.0, 1.0, 1.0] + [0.0] * 7),  # A: 3 real
                         np.ones(10),  # B: all real
                     ]
                 ),
@@ -2530,12 +2582,11 @@ class TestAggregateSurvey:
         design = SurveyDesign(weights="wt")
         panel, _ = aggregate_survey(data, by=["geo", "time"], outcomes="y", survey_design=design)
         cell_a = panel[panel["geo"] == "A"]
-        # Only 1 positive-weight obs → n_valid=1, SE=NaN
-        assert cell_a["y_n"].iloc[0] == 1
-        assert np.isnan(cell_a["y_se"].iloc[0])
+        # Only 3 positive-weight obs → n_valid=3
+        assert cell_a["y_n"].iloc[0] == 3
 
         cell_b = panel[panel["geo"] == "B"]
-        # 10 positive-weight obs → normal SE
+        # 10 positive-weight obs
         assert cell_b["y_n"].iloc[0] == 10
         assert cell_b["y_se"].iloc[0] > 0
 

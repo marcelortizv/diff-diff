@@ -1666,10 +1666,35 @@ def aggregate_survey(
         0.0,
     )
 
+    # Drop geographic units (PSUs) with zero total weight — they would
+    # inflate survey df and distort second-stage variance estimation.
+    geo_col = by_cols[0]
+    geo_weight = panel_df.groupby(geo_col)[weight_col].sum()
+    zero_geos = geo_weight[geo_weight == 0].index
+    if len(zero_geos) > 0:
+        n_before = len(panel_df)
+        panel_df = panel_df[~panel_df[geo_col].isin(zero_geos)].reset_index(drop=True)
+        n_after = len(panel_df)
+        warnings.warn(
+            f"Dropped {n_before - n_after} cell(s) from {len(zero_geos)} "
+            f"geographic unit(s) with zero total weight: "
+            f"{list(zero_geos[:5])}"
+            + (f" ... and {len(zero_geos) - 5} more" if len(zero_geos) > 5 else ""),
+            UserWarning,
+            stacklevel=2,
+        )
+
+    # Guard: all cells dropped
+    if panel_df.empty:
+        raise ValueError(
+            "No estimable cells remain after aggregation. "
+            "All cells had missing outcomes or zero effective weight."
+        )
+
     second_stage_design = SurveyDesign(
         weights=weight_col,
         weight_type="aweight",
-        psu=by_cols[0],
+        psu=geo_col,
     )
 
     return panel_df, second_stage_design
